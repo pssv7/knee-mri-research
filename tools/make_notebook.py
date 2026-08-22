@@ -9,14 +9,25 @@ MODULE_SRC = (ROOT / "src" / "labels" / "llm_extract.py").read_text()
 cells = []
 
 
+def _lines(text):
+    """Split into nbformat source lines, each keeping its trailing newline.
+
+    Jupyter concatenates `source` with no separator, so a plain split("\n")
+    produces a cell whose entire body is one line -- it renders fine in a diff
+    and fails at runtime with a SyntaxError.
+    """
+    return text.splitlines(keepends=True)
+
+
 def md(text):
-    cells.append({"cell_type": "markdown", "metadata": {}, "source": text.strip().split("\n")})
+    cells.append({"cell_type": "markdown", "metadata": {},
+                  "source": _lines(text.strip())})
 
 
 def code(text):
     cells.append({
         "cell_type": "code", "metadata": {}, "execution_count": None,
-        "outputs": [], "source": text.strip("\n").split("\n"),
+        "outputs": [], "source": _lines(text.strip("\n")),
     })
 
 
