@@ -64,15 +64,43 @@ COMPETITION = "rsna-knee-abnormality-detection"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _detect_data_root() -> Path:
-    """Locate the competition data across Kaggle, Colab, and local runs."""
-    kaggle_input = Path("/kaggle/input") / COMPETITION
-    if kaggle_input.exists():
-        return kaggle_input
+# What a competition data root must contain to be recognised.
+_MARKERS = ("train_series", "test_series")
 
+
+def _detect_data_root() -> Path:
+    """Locate the competition data across Kaggle, Colab, and local runs.
+
+    An explicit KNEE_DATA_ROOT wins. Otherwise Kaggle's input directory is
+    searched by content rather than by name: the mount is not reliably at
+    /kaggle/input/<competition-slug>, and guessing the name silently falls
+    through to the local fallback, which then fails much later with a confusing
+    path in the message.
+    """
     env = os.environ.get("KNEE_DATA_ROOT")
     if env:
         return Path(env)
+
+    kaggle_input = Path("/kaggle/input")
+    if kaggle_input.exists():
+        exact = kaggle_input / COMPETITION
+        if exact.exists():
+            return exact
+        # Search two levels: Kaggle mounts competition data under
+        # /kaggle/input/competitions/<slug>/ as well as directly under
+        # /kaggle/input/<slug>/, and which one you get is not predictable.
+        try:
+            for child in sorted(kaggle_input.iterdir()):
+                if not child.is_dir():
+                    continue
+                if any((child / m).exists() for m in _MARKERS):
+                    return child
+                for grandchild in sorted(child.iterdir()):
+                    if grandchild.is_dir() and any(
+                            (grandchild / m).exists() for m in _MARKERS):
+                        return grandchild
+        except OSError:
+            pass
 
     return PROJECT_ROOT / "data"
 

@@ -71,22 +71,15 @@ class Notebook:
         print(f"wrote {path.relative_to(ROOT)} ({len(self.cells)} cells)")
 
 
-def bootstrap_cell():
-    """A cell that materialises the repo modules on a machine without the repo.
-
-    Sources are embedded via repr() so quoting and escapes survive intact.
-    """
-    entries = ",\n".join(
-        f"    {path!r}: {read(path)!r}" for path in KAGGLE_MODULES
-    )
-    return f'''
-# Materialise the repo modules. Generated from source by
+BOOTSTRAP_HEAD = """# Materialise the repo modules. Generated from source by
 # tools/make_notebook.py -- do not edit here, edit src/ and regenerate.
 import pathlib, sys
 
-FILES = {{
-{entries}
-}}
+FILES = {
+"""
+
+BOOTSTRAP_TAIL = """
+}
 
 for path, source in FILES.items():
     target = pathlib.Path(path)
@@ -101,7 +94,35 @@ print("modules ready:", len(FILES), "files")
 print("labels:", len(config.LABELS))
 print("cache geometry:", config.CACHE_SLICES, "x", config.CACHE_SIZE)
 print("data root:", config.DATA_ROOT)
-'''
+
+# Fail here rather than several cells later. If the competition data is not
+# attached there is nothing to detect, and the local fallback path then fails
+# further on with a message that points at the wrong problem.
+if not any((config.DATA_ROOT / m).exists() for m in ("train_series", "test_series")):
+    root = pathlib.Path("/kaggle/input")
+    available = sorted(p.name for p in root.iterdir()) if root.exists() else []
+    raise SystemExit(
+        "No competition data under " + str(config.DATA_ROOT) + "\\n"
+        "Attached inputs: " + str(available) + "\\n"
+        "Add it via '+ Add Input' in the sidebar, or set KNEE_DATA_ROOT."
+    )
+
+print("data OK:", sorted(p.name for p in config.DATA_ROOT.iterdir())[:8])
+"""
+
+
+def bootstrap_cell():
+    """A cell that materialises the repo modules on a machine without the repo.
+
+    Sources are embedded via repr() so quoting and escapes survive intact.
+    Built by concatenation rather than an f-string: the embedded code contains
+    braces and backslash escapes of its own, and interpolating it was how a
+    newline escape became a literal line break in the generated notebook.
+    """
+    entries = ",\n".join(
+        "    {0!r}: {1!r}".format(path, read(path)) for path in KAGGLE_MODULES
+    )
+    return BOOTSTRAP_HEAD + entries + BOOTSTRAP_TAIL
 
 
 # ---------------------------------------------------------------------------
