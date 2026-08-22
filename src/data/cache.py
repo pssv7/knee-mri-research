@@ -1,0 +1,118 @@
+"""Turn a raw DICOM series into a compact, model-ready uint8 volume.
+
+The same code path runs during cache construction and at submission time. Any
+divergence between the two produces a train/test preprocessing skew, which is
+invisible in local validation and only shows up as a collapsed leaderboard
+score -- so callers must import from here rather than reimplementing.
+
+Output per series: (CACHE_SLICES, CACHE_SIZE, CACHE_SIZE) uint8, canonicalised
+to a right-knee orientation.
+"""
+
+from typing import Dict, List, Optional, Sequence
+
+import cv2
+import numpy as np
+
+from src import config
+from src.data import dicom_io
+
+
+def normalize_intensity(volume: np.ndarray) -> np.ndarray:
+    """Scale a volume to uint8 using its own robust percentile range.
+
+    MRI carries no standardised units -- intensity depends on scanner, field
+    strength, coil, and whether fat suppression was applied -- so each volume is
+    scaled against its own distribution rather than a global constant.
+    """
+    finite = volume[np.isfinite(volume)]
+    if finite.size == 0:
+        return np.zeros(volume.shape, dtype=np.uint8)
+
+    low, high = np.percentile(finite, [config.CLIP_PCT_LOW, config.CLIP_PCT_HIGH])
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        # Flat or degenerate volume; nothing to stretch.
+        return np.zeros(volume.shape, dtype=np.uint8)
+
+    scaled = (np.clip(volume, low, high) - low) / (high - low)
+    return (scaled * 255.0).round().astype(np.uint8)
+
+
+def resize_volume(volume: np.ndarray, size: int = None) -> np.ndarray:
+    """Resample every slice to size x size with area/linear interpolation."""
+    size = size or config.CACHE_SIZE
+    output = np.empty((volume.shape[0], size, size), dtype=volume.dtype)
+
+    for i, plane in enumerate(volume):
+        # Area interpolation avoids the aliasing that bilinear introduces when
+        # downsampling 800px acquisitions; linear is correct when upsampling.
+        interp = cv2.INTER_AREA if plane.shape[0] > size else cv2.INTER_LINEAR
+        output[i] = cv2.resize(plane, (size, size), interpolation=interp)
+
+    return output
+
+
+def select_slices(count: int, target: int = None) -> List[int]:
+    """Indices of `target` slices spread evenly across a stack of `count`.
+
+    Short series are handled by repeating edge slices rather than zero-padding,
+    so the volume stays anatomically continuous.
+    """
+    target = target or config.CACHE_SLICES
+    if count <= 0:
+        raise ValueError("cannot select slices from an empty series")
+    if count == target:
+        return list(range(count))
+
+    positions = np.linspace(0, count - 1, target)
+    return [int(round(p)) for p in positions]
+
+
+def canonicalize_side(volume: np.ndarray, side: Optional[str]) -> np.ndarray:
+    """Mirror left knees so the medial compartment is always on one side.
+
+    Four labels are compartment-specific (Medial/Lateral Meniscus, Medial/
+    Lateral OA). Without this the model would have to infer the side before it
+    could place a finding, from a cue that is not reliably in the image.
+    """
+    if side is None:
+        # Unknown side: leave untouched and let the caller decide. Guessing
+        # would silently swap four of the twelve labels.
+        return volume
+    if side.upper() == config.CANONICAL_SIDE:
+        return volume
+    return volume[:, :, ::-1].copy()
+
+
+def build_series_volume(headers: Sequence[dict]) -> Dict:
+    """Full pipeline for one series: sort, decode, normalise, resize, mirror.
+
+    Returns the volume plus the provenance needed to audit it later.
+    """
+    if not headers:
+        raise ValueError("no headers supplied")
+
+    ordered = dicom_io.sort_slices(headers)
+    side = dicom_io.resolve_laterality(ordered)
+    geometry_ok = dicom_io.has_geometry(ordered)
+
+    indices = select_slices(len(ordered))
+    selected = [ordered[i] for i in indices]
+
+    raw = dicom_io.load_series_volume([h["path"] for h in selected])
+    resized = resize_volume(raw.astype(np.float32))
+    normalized = normalize_intensity(resized)
+    canonical = canonicalize_side(normalized, side)
+
+    first = ordered[0]
+    return {
+        "volume": canonical,
+        "StudyInstanceUID": first.get("StudyInstanceUID"),
+        "SeriesInstanceUID": first.get("SeriesInstanceUID"),
+        "n_slices_raw": len(ordered),
+        "laterality": side,
+        "mirrored": bool(side is not None and side.upper() != config.CANONICAL_SIDE),
+        "geometry_ok": geometry_ok,
+        "rows": int(first.get("Rows") or 0),
+        "cols": int(first.get("Columns") or 0),
+    }

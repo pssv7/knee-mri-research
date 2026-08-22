@@ -1,0 +1,18 @@
+# core data
+numpy>=1.26
+pandas>=2.2
+pyarrow>=16.0
+
+# dicom / imaging
+pydicom>=3.0
+pylibjpeg>=2.0
+pylibjpeg-libjpeg>=2.1
+pylibjpeg-openjpeg>=2.3
+opencv-python-headless>=4.10
+
+# modeling (colab / kaggle only -- not installed locally)
+# torch>=2.4
+# timm>=1.0
+
+# utils
+tqdm>=4.66
