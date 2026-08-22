@@ -1,37 +1,451 @@
-"""Generate notebooks/03_extract_labels.ipynb, embedding llm_extract.py source."""
+"""Generate the Kaggle and Colab notebooks from the repo's own source.
+
+Neither Kaggle nor Colab can import this repository, so the notebooks carry the
+modules they need. Rather than reimplementing anything -- which is how a
+train/test preprocessing skew gets introduced -- the generator embeds the real
+module source and the notebook writes it to disk and imports it normally.
+
+    python3 tools/make_notebook.py
+
+Regenerate after editing anything under src/. tests/test_notebook.py fails if a
+notebook is stale.
+"""
 
 import json
 import pathlib
 
-ROOT = pathlib.Path("/Users/pssv/PycharmProjects/knee_competition")
-MODULE_SRC = (ROOT / "src" / "labels" / "llm_extract.py").read_text()
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+NOTEBOOKS = ROOT / "notebooks"
 
-cells = []
+# Modules the Kaggle notebooks need in order to build the cache.
+KAGGLE_MODULES = [
+    "src/__init__.py",
+    "src/config.py",
+    "src/data/__init__.py",
+    "src/data/dicom_io.py",
+    "src/data/cache.py",
+    "src/data/index.py",
+]
 
 
-def _lines(text):
+def read(path):
+    return (ROOT / path).read_text()
+
+
+def lines(text):
     """Split into nbformat source lines, each keeping its trailing newline.
 
-    Jupyter concatenates `source` with no separator, so a plain split("\n")
-    produces a cell whose entire body is one line -- it renders fine in a diff
-    and fails at runtime with a SyntaxError.
+    Jupyter concatenates `source` with no separator, so a plain split("\\n")
+    produces a cell whose entire body is one line -- it looks correct in the
+    JSON and fails at runtime with a SyntaxError.
     """
     return text.splitlines(keepends=True)
 
 
-def md(text):
-    cells.append({"cell_type": "markdown", "metadata": {},
-                  "source": _lines(text.strip())})
+class Notebook:
+    def __init__(self, gpu=False):
+        self.cells = []
+        self.gpu = gpu
+
+    def md(self, text):
+        self.cells.append({"cell_type": "markdown", "metadata": {},
+                           "source": lines(text.strip())})
+
+    def code(self, text):
+        self.cells.append({"cell_type": "code", "metadata": {},
+                           "execution_count": None, "outputs": [],
+                           "source": lines(text.strip("\n"))})
+
+    def write(self, path):
+        metadata = {
+            "kernelspec": {"display_name": "Python 3", "name": "python3"},
+            "language_info": {"name": "python"},
+        }
+        if self.gpu:
+            metadata["accelerator"] = "GPU"
+            metadata["colab"] = {"provenance": [], "gpuType": "A100"}
+
+        notebook = {"cells": self.cells, "metadata": metadata,
+                    "nbformat": 4, "nbformat_minor": 0}
+        path.write_text(json.dumps(notebook, indent=1, ensure_ascii=False))
+        print(f"wrote {path.relative_to(ROOT)} ({len(self.cells)} cells)")
 
 
-def code(text):
-    cells.append({
-        "cell_type": "code", "metadata": {}, "execution_count": None,
-        "outputs": [], "source": _lines(text.strip("\n")),
-    })
+def bootstrap_cell():
+    """A cell that materialises the repo modules on a machine without the repo.
+
+    Sources are embedded via repr() so quoting and escapes survive intact.
+    """
+    entries = ",\n".join(
+        f"    {path!r}: {read(path)!r}" for path in KAGGLE_MODULES
+    )
+    return f'''
+# Materialise the repo modules. Generated from source by
+# tools/make_notebook.py -- do not edit here, edit src/ and regenerate.
+import pathlib, sys
+
+FILES = {{
+{entries}
+}}
+
+for path, source in FILES.items():
+    target = pathlib.Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(source)
+
+sys.path.insert(0, ".")
+from src import config
+from src.data import dicom_io, cache, index as index_mod
+
+print("modules ready:", len(FILES), "files")
+print("labels:", len(config.LABELS))
+print("cache geometry:", config.CACHE_SLICES, "x", config.CACHE_SIZE)
+print("data root:", config.DATA_ROOT)
+'''
 
 
-md("""
+# ---------------------------------------------------------------------------
+# 01 -- header scan
+# ---------------------------------------------------------------------------
+
+def build_index_notebook():
+    nb = Notebook()
+
+    nb.md("""
+# 01 — Header Scan
+
+Reads the DICOM headers of every file in the competition data and writes a
+single parquet index. No pixel data is decoded, so this is bound by filesystem
+traversal rather than by image decoding.
+
+**Where:** Kaggle, with the competition dataset attached. The ~570 GB is only
+mounted here.
+
+**Runtime:** roughly 20–50 min for the train tree, a few seconds for test.
+
+**Output:** `index_train.parquet` and `index_test.parquet` in `/kaggle/working`.
+Save the notebook version, then publish the output as a dataset so the cache
+build can attach it without rescanning.
+
+The index is what makes the rest cheap: series can be filtered, audited, and
+sorted afterwards without touching the imaging again.
+""")
+
+    nb.md("## Setup")
+    nb.code(bootstrap_cell())
+
+    nb.md("""
+## Scan
+
+Threads rather than processes: header reads release the GIL while waiting on
+the filesystem, and a process pool would only add pickling overhead.
+
+Set `LIMIT` to a few thousand for a smoke test before committing to the full run.
+""")
+
+    nb.code("""
+import time
+import pandas as pd
+
+LIMIT = None      # e.g. 5000 to smoke-test first
+WORKERS = 8
+
+start = time.time()
+index_train = index_mod.build_index(
+    split="train_series",
+    out_path="/kaggle/working/index_train.parquet",
+    workers=WORKERS,
+    limit=LIMIT,
+)
+print(f"train scan: {(time.time() - start) / 60:.1f} min")
+
+index_test = index_mod.build_index(
+    split="test_series",
+    out_path="/kaggle/working/index_test.parquet",
+    workers=WORKERS,
+)
+""")
+
+    nb.md("""
+## Audit
+
+The two things that silently corrupt a volume are missing geometry and an
+unresolvable knee side. Both are counted here rather than discovered later:
+a series without position and orientation tags cannot be ordered reliably, and
+a series whose side is unknown cannot be mirrored into a canonical orientation,
+which matters because four of the twelve labels are compartment-specific.
+""")
+
+    nb.code("""
+summary = index_mod.summarize(index_train)
+summary.to_parquet("/kaggle/working/series_summary.parquet", index=False)
+
+print(f"series: {len(summary)}")
+print(f"studies: {summary['StudyInstanceUID'].nunique()}")
+print()
+print(f"missing geometry : {(~summary['geometry_ok']).sum()} series "
+      f"({(~summary['geometry_ok']).mean():.1%})")
+print(f"unknown side     : {summary['laterality'].isna().sum()} series "
+      f"({summary['laterality'].isna().mean():.1%})")
+print()
+print("slice counts:")
+print(summary["n_slices"].describe().to_string())
+print()
+print("laterality:")
+print(summary["laterality"].value_counts(dropna=False).to_string())
+print()
+print("in-plane sizes:")
+print(summary.groupby(["rows", "cols"]).size().sort_values(ascending=False).head(10).to_string())
+""")
+
+    nb.md("""
+## Next
+
+Publish `/kaggle/working` as a Kaggle dataset (`knee-index`). Notebook 02 attaches
+it and builds the image cache without rescanning the DICOM tree.
+""")
+
+    nb.write(NOTEBOOKS / "01_scan_index.ipynb")
+
+
+# ---------------------------------------------------------------------------
+# 02 -- cache build
+# ---------------------------------------------------------------------------
+
+def build_cache_notebook():
+    nb = Notebook()
+
+    nb.md("""
+# 02 — Build the Image Cache
+
+Turns each series into a compact uint8 volume: sorted by geometry, intensity
+normalised per volume, resampled to 224×224, 24 slices, and mirrored so every
+knee faces the canonical side.
+
+**Where:** Kaggle, with the competition data and the `knee-index` dataset from
+notebook 01 attached.
+
+**Why it exists:** at ~1.2 MB per series the whole training set is ~30 GB rather
+than ~570 GB — small enough to publish as a Kaggle dataset and pull into Colab
+once, after which training iterates without touching DICOM again.
+
+### Sharding
+
+`/kaggle/working` caps at 20 GB, so the run is split into shards of ~8,000
+series (~9.6 GB each). Set `SHARD` to 0, then 1, then 2, saving a version each
+time and publishing each output as a dataset part. Three runs cover the
+training set.
+
+**Runtime:** roughly 40–90 min per shard. Only the 24 selected slices of each
+series are decoded, not every slice, which is the difference between decoding
+~585k images and ~828k.
+""")
+
+    nb.md("## Setup")
+    nb.code(bootstrap_cell())
+
+    nb.md("""
+## Configuration
+
+`SHARD` is the only value to change between runs.
+""")
+
+    nb.code("""
+import os
+
+SHARD = 0            # 0, 1, 2 -- one per notebook run
+N_SHARDS = 3
+SPLIT = "train_series"   # switch to "test_series" for a single small run
+WORKERS = 4
+
+INDEX_PATH = "/kaggle/input/knee-index/index_train.parquet"
+if SPLIT == "test_series":
+    INDEX_PATH = "/kaggle/input/knee-index/index_test.parquet"
+    SHARD, N_SHARDS = 0, 1
+
+OUT_DIR = "/kaggle/working"
+print(f"shard {SHARD + 1} of {N_SHARDS}  split={SPLIT}")
+""")
+
+    nb.md("""
+## Load the index and select this shard
+
+Series are assigned to shards by a hash of the study UID rather than by
+position, so every shard holds a representative mix of institutions and
+protocols. A positional split would put whole scanners in one shard, and any
+per-shard sanity check would then be measuring the site, not the pipeline.
+""")
+
+    nb.code("""
+import hashlib
+import pandas as pd
+
+index = pd.read_parquet(INDEX_PATH)
+print(f"index rows: {len(index)}")
+
+groups = list(index.groupby("SeriesInstanceUID", sort=True))
+print(f"series: {len(groups)}")
+
+
+def shard_of(study_uid):
+    digest = hashlib.md5(str(study_uid).encode()).hexdigest()
+    return int(digest, 16) % N_SHARDS
+
+
+selected = [
+    (uid, group) for uid, group in groups
+    if shard_of(group["StudyInstanceUID"].iloc[0]) == SHARD
+]
+print(f"series in this shard: {len(selected)}")
+""")
+
+    nb.md("""
+## Build
+
+Each series goes through `cache.build_series_volume`, the same function the
+submission notebook uses at inference. Failures are recorded rather than raised:
+one unreadable series must not end a 90-minute run, and the manifest records
+which ones to investigate.
+""")
+
+    nb.code("""
+import time
+import numpy as np
+from concurrent.futures import ProcessPoolExecutor
+
+
+def build_one(item):
+    uid, group = item
+    try:
+        headers = group.to_dict("records")
+        result = cache.build_series_volume(headers)
+        return uid, result["volume"], {
+            "SeriesInstanceUID": uid,
+            "StudyInstanceUID": result["StudyInstanceUID"],
+            "n_slices_raw": result["n_slices_raw"],
+            "laterality": result["laterality"],
+            "mirrored": result["mirrored"],
+            "geometry_ok": result["geometry_ok"],
+            "rows": result["rows"],
+            "cols": result["cols"],
+            "error": None,
+        }
+    except Exception as exc:
+        return uid, None, {
+            "SeriesInstanceUID": uid,
+            "StudyInstanceUID": group["StudyInstanceUID"].iloc[0],
+            "error": str(exc)[:200],
+        }
+
+
+volumes = np.zeros(
+    (len(selected), config.CACHE_SLICES, config.CACHE_SIZE, config.CACHE_SIZE),
+    dtype=np.uint8,
+)
+records = []
+failures = 0
+start = time.time()
+
+with ProcessPoolExecutor(max_workers=WORKERS) as pool:
+    for position, (uid, volume, record) in enumerate(pool.map(build_one, selected)):
+        if volume is not None:
+            volumes[position] = volume
+        else:
+            failures += 1
+        record["position"] = position
+        records.append(record)
+
+        if position % 500 == 0 and position:
+            rate = position / (time.time() - start)
+            remaining = (len(selected) - position) / rate / 60
+            print(f"  {position}/{len(selected)}  {rate:.1f}/s  "
+                  f"~{remaining:.0f} min left  failures={failures}", flush=True)
+
+elapsed = (time.time() - start) / 60
+print(f"\\nbuilt {len(selected) - failures}/{len(selected)} in {elapsed:.1f} min")
+""")
+
+    nb.md("""
+## Save
+
+One packed array per shard rather than one file per series. Kaggle datasets
+handle a few large files far better than 24,000 small ones, and training reads
+sequentially from the pack.
+""")
+
+    nb.code("""
+manifest = pd.DataFrame(records)
+
+volumes_path = f"{OUT_DIR}/cache_{SPLIT}_{SHARD:02d}.npy"
+manifest_path = f"{OUT_DIR}/manifest_{SPLIT}_{SHARD:02d}.parquet"
+
+np.save(volumes_path, volumes)
+manifest.to_parquet(manifest_path, index=False)
+
+size_gb = os.path.getsize(volumes_path) / 1e9
+print(f"{volumes_path}  {volumes.shape}  {size_gb:.1f} GB")
+print(f"{manifest_path}  {manifest.shape}")
+
+if "error" in manifest.columns:
+    failed = manifest[manifest["error"].notna()]
+    if len(failed):
+        print(f"\\n{len(failed)} failures:")
+        print(failed["error"].value_counts().head().to_string())
+
+if "laterality" in manifest.columns:
+    print("\\nlaterality:")
+    print(manifest["laterality"].value_counts(dropna=False).to_string())
+    print(f"mirrored: {manifest['mirrored'].sum()} series")
+""")
+
+    nb.md("""
+## Visual check
+
+Slice ordering is the failure that produces no error and no warning, only a
+subtly scrambled volume. A correct series reads as a continuous anatomical
+sweep; a scrambled one visibly jitters between adjacent frames. Look at a few
+before publishing 10 GB.
+""")
+
+    nb.code("""
+import matplotlib.pyplot as plt
+
+good = manifest[manifest["error"].isna()] if "error" in manifest.columns else manifest
+sample = good.sample(min(3, len(good)), random_state=0)
+
+for _, row in sample.iterrows():
+    volume = volumes[int(row["position"])]
+    figure, axes = plt.subplots(2, 6, figsize=(15, 5.5))
+    for axis, slice_index in zip(axes.ravel(), range(0, config.CACHE_SLICES, 2)):
+        axis.imshow(volume[slice_index], cmap="gray", vmin=0, vmax=255)
+        axis.axis("off")
+    figure.suptitle(
+        f"{row['SeriesInstanceUID'][-16:]}  "
+        f"side={row['laterality']} mirrored={row['mirrored']} "
+        f"raw_slices={row['n_slices_raw']}")
+    plt.tight_layout()
+    plt.show()
+""")
+
+    nb.md("""
+## Next
+
+Publish `/kaggle/working` as a dataset part (`knee-cache-224-00`, `-01`, `-02`),
+then set `SHARD = 1` and run again. Once all three exist, run once more with
+`SPLIT = "test_series"` for the public test series.
+""")
+
+    nb.write(NOTEBOOKS / "02_build_cache.ipynb")
+
+
+# ---------------------------------------------------------------------------
+# 03 -- report label extraction (Colab)
+# ---------------------------------------------------------------------------
+
+def build_extract_notebook():
+    nb = Notebook(gpu=True)
+
+    nb.md("""
 # Report Label Extraction — RSNA Knee
 
 Mines the twelve findings from the 4,349 training studies that have a radiology
@@ -56,9 +470,9 @@ never sent to a hosted API.
 4. The last cell downloads `llm_labels.parquet`. Drop that into `data/meta/`.
 """)
 
-md("## 1. Check the GPU and pick a model size")
+    nb.md("## 1. Check the GPU and pick a model size")
 
-code("""
+    nb.code("""
 import subprocess, torch
 
 # nvidia-smi is absent on a CPU runtime, which is exactly the case the
@@ -87,7 +501,7 @@ else:
 print("model:", MODEL)
 """)
 
-md("""
+    nb.md("""
 ## 2. Install vLLM
 
 Batched generation over ~13,000 prompts (4,349 reports × 3 samples). vLLM's
@@ -103,7 +517,7 @@ The dependency-conflict wall of text pip prints here is noise. Every conflict is
 against RAPIDS and Google SDK packages that this notebook never imports.
 """)
 
-code("""
+    nb.code("""
 !pip install -q vllm
 
 # vLLM installs a PyTorch built against a newer CUDA than Colab's preinstalled
@@ -116,14 +530,14 @@ code("""
 print("installed -- RESTART THE RUNTIME now, then re-run section 1 and skip this cell")
 """)
 
-md("""
+    nb.md("""
 ## 3. Load `train.csv`
 
 Either mount Drive (if you put the file there) or upload it directly. It is
 ~5.7 MB.
 """)
 
-code("""
+    nb.code("""
 import os
 import pandas as pd
 
@@ -152,7 +566,7 @@ print(f"{len(train)} studies: {len(gold)} labelled, {len(unlabelled)} report-onl
 assert len(gold) == 58, f"expected 58 gold studies, found {len(gold)}"
 """)
 
-md("""
+    nb.md("""
 ## 4. Extraction logic
 
 Generated from `src/labels/llm_extract.py` in the repo — **do not edit here**,
@@ -160,9 +574,9 @@ edit the module and regenerate, or the notebook and the repo will disagree
 about how responses are parsed.
 """)
 
-code(MODULE_SRC.rstrip())
+    nb.code(read("src/labels/llm_extract.py").rstrip())
 
-md("""
+    nb.md("""
 ## 5. Load the model
 
 `n=3` in the sampling parameters gives three independent samples per report in a
@@ -171,7 +585,7 @@ the confidence weight used later during fusion — findings the model disagrees
 with itself about should carry less weight.
 """)
 
-code("""
+    nb.code("""
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
@@ -207,7 +621,7 @@ def run_extraction(reports, desc=""):
     return results
 """)
 
-md("""
+    nb.md("""
 ## 6. Checkpoint — score against the 58 gold studies
 
 **Stop here and read the table.** This is the only honest measurement available.
@@ -226,7 +640,7 @@ If the model lands below the lexicon on most findings, something is wrong with
 the prompt or the parsing — report the table back rather than continuing.
 """)
 
-code("""
+    nb.code("""
 import numpy as np
 
 gold_results = run_extraction(gold["Report"].tolist(), "(gold 58)")
@@ -270,13 +684,13 @@ print("-" * 48)
 print(f"macro AUC: {np.nanmean(aucs):.3f}   (lexicon baseline: 0.735)")
 """)
 
-md("""
+    nb.md("""
 ## 7. Full corpus
 
 Only run this once the table above looks right. This is the long cell.
 """)
 
-code("""
+    nb.code("""
 import time
 
 start = time.time()
@@ -284,7 +698,7 @@ mined = run_extraction(unlabelled["Report"].tolist(), "(4,349 reports)")
 print(f"done in {(time.time() - start) / 60:.1f} min")
 """)
 
-md("""
+    nb.md("""
 ## 8. Save and download
 
 One row per study: `<finding>` (1/0/NaN), `<finding>_severity`,
@@ -293,7 +707,7 @@ disagreement between the two extractors auditable instead of mysterious, so it
 is kept rather than discarded.
 """)
 
-code("""
+    nb.code("""
 def to_frame(results, ids):
     rows = []
     for result in results:
@@ -328,29 +742,24 @@ files.download("llm_labels.parquet")
 files.download("llm_labels_gold.parquet")
 """)
 
-md("""
+    nb.md("""
 ## Next
 
 Both parquet files go into `data/meta/`. Fusion then combines these with the
 rule-based extractor: agreement becomes a hard target at full weight,
-disagreement becomes a soft target at reduced weight, and silence is filled with
-the per-finding `P(positive | unmentioned)` prior measured on the gold studies —
-which ranges from 0.05 for MCL to 0.58 for Effusion, and is the reason silence
-cannot simply be treated as a negative.
+disagreement becomes a soft target at reduced weight, and silence scores zero
+with a low sample weight rather than a fabricated prior.
 """)
 
-notebook = {
-    "cells": cells,
-    "metadata": {
-        "accelerator": "GPU",
-        "colab": {"provenance": [], "gpuType": "A100"},
-        "kernelspec": {"display_name": "Python 3", "name": "python3"},
-        "language_info": {"name": "python"},
-    },
-    "nbformat": 4,
-    "nbformat_minor": 0,
-}
+    nb.write(NOTEBOOKS / "03_extract_labels.ipynb")
 
-out = ROOT / "notebooks" / "03_extract_labels.ipynb"
-out.write_text(json.dumps(notebook, indent=1, ensure_ascii=False))
-print(f"wrote {out} ({len(cells)} cells)")
+
+def main():
+    NOTEBOOKS.mkdir(exist_ok=True)
+    build_index_notebook()
+    build_cache_notebook()
+    build_extract_notebook()
+
+
+if __name__ == "__main__":
+    main()
