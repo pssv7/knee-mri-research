@@ -313,33 +313,13 @@ import time
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 
-
-def build_one(item):
-    uid, group = item
-    try:
-        headers = group.to_dict("records")
-        result = cache.build_series_volume(headers)
-        return uid, result["volume"], {
-            "SeriesInstanceUID": uid,
-            "StudyInstanceUID": result["StudyInstanceUID"],
-            "n_slices_raw": result["n_slices_raw"],
-            "laterality": result["laterality"],
-            "mirrored": result["mirrored"],
-            "geometry_ok": result["geometry_ok"],
-            "rows": result["rows"],
-            "cols": result["cols"],
-            "error": None,
-        }
-    except Exception as exc:
-        return uid, None, {
-            "SeriesInstanceUID": uid,
-            "StudyInstanceUID": group["StudyInstanceUID"].iloc[0],
-            "error": str(exc)[:200],
-        }
-
+# cache.build_series_record is a module-level function on purpose. A worker
+# defined in a notebook cell cannot be pickled by name, so a process pool
+# fails under the spawn start method and survives under fork only by accident.
+work = [(uid, group.to_dict("records")) for uid, group in selected]
 
 volumes = np.zeros(
-    (len(selected), config.CACHE_SLICES, config.CACHE_SIZE, config.CACHE_SIZE),
+    (len(work), config.CACHE_SLICES, config.CACHE_SIZE, config.CACHE_SIZE),
     dtype=np.uint8,
 )
 records = []
@@ -347,7 +327,8 @@ failures = 0
 start = time.time()
 
 with ProcessPoolExecutor(max_workers=WORKERS) as pool:
-    for position, (uid, volume, record) in enumerate(pool.map(build_one, selected)):
+    for position, (uid, volume, record) in enumerate(
+            pool.map(cache.build_series_record, work, chunksize=8)):
         if volume is not None:
             volumes[position] = volume
         else:
@@ -357,12 +338,12 @@ with ProcessPoolExecutor(max_workers=WORKERS) as pool:
 
         if position % 500 == 0 and position:
             rate = position / (time.time() - start)
-            remaining = (len(selected) - position) / rate / 60
-            print(f"  {position}/{len(selected)}  {rate:.1f}/s  "
+            remaining = (len(work) - position) / rate / 60
+            print(f"  {position}/{len(work)}  {rate:.1f}/s  "
                   f"~{remaining:.0f} min left  failures={failures}", flush=True)
 
 elapsed = (time.time() - start) / 60
-print(f"\\nbuilt {len(selected) - failures}/{len(selected)} in {elapsed:.1f} min")
+print(f"\\nbuilt {len(work) - failures}/{len(work)} in {elapsed:.1f} min")
 """)
 
     nb.md("""

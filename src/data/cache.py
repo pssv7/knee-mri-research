@@ -116,3 +116,43 @@ def build_series_volume(headers: Sequence[dict]) -> Dict:
         "rows": int(first.get("Rows") or 0),
         "cols": int(first.get("Columns") or 0),
     }
+
+
+def build_series_record(item):
+    """Picklable worker for a process pool: (series_uid, headers) -> result.
+
+    Defined at module level deliberately. A worker defined inside a notebook
+    cell cannot be pickled by name, so ProcessPoolExecutor fails under the
+    spawn start method and survives under fork only by accident. Keeping it
+    importable makes the cache build work the same way everywhere.
+
+    Failures are returned rather than raised: one unreadable series must not
+    end a ninety-minute run, and the manifest records what to investigate.
+    """
+    series_uid, headers = item
+    try:
+        result = build_series_volume(headers)
+        return series_uid, result["volume"], {
+            "SeriesInstanceUID": series_uid,
+            "StudyInstanceUID": result["StudyInstanceUID"],
+            "n_slices_raw": result["n_slices_raw"],
+            "laterality": result["laterality"],
+            "mirrored": result["mirrored"],
+            "geometry_ok": result["geometry_ok"],
+            "rows": result["rows"],
+            "cols": result["cols"],
+            "error": None,
+        }
+    except Exception as exc:  # noqa: BLE001 - recorded, not raised
+        study_uid = headers[0].get("StudyInstanceUID") if headers else None
+        return series_uid, None, {
+            "SeriesInstanceUID": series_uid,
+            "StudyInstanceUID": study_uid,
+            "n_slices_raw": len(headers) if headers else 0,
+            "laterality": None,
+            "mirrored": False,
+            "geometry_ok": False,
+            "rows": 0,
+            "cols": 0,
+            "error": str(exc)[:200],
+        }
