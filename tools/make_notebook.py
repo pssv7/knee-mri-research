@@ -94,13 +94,26 @@ Batched generation over ~13,000 prompts (4,349 reports × 3 samples). vLLM's
 continuous batching is roughly an order of magnitude faster than a plain
 `transformers` loop here.
 
-Colab usually prompts to restart the runtime after this. **Restart, then skip
-this cell and continue from cell 3.**
+Colab prompts to restart the runtime after this. **Restart, then re-run
+section 1, skip this section, and continue from section 3.** The restart is
+required: vLLM replaces torch and the CUDA libraries underneath a process that
+has already imported the old ones.
+
+The dependency-conflict wall of text pip prints here is noise. Every conflict is
+against RAPIDS and Google SDK packages that this notebook never imports.
 """)
 
 code("""
 !pip install -q vllm
-print("installed -- restart the runtime if prompted, then continue from cell 3")
+
+# vLLM installs a PyTorch built against a newer CUDA than Colab's preinstalled
+# torchaudio, and vLLM's import chain touches torchaudio -- which then raises
+# "PyTorch and TorchAudio were compiled with different CUDA versions" at
+# `from vllm import LLM`. Nothing here uses audio, so the mismatch is removed
+# rather than reconciled.
+!pip uninstall -y -q torchaudio
+
+print("installed -- RESTART THE RUNTIME now, then re-run section 1 and skip this cell")
 """)
 
 md("""
