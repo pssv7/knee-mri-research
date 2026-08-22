@@ -61,9 +61,14 @@ md("## 1. Check the GPU and pick a model size")
 code("""
 import subprocess, torch
 
-print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
-                      "--format=csv,noheader"],
-                     capture_output=True, text=True).stdout.strip())
+# nvidia-smi is absent on a CPU runtime, which is exactly the case the
+# message below is for -- so this must not raise first.
+try:
+    print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                          "--format=csv,noheader"],
+                         capture_output=True, text=True).stdout.strip())
+except FileNotFoundError:
+    print("nvidia-smi not found")
 
 if not torch.cuda.is_available():
     raise SystemExit("No GPU. Runtime -> Change runtime type -> A100 GPU.")
