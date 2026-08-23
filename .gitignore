@@ -21,3 +21,7 @@ venv/
 
 # full competition page text (rules are the host's; keep the summary only)
 docs/competition_pages.md
+
+# credentials -- never commit
+kaggle.json
+access_token
