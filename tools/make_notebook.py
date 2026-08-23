@@ -279,13 +279,28 @@ N_SHARDS = 3
 SPLIT = "train_series"   # switch to "test_series" for a single small run
 WORKERS = 4
 
-INDEX_PATH = "/kaggle/input/knee-index/index_train.parquet"
 if SPLIT == "test_series":
-    INDEX_PATH = "/kaggle/input/knee-index/index_test.parquet"
     SHARD, N_SHARDS = 0, 1
+
+# The index may sit in either place. /kaggle/working is where notebook 01 wrote
+# it, which works when both notebooks are the same one; a separate notebook --
+# including each of the parallel shard runs -- sees only the published dataset.
+name = "index_test.parquet" if SPLIT == "test_series" else "index_train.parquet"
+candidates = [
+    f"/kaggle/input/knee-index/{name}",
+    f"/kaggle/working/{name}",
+]
+INDEX_PATH = next((p for p in candidates if os.path.exists(p)), None)
+if INDEX_PATH is None:
+    raise SystemExit(
+        f"No {name} found. Run notebook 01 first, then either stay in that "
+        f"notebook or publish its output as a dataset named 'knee-index'.\\n"
+        f"Looked in: {candidates}"
+    )
 
 OUT_DIR = "/kaggle/working"
 print(f"shard {SHARD + 1} of {N_SHARDS}  split={SPLIT}")
+print(f"index: {INDEX_PATH}")
 """)
 
     nb.md("""
