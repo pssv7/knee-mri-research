@@ -1967,6 +1967,364 @@ worth measuring even when the budget is not at risk.
     nb.write(NOTEBOOKS / "07_submit.ipynb")
 
 
+# ---------------------------------------------------------------------------
+# 08 -- end-to-end fine-tuning (Colab)
+# ---------------------------------------------------------------------------
+
+def build_finetune_notebook():
+    nb = Notebook(gpu=True)
+
+    nb.md("""
+# 08 — Fine-Tuned Backbone (Colab)
+
+Trains a ConvNeXt-T end to end instead of reading frozen DINOv2 features. Prior
+RSNA competitions were won by fine-tuned ImageNet CNNs, so this is the arm most
+likely to top the leaderboard — and the one the frozen path exists to be
+measured against.
+
+**This run measures before it commits.** Fine-tuning here is expensive: one
+study is ~5.5 series × 24 slices ≈ 130 slice-forwards, so a full epoch over
+4,349 studies is ~570,000. The first cell after training reports actual
+throughput and projects the cost of the full sweep. Read that before launching
+five folds.
+
+**Subsampling is how the cost is controlled**, and both knobs are honest
+trade-offs rather than free wins:
+
+    SLICES_PER_SERIES   8 of 24    the tear may fall in a dropped slice
+    MAX_SERIES          3 of ~5.5  a finding may live only in a dropped series
+
+**Mirroring is used here**, unlike the frozen path. Raw volumes can be
+reflected, so left knees are mapped onto the canonical side along the axis the
+acquisition plane dictates. That makes this run an A/B against the frozen
+path's covariate approach as well as a backbone comparison — two variables at
+once, which is worth remembering when reading the result.
+""")
+
+    nb.md("""
+## 1. Setup
+
+Colab, A100 recommended. The cache is pulled from your Kaggle notebook outputs,
+so an API token is needed.
+""")
+
+    nb.code("""
+!pip install -q timm kaggle
+
+import os, pathlib, subprocess, torch
+print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NONE")
+if not torch.cuda.is_available():
+    raise SystemExit("Runtime -> Change runtime type -> A100 GPU")
+""")
+
+    nb.md("""
+## 2. Kaggle credentials
+
+Upload `~/.kaggle/access_token` (or `kaggle.json`) from the machine where the
+Kaggle CLI already works. Nothing is printed.
+""")
+
+    nb.code("""
+from google.colab import files
+
+target = pathlib.Path.home() / ".kaggle"
+target.mkdir(exist_ok=True)
+
+if not (target / "access_token").exists() and not (target / "kaggle.json").exists():
+    print("Select access_token or kaggle.json ...")
+    uploaded = files.upload()
+    for name, content in uploaded.items():
+        destination = target / ("kaggle.json" if name.endswith(".json") else "access_token")
+        destination.write_bytes(content)
+        destination.chmod(0o600)
+
+print("credentials:", sorted(p.name for p in target.iterdir()))
+""")
+
+    nb.md("""
+## 3. Pull the data
+
+One cache shard only — roughly 1,460 studies, which is plenty to measure
+throughput and get a first fold. Downloading all three would cost 29 GB before
+a single step of training.
+
+Replace the notebook slugs with yours if they differ.
+""")
+
+    nb.code("""
+USER = "pssv27"
+CACHE_NOTEBOOK = f"{USER}/knee-cache-224-01_shard-1"
+SIDE_NOTEBOOK = f"{USER}/knee_side_classifier"
+COMPETITION = "rsna-knee-abnormality-detection"
+
+def fetch(slug, path):
+    path = pathlib.Path(path)
+    if path.exists() and any(path.iterdir()):
+        print("already present:", path)
+        return
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["kaggle", "kernels", "output", slug, "-p", str(path)], check=True)
+
+fetch(CACHE_NOTEBOOK, "data/cache")
+fetch(SIDE_NOTEBOOK, "data/side")
+
+for name in ("train.csv", "train_series.csv"):
+    if not pathlib.Path(f"data/{name}").exists():
+        subprocess.run(["kaggle", "competitions", "download", COMPETITION,
+                        "-f", name, "-p", "data", "-q"], check=True)
+
+print(sorted(os.listdir("data/cache")))
+""")
+
+    nb.md("""
+## 4. Repo modules
+
+Generated from `src/` — edit the modules and regenerate rather than editing
+here, or this notebook and the repo will disagree about preprocessing.
+""")
+
+    nb.code(bootstrap_cell(MODEL_MODULES, require_raw_dicom=False))
+
+    nb.md("## 5. Assemble")
+
+    nb.code("""
+import glob
+import numpy as np
+import pandas as pd
+
+# train_labels.parquet is built locally by src/labels/fuse.py -- upload it if
+# this cell cannot find it.
+label_paths = glob.glob("data/**/train_labels.parquet", recursive=True)
+if not label_paths:
+    print("Select train_labels.parquet ...")
+    uploaded = files.upload()
+    label_paths = [list(uploaded.keys())[0]]
+
+labels = pd.read_parquet(label_paths[0])
+sides = pd.read_parquet(glob.glob("data/**/side_predictions.parquet", recursive=True)[0])
+series_meta = pd.read_csv("data/train_series.csv")
+train_csv = pd.read_csv("data/train.csv")
+gold = train_csv[train_csv["ACL"].notna()].reset_index(drop=True)
+
+cache_path = glob.glob("data/cache/cache_train_series_*.npy")[0]
+manifest = pd.read_parquet(glob.glob("data/cache/manifest_train_series_*.parquet")[0])
+manifest["cache_path"] = cache_path
+shards = {cache_path: np.load(cache_path, mmap_mode="r")}
+print("volumes:", shards[cache_path].shape)
+
+folded = splits.make_folds(labels)
+splits.assert_no_gold_leakage(folded["StudyInstanceUID"], set(gold["StudyInstanceUID"]))
+
+index = knee_dataset.StudyIndex(manifest, series_meta, folded, sides, max_series=3)
+gold_labels = gold[["StudyInstanceUID"] + config.LABELS].copy()
+for name in config.LABELS:
+    gold_labels[f"{name}_weight"] = 1.0
+gold_index = knee_dataset.StudyIndex(manifest, series_meta, gold_labels, sides,
+                                     max_series=3)
+print(f"studies in this shard: {len(index)}  gold present: {len(gold_index)}")
+""")
+
+    nb.md("""
+## 6. Dataset
+
+Slices are subsampled evenly rather than at random, so a validation score is
+reproducible. Horizontal flips are **not** used as augmentation: after
+canonicalisation a flip re-mirrors the knee and swaps medial with lateral,
+silently corrupting four of the twelve labels.
+""")
+
+    nb.code("""
+import torch
+from torch.utils.data import DataLoader, Dataset
+
+SLICES_PER_SERIES = 8
+BATCH_STUDIES = 4
+ACCUM_STEPS = 2
+
+
+class StudyVolumeDataset(Dataset):
+    def __init__(self, study_index, studies, augment=False):
+        self.index = study_index
+        self.studies = list(studies)
+        self.augment = augment
+        self.keep = np.linspace(0, config.CACHE_SLICES - 1,
+                                SLICES_PER_SERIES).round().astype(int)
+
+    def __len__(self):
+        return len(self.studies)
+
+    def __getitem__(self, i):
+        item = knee_dataset.load_study(self.index, self.studies[i], shards)
+        item["volumes"] = item["volumes"][:, self.keep]
+
+        if self.augment:
+            # Intensity jitter only. Geometric flips would swap medial and
+            # lateral; rotation is safe but left out of this first measurement.
+            scale = np.random.uniform(0.9, 1.1)
+            item["volumes"] = np.clip(
+                item["volumes"].astype(np.float32) * scale, 0, 255).astype(np.uint8)
+        return item
+
+
+def make_loader(study_index, studies, shuffle=False, augment=False):
+    return DataLoader(
+        StudyVolumeDataset(study_index, studies, augment),
+        batch_size=BATCH_STUDIES, shuffle=shuffle, num_workers=2,
+        collate_fn=knee_dataset.collate_studies, pin_memory=True)
+""")
+
+    nb.md("""
+## 7. Model
+
+ConvNeXt-T with ImageNet weights, which the competition permits. The
+aggregation above it is the same `KneeNet` the frozen path uses, so the
+comparison is between backbones rather than between architectures.
+""")
+
+    nb.code("""
+import timm
+
+BACKBONE = "convnext_tiny.fb_in22k_ft_in1k"
+backbone = timm.create_model(BACKBONE, pretrained=True, num_classes=0, in_chans=3)
+FEATURE_DIM = backbone.num_features
+print(f"{BACKBONE}: {FEATURE_DIM} features, "
+      f"{sum(p.numel() for p in backbone.parameters()) / 1e6:.1f}M params")
+
+device = "cuda"
+model = net.KneeNet(backbone, FEATURE_DIM).to(device)
+print(f"total: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
+""")
+
+    nb.md("""
+## 8. Train one fold, and measure
+
+The projection printed at the end is the point of this run. Do not launch five
+folds before reading it.
+""")
+
+    nb.code("""
+import time
+from tqdm.auto import tqdm
+
+EPOCHS = 4
+LR = 1e-4
+
+keyed = folded.set_index("StudyInstanceUID")
+train_studies = [s for s in index.studies if keyed.loc[s, "fold"] != 0]
+val_studies = [s for s in index.studies if keyed.loc[s, "fold"] == 0]
+train_loader = make_loader(index, train_studies, shuffle=True, augment=True)
+val_loader = make_loader(index, val_studies)
+gold_loader = make_loader(gold_index, gold_index.studies)
+print(f"train {len(train_studies)}  val {len(val_studies)}  gold {len(gold_index)}")
+
+optimiser = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
+scaler = torch.amp.GradScaler("cuda")
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    optimiser, max_lr=LR * 3,
+    total_steps=EPOCHS * (len(train_loader) // ACCUM_STEPS + 1))
+
+epoch_times = []
+for epoch in range(EPOCHS):
+    model.train()
+    start = time.time()
+    optimiser.zero_grad()
+
+    for step, batch in enumerate(tqdm(train_loader, desc=f"epoch {epoch + 1}/{EPOCHS}")):
+        with torch.amp.autocast("cuda"):
+            logits = model(batch["volumes"].to(device, non_blocking=True),
+                           batch["meta"].to(device), batch["mask"].to(device))
+            loss = net.weighted_bce(logits, batch["targets"].to(device),
+                                    batch["weights"].to(device)) / ACCUM_STEPS
+        scaler.scale(loss).backward()
+
+        if (step + 1) % ACCUM_STEPS == 0:
+            scaler.step(optimiser)
+            scaler.update()
+            optimiser.zero_grad()
+            scheduler.step()
+
+    epoch_times.append(time.time() - start)
+    print(f"  epoch {epoch + 1}: {epoch_times[-1] / 60:.1f} min")
+
+torch.save(model.state_dict(), "convnext_fold0.pt")
+
+per_epoch = np.mean(epoch_times)
+share = len(index) / 4349
+full_epoch = per_epoch / share
+print(f"\\nthis shard is {share:.0%} of the training set")
+print(f"projected full epoch: {full_epoch / 60:.1f} min")
+print(f"projected 5 folds x {EPOCHS} epochs: {full_epoch * EPOCHS * 5 / 3600:.1f} h")
+""")
+
+    nb.md("""
+## 9. Score
+
+Against the gold studies present in this shard. There are only about a third of
+the 58 here, so the estimate is noisier than the frozen path's — treat it as a
+direction rather than a number.
+""")
+
+    nb.code("""
+def auc(y_true, scores):
+    y_true = np.asarray(y_true); scores = np.asarray(scores, dtype=float)
+    pos = y_true == 1
+    n_pos, n_neg = int(pos.sum()), int((~pos).sum())
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    order = np.argsort(scores, kind="mergesort")
+    ranks = np.empty(len(scores), dtype=float); ranks[order] = np.arange(1, len(scores) + 1)
+    unique, inverse, counts = np.unique(scores, return_inverse=True, return_counts=True)
+    sums = np.zeros(len(unique)); np.add.at(sums, inverse, ranks)
+    ranks = (sums / counts)[inverse]
+    return (ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+
+def predict(loader):
+    model.eval(); ids, probs = [], []
+    with torch.no_grad(), torch.amp.autocast("cuda"):
+        for batch in loader:
+            logits = model(batch["volumes"].to(device), batch["meta"].to(device),
+                           batch["mask"].to(device))
+            probs.append(torch.sigmoid(logits.float()).cpu().numpy())
+            ids += batch[config.ID_COL]
+    return ids, np.concatenate(probs)
+
+
+gold_ids, gold_probs = predict(gold_loader)
+truth = gold.set_index("StudyInstanceUID").loc[gold_ids]
+
+print(f"{'finding':18s} {'gold AUC':>9s}  {'frozen DINOv2':>13s}")
+print("-" * 44)
+FROZEN = dict(zip(config.LABELS,
+                  [0.728, 0.671, 0.698, 0.680, 0.895, 0.899,
+                   0.772, 0.897, 0.746, 0.862, 0.711, 0.683]))
+scores = []
+for i, name in enumerate(config.LABELS):
+    value = auc(truth[name].to_numpy().astype(int), gold_probs[:, i])
+    scores.append(value)
+    print(f"{name:18s} {value:9.3f}  {FROZEN[name]:13.3f}")
+print("-" * 44)
+print(f"{'macro':18s} {np.nanmean(scores):9.3f}  {np.mean(list(FROZEN.values())):13.3f}")
+""")
+
+    nb.md("""
+## Next
+
+Two things decide what follows.
+
+**The runtime projection.** If five folds fit comfortably, run them and compare
+against the frozen path properly. If not, the levers are `SLICES_PER_SERIES`,
+`MAX_SERIES`, fewer folds, or freezing the backbone's early stages.
+
+**The focal findings.** Fine-tuning is expected to help meniscus, ligaments,
+and fracture most — those are the ones frozen natural-image features handle
+worst. If they do not move, the limit is elsewhere: the mined labels, or the
+224px resolution relative to the size of the structures.
+""")
+
+    nb.write(NOTEBOOKS / "08_finetune.ipynb")
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
@@ -1976,6 +2334,7 @@ def main():
     build_embed_notebook()
     build_train_notebook()
     build_submit_notebook()
+    build_finetune_notebook()
 
 
 if __name__ == "__main__":
