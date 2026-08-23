@@ -108,3 +108,33 @@ class TestEmbeddedModule:
         for name in ("build_prompt", "parse_response", "aggregate_samples",
                      "SYSTEM_PROMPT"):
             assert joined.count(name) >= 2, f"{name} defined but never used"
+
+
+class TestBootstrapReloads:
+    """The bootstrap must not trust a module already in sys.modules.
+
+    Writing src/*.py does nothing to an import that already happened. Re-running
+    the cell in a live kernel then keeps the OLD code with the new file sitting
+    unused on disk, and the run looks healthy until something calls a function
+    that only exists in the new version -- after the expensive part has already
+    run against stale logic.
+    """
+
+    def bootstrap(self):
+        for cell in code_cells():
+            source = cell_source(cell)
+            if "FILES = {" in source:
+                return source
+        pytest.fail("no bootstrap cell found")
+
+    def test_evicts_previously_imported_modules(self):
+        source = self.bootstrap()
+        assert "del sys.modules[" in source
+        assert "startswith(\"src.\")" in source
+
+    def test_invalidates_the_import_caches(self):
+        assert "importlib.invalidate_caches()" in self.bootstrap()
+
+    def test_eviction_precedes_the_imports(self):
+        source = self.bootstrap()
+        assert source.index("del sys.modules[") < source.index("from src import config")

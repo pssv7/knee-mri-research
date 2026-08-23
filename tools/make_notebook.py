@@ -73,7 +73,7 @@ class Notebook:
 
 BOOTSTRAP_HEAD = """# Materialise the repo modules. Generated from source by
 # tools/make_notebook.py -- do not edit here, edit src/ and regenerate.
-import pathlib, sys
+import importlib, pathlib, sys
 
 FILES = {
 """
@@ -87,6 +87,16 @@ for path, source in FILES.items():
     target.write_text(source)
 
 sys.path.insert(0, ".")
+
+# Drop any previously imported copy before importing. Writing the files above
+# does not affect a module already in sys.modules, so re-running this cell in a
+# kernel that has already imported src/ silently keeps the OLD code -- the new
+# file sits on disk unused, and the run looks fine until something calls a
+# function that only exists in the new version.
+for _name in [m for m in sys.modules if m == "src" or m.startswith("src.")]:
+    del sys.modules[_name]
+importlib.invalidate_caches()
+
 from src import config
 from src.data import dicom_io, cache, index as index_mod
 
