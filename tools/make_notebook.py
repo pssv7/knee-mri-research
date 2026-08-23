@@ -2040,7 +2040,10 @@ import pandas as pd
 
 
 def find_inputs(pattern):
-    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    # ./data first, so the same notebook runs on Kaggle with the cache
+    # attached and on Colab with it downloaded by notebook 09.
+    found = sorted(glob.glob(f"data/**/{pattern}", recursive=True))
+    found += sorted(glob.glob(f"/kaggle/working/{pattern}"))
     for root in sorted(glob.glob("/kaggle/input/*")):
         if os.path.basename(root) == "competitions":
             continue
@@ -2049,7 +2052,8 @@ def find_inputs(pattern):
 
 
 def find_competition_file(name):
-    for candidate in (f"/kaggle/input/competitions/*/{name}",
+    for candidate in (f"data/{name}",
+                      f"/kaggle/input/competitions/*/{name}",
                       f"/kaggle/input/*/{name}"):
         hits = sorted(glob.glob(candidate))
         if hits:
@@ -2115,7 +2119,10 @@ class StudyVolumeDataset(Dataset):
 
     def __getitem__(self, i):
         item = knee_dataset.load_study(self.index, self.studies[i], shards)
-        item["volumes"] = item["volumes"][:, self.keep]
+        # A thinned cache is already at SLICES_PER_SERIES; only subsample a
+        # full one, or the second cut would drop slices twice.
+        if item["volumes"].shape[1] > SLICES_PER_SERIES:
+            item["volumes"] = item["volumes"][:, self.keep]
 
         if self.augment:
             # Intensity jitter only. A geometric flip would swap medial and
@@ -2288,6 +2295,141 @@ resolution against the size of the structures.
     nb.write(NOTEBOOKS / "08_finetune.ipynb")
 
 
+# ---------------------------------------------------------------------------
+# 09 -- export a Colab-sized cache
+# ---------------------------------------------------------------------------
+
+def build_export_notebook():
+    nb = Notebook(gpu=False)
+
+    nb.md("""
+# 09 — Export a Colab-Sized Cache
+
+Writes a thinned copy of one cache shard: the same 224px volumes, but only the
+8 slices per series that fine-tuning uses anyway.
+
+    full shard      1.2 MB/series     9.7 GB     will not transfer
+    thinned shard   401 KB/series     3.2 GB     transfers fine
+
+Pulling a full shard to Colab failed twice at ~5.5 GB with IncompleteRead, so
+3.2 GB is the point of this. Nothing is lost that notebook 08 would have read:
+it subsamples to these same 8 slices on load.
+
+**No GPU.** This is a memmap read and a write, so it does not touch the weekly
+GPU quota -- which matters when that quota is 25 hours and only one session
+runs at a time.
+
+**Attach:** one cache dataset, plus `knee-labels` and `knee_side_classifier` so
+the whole Colab bundle comes out of one publish.
+""")
+
+    nb.md("## Setup")
+    nb.code(bootstrap_cell(MODEL_MODULES, require_raw_dicom=False))
+
+    nb.code("""
+import glob
+import os
+import shutil
+
+import numpy as np
+
+SLICES_PER_SERIES = 8   # must match notebook 08
+
+
+def find_inputs(pattern):
+    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    return found
+
+
+cache_path = find_inputs("cache_train_series_*.npy")[0]
+manifest_path = find_inputs("manifest_train_series_*.parquet")[0]
+print("source:", cache_path, f"{os.path.getsize(cache_path) / 1e9:.1f} GB")
+""")
+
+    nb.md("""
+## Thin and write
+
+Slice indices are the same evenly spaced selection notebook 08 makes, so the
+thinned cache is exactly what it would have read from the full one.
+""")
+
+    nb.code("""
+import time
+
+volumes = np.load(cache_path, mmap_mode="r")
+keep = np.linspace(0, config.CACHE_SLICES - 1,
+                   SLICES_PER_SERIES).round().astype(int)
+print("volumes:", volumes.shape, "-> keeping slices", keep.tolist())
+
+out = np.zeros((volumes.shape[0], SLICES_PER_SERIES, volumes.shape[2],
+                volumes.shape[3]), dtype=np.uint8)
+
+start = time.time()
+CHUNK = 256
+for begin in range(0, len(volumes), CHUNK):
+    end = min(begin + CHUNK, len(volumes))
+    out[begin:end] = np.asarray(volumes[begin:end])[:, keep]
+    if begin % (CHUNK * 8) == 0:
+        print(f"  {begin}/{len(volumes)}", flush=True)
+
+name = os.path.basename(cache_path).replace(".npy", f"_s{SLICES_PER_SERIES}.npy")
+np.save(f"/kaggle/working/{name}", out)
+shutil.copy(manifest_path, "/kaggle/working/")
+
+size = os.path.getsize(f"/kaggle/working/{name}") / 1e9
+print(f"\\n{name}  {out.shape}  {size:.2f} GB  in {(time.time() - start) / 60:.1f} min")
+""")
+
+    nb.md("""
+## Bundle the small files
+
+So the Colab side needs one download rather than four.
+""")
+
+    nb.code("""
+for pattern in ("train_labels.parquet", "side_predictions.parquet"):
+    for path in find_inputs(pattern):
+        shutil.copy(path, "/kaggle/working/")
+        break
+
+for name in ("train.csv", "train_series.csv"):
+    hits = sorted(glob.glob(f"/kaggle/input/competitions/*/{name}")) or \\
+        sorted(glob.glob(f"/kaggle/input/*/{name}"))
+    if hits:
+        shutil.copy(hits[0], "/kaggle/working/")
+
+total = sum(os.path.getsize(f"/kaggle/working/{f}")
+            for f in os.listdir("/kaggle/working")
+            if os.path.isfile(f"/kaggle/working/{f}"))
+print(f"bundle: {total / 1e9:.2f} GB")
+for f in sorted(os.listdir("/kaggle/working")):
+    path = f"/kaggle/working/{f}"
+    if os.path.isfile(path):
+        print(f"  {f}  {os.path.getsize(path) / 1e6:.1f} MB")
+""")
+
+    nb.md("""
+## Next
+
+Save & Run All, then publish the output. On Colab:
+
+```python
+!pip install -q kaggle
+# upload ~/.kaggle/access_token, then:
+!kaggle kernels output <user>/<this-notebook-slug> -p data
+```
+
+Notebook 08 looks in `./data` before `/kaggle/input`, so it runs unchanged in
+either place.
+""")
+
+    nb.write(NOTEBOOKS / "09_export_for_colab.ipynb")
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
@@ -2298,6 +2440,7 @@ def main():
     build_train_notebook()
     build_submit_notebook()
     build_finetune_notebook()
+    build_export_notebook()
 
 
 if __name__ == "__main__":
