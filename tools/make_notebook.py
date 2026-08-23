@@ -2009,7 +2009,9 @@ so an API token is needed.
 """)
 
     nb.code("""
-!pip install -q timm kaggle
+# --upgrade matters: Colab preinstalls kaggle 2.0.2 and pip otherwise reports
+# the requirement already satisfied, leaving the old client in place.
+!pip install -q --upgrade timm kaggle
 
 import os, pathlib, subprocess, torch
 print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NONE")
@@ -2067,24 +2069,46 @@ print("your notebooks:")
 subprocess.run(["kaggle", "kernels", "list", "--mine"])
 
 
-def fetch(slug, path):
+def fetch(slug, path, attempts=4):
+    """Download a notebook's output, retrying on a broken connection.
+
+    A ~10 GB single-stream download fails often enough that one attempt is not
+    a reasonable design. IncompleteRead leaves a partial file behind, so the
+    directory is cleared before each retry rather than resumed -- the client
+    has no resume support and a truncated .npy would load as silently
+    corrupt data.
+    """
+    import shutil
+    import time as _time
+
     path = pathlib.Path(path)
-    if path.exists() and any(path.iterdir()):
+    if path.exists() and any(f.suffix == ".npy" for f in path.iterdir()):
         print("already present:", path)
         return
-    path.mkdir(parents=True, exist_ok=True)
 
-    result = subprocess.run(["kaggle", "kernels", "output", slug, "-p", str(path)],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
-        # Surface the real message. check=True raises CalledProcessError with
-        # the output discarded, which says only that something failed.
-        raise SystemExit(
-            f"failed to fetch {slug}\\n"
-            f"stdout: {result.stdout.strip()}\\n"
-            f"stderr: {result.stderr.strip()}\\n"
-            "Check the slug against the listing above.")
-    print(result.stdout.strip()[-300:])
+    for attempt in range(1, attempts + 1):
+        if path.exists():
+            shutil.rmtree(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        print(f"fetching {slug} (attempt {attempt}/{attempts})")
+        result = subprocess.run(["kaggle", "kernels", "output", slug, "-p", str(path)],
+                                capture_output=True, text=True)
+        message = (result.stdout + result.stderr).strip()
+
+        if result.returncode == 0 and not "IncompleteRead" in message:
+            print(message[-300:])
+            return
+
+        print(f"  failed: {message.strip()[-200:]}")
+        if attempt < attempts:
+            _time.sleep(10)
+
+    raise SystemExit(
+        f"could not fetch {slug} after {attempts} attempts.\\n"
+        "If the connection keeps breaking, publish the shard as a Kaggle "
+        "dataset and use `kaggle datasets download -d <slug> --unzip`, which "
+        "transfers a single zip rather than many files.")
 
 fetch(CACHE_NOTEBOOK, "data/cache")
 fetch(SIDE_NOTEBOOK, "data/side")
