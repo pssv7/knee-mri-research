@@ -60,7 +60,7 @@ Data. The label extractor therefore runs locally on a Colab GPU.
 | Frozen DINOv2 embeddings | done — 0.9 GB, 768 dims/slice |
 | Aggregation training | done — gold-58 macro **0.770** |
 | Submission | done — **public LB 0.787** |
-| Spatial embeddings (grid 4) | notebook ready — experiment in flight |
+| Spatial embeddings (grid 4) | **tried, worse** — gold 0.747 vs 0.770 |
 | Fine-tuned ConvNeXt-T | notebook ready — measuring cost first |
 
 ### The numbers that matter
@@ -278,22 +278,42 @@ backbone rather than more aggregation.
 
 ---
 
-## Experiments in flight
+## Results log
 
-**Spatial patch embeddings (`POOL_GRID = 4`).** The first model split cleanly by
-finding size — regional 0.865, focal 0.695 — which is what a mean over 256 patch
-tokens predicts. Grid 4 keeps a 4x4 pooled grid instead: 6,528 dims, 7.6 GB.
+### Spatial patch embeddings (grid 4) — tried, worse
 
-*What would confirm the hypothesis:* the six focal findings improve and the
-regional ones do not move much. A uniform rise across all twelve means the gain
-is extra capacity rather than spatial detail. No movement means DINOv2 features
-are simply out of domain for MRI, and the backbone is the lever.
+**Hypothesis:** the focal/regional split (0.695 vs 0.865) is what a mean over
+256 patch tokens predicts, so keeping a 4x4 pooled grid should lift the focal
+findings. 6,528 dims, 7.6 GB.
 
-**Fine-tuned ConvNeXt-T (notebook 08, Colab).** Runs one fold on one cache shard
-and reports the projected cost of the full sweep before committing to it.
+**Result: falsified.** Gold macro 0.770 → **0.747**. Eleven of twelve findings
+got worse; only Lateral Meniscus improved (+0.064), which is what chance looks
+like. Focal mean 0.695 → 0.676 — the findings it was designed to rescue moved
+the wrong way. Out-of-fold dropped too (0.789 → 0.782), so this is not
+overfitting to mined labels; the model simply learns less.
 
-*Caveat when reading it:* this run also mirrors volumes geometrically, which the
-frozen path cannot do. Backbone and laterality handling vary together, so a
+**What it means.** The readout's spatial resolution is not the bottleneck.
+8.5x more input dimensions against the same 4,349 studies made optimisation
+harder without adding usable signal. The limit is the features themselves:
+DINOv2 was trained on natural images, and a richer readout cannot extract knee
+pathology the trunk never encoded. **Fine-tuning is the lever, not the readout.**
+
+**Confound, recorded honestly.** At grid 1 the projection is an Identity
+(768 -> 768); at grid 4 it is a randomly initialised 6,528 -> 512 layer, 3.3M
+new parameters. So the run changed features *and* added a projection. A control
+giving grid 1 the same 768 -> 512 projection would separate them. Not run,
+because either answer leads to the same next step and GPU time is scarce.
+
+**Grid 1 remains the best model.** Nothing regressed; the 0.787 submission
+stands.
+
+### Next: fine-tuned ConvNeXt-T (notebook 08)
+
+Runs one fold on one cache shard and reports the projected cost of the full
+sweep before committing to it.
+
+*Caveat when reading it:* this run also mirrors volumes geometrically, which
+the frozen path cannot. Backbone and laterality handling vary together, so a
 difference cannot be attributed to either alone without a third run. Its gold
 estimate is noisier too — only about a third of the 58 live in one shard.
 
