@@ -115,9 +115,12 @@ print("labels:", len(config.LABELS))
 print("cache geometry:", config.CACHE_SLICES, "x", config.CACHE_SIZE)
 print("data root:", config.DATA_ROOT)
 
-# Fail here rather than several cells later. If the competition data is not
-# attached there is nothing to detect, and the local fallback path then fails
-# further on with a message that points at the wrong problem.
+"""
+
+REQUIRE_RAW_DICOM = """
+# Fail here rather than several cells later. Only the scan and cache-build
+# notebooks read raw DICOM; the ones that work from the cache do not, and
+# demanding it there would block a notebook that has everything it needs.
 if not any((config.DATA_ROOT / m).exists() for m in ("train_series", "test_series")):
     root = pathlib.Path("/kaggle/input")
     available = sorted(p.name for p in root.iterdir()) if root.exists() else []
@@ -131,7 +134,7 @@ print("data OK:", sorted(p.name for p in config.DATA_ROOT.iterdir())[:8])
 """
 
 
-def bootstrap_cell(modules=None):
+def bootstrap_cell(modules=None, require_raw_dicom=True):
     """A cell that materialises the repo modules on a machine without the repo.
 
     Sources are embedded via repr() so quoting and escapes survive intact.
@@ -143,7 +146,10 @@ def bootstrap_cell(modules=None):
         "    {0!r}: {1!r}".format(path, read(path))
         for path in (modules or KAGGLE_MODULES)
     )
-    return BOOTSTRAP_HEAD + entries + BOOTSTRAP_TAIL
+    cell = BOOTSTRAP_HEAD + entries + BOOTSTRAP_TAIL
+    if require_raw_dicom:
+        cell += REQUIRE_RAW_DICOM
+    return cell
 
 
 # ---------------------------------------------------------------------------
@@ -884,7 +890,8 @@ Both come from the same cache, so this behaves identically at submission time.
 """)
 
     nb.md("## Setup")
-    nb.code(bootstrap_cell(SIDE_MODULES))
+    # Works from the cache, so the raw DICOM tree is not required.
+    nb.code(bootstrap_cell(SIDE_MODULES, require_raw_dicom=False))
 
     nb.md("""
 ## Load the cache
