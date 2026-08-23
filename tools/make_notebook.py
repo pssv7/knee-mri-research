@@ -1353,6 +1353,297 @@ aggregation stack on these features, and the submission notebook loads
     nb.write(NOTEBOOKS / "05_embeddings.ipynb")
 
 
+# ---------------------------------------------------------------------------
+# 06 -- train the aggregation stack on frozen embeddings
+# ---------------------------------------------------------------------------
+
+def build_train_notebook():
+    nb = Notebook(gpu=True)
+
+    nb.md("""
+# 06 — Train the Aggregation Stack
+
+Trains slice pooling, FiLM conditioning, the series transformer, and the head
+on the frozen DINOv2 embeddings. The trunk already ran, so this is minutes per
+fold rather than hours.
+
+**Inputs to attach**
+
+| input | for |
+|---|---|
+| `knee-embeddings` | the slice features |
+| the 3 cache datasets | manifests (which shard row is which series) |
+| `knee-labels` | `train_labels.parquet`, `side_predictions.parquet` |
+| competition data | `train.csv` (gold labels), `train_series.csv` (sequence metadata) |
+
+**What to read at the end.** Two numbers, and they are not interchangeable.
+The out-of-fold AUC is measured against mined labels, which share their noise
+with the training targets — a model can score well there by reproducing the
+extractor's mistakes. The gold-58 AUC is measured against radiologist labels
+the model has never seen. When they disagree, trust the gold.
+""")
+
+    nb.md("## Setup")
+    nb.code(bootstrap_cell(MODEL_MODULES, require_raw_dicom=False))
+
+    nb.code("""
+import glob
+import os
+
+import numpy as np
+import pandas as pd
+import torch
+
+
+def find_inputs(pattern, skip_competition=True):
+    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if skip_competition and os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    return found
+
+
+def find_one(pattern, **kwargs):
+    hits = find_inputs(pattern, **kwargs)
+    if not hits:
+        raise SystemExit(f"missing input: {pattern}")
+    return hits[0]
+
+
+embedding_files = find_inputs("embeddings_train_series_*.npy")
+manifest_files = find_inputs("manifest_train_series_*.parquet")
+print("embeddings:", [os.path.basename(f) for f in embedding_files])
+print("manifests :", [os.path.basename(f) for f in manifest_files])
+if not embedding_files:
+    raise SystemExit("No embeddings attached. Run notebook 05 first.")
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print("device:", device)
+""")
+
+    nb.md("""
+## Join the sources
+
+The manifest says which row of which shard holds a series; the embeddings are
+memory-mapped and read by that row. `cache_path` is rewritten to point at the
+embedding file rather than the volume cache.
+""")
+
+    nb.code("""
+shards = {}
+manifests = []
+for manifest_path in manifest_files:
+    stem = os.path.basename(manifest_path).replace("manifest_", "").replace(".parquet", "")
+    matching = [f for f in embedding_files if f.endswith(f"embeddings_{stem}.npy")]
+    if not matching:
+        print("no embeddings for", stem, "-- skipping")
+        continue
+    frame = pd.read_parquet(manifest_path)
+    frame["cache_path"] = matching[0]
+    shards[matching[0]] = np.load(matching[0], mmap_mode="r")
+    manifests.append(frame)
+
+manifest = pd.concat(manifests, ignore_index=True)
+print(f"series: {len(manifest)}  studies: {manifest['StudyInstanceUID'].nunique()}")
+
+labels = pd.read_parquet(find_one("train_labels.parquet"))
+sides = pd.read_parquet(find_one("side_predictions.parquet"))
+series_meta = pd.read_csv(find_one("train_series.csv", skip_competition=False))
+train_csv = pd.read_csv(find_one("train.csv", skip_competition=False))
+
+gold = train_csv[train_csv["ACL"].notna()].reset_index(drop=True)
+print(f"mined labels: {len(labels)}  gold: {len(gold)}  sides: {len(sides)}")
+""")
+
+    nb.md("""
+## Folds
+
+Grouped by study and stratified on the number of positive findings. The gold
+studies are not in `train_labels.parquet` at all, so they cannot leak — the
+assertion is there because that guarantee should be enforced, not assumed.
+""")
+
+    nb.code("""
+folded = splits.make_folds(labels)
+gold_uids = set(gold["StudyInstanceUID"])
+splits.assert_no_gold_leakage(folded["StudyInstanceUID"], gold_uids)
+
+print(splits.summarise(folded).round(3).to_string())
+
+index = knee_dataset.StudyIndex(manifest, series_meta, folded, sides)
+gold_labels = gold[["StudyInstanceUID"] + config.LABELS].copy()
+for name in config.LABELS:
+    gold_labels[f"{name}_weight"] = 1.0
+gold_index = knee_dataset.StudyIndex(manifest, series_meta, gold_labels, sides)
+print(f"\\ntrainable studies: {len(index)}  gold studies: {len(gold_index)}")
+""")
+
+    nb.md("## Dataset and loaders")
+
+    nb.code("""
+from torch.utils.data import DataLoader, Dataset
+
+
+class StudyFeatureDataset(Dataset):
+    def __init__(self, study_index, studies):
+        self.index = study_index
+        self.studies = list(studies)
+
+    def __len__(self):
+        return len(self.studies)
+
+    def __getitem__(self, i):
+        return knee_dataset.load_study_features(self.index, self.studies[i], shards)
+
+
+def make_loader(study_index, studies, shuffle=False, batch_size=16):
+    return DataLoader(
+        StudyFeatureDataset(study_index, studies),
+        batch_size=batch_size, shuffle=shuffle, num_workers=2,
+        collate_fn=knee_dataset.collate_studies)
+
+
+gold_loader = make_loader(gold_index, gold_index.studies)
+print("gold batches:", len(gold_loader))
+""")
+
+    nb.md("## Train and evaluate")
+
+    nb.code("""
+import time
+from tqdm.auto import tqdm
+
+EPOCHS = 12
+LR = 3e-4
+FEATURE_DIM = embed.EMBED_DIM
+
+
+def auc(y_true, scores):
+    y_true = np.asarray(y_true); scores = np.asarray(scores, dtype=float)
+    pos = y_true == 1
+    n_pos, n_neg = int(pos.sum()), int((~pos).sum())
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    order = np.argsort(scores, kind="mergesort")
+    ranks = np.empty(len(scores), dtype=float)
+    ranks[order] = np.arange(1, len(scores) + 1)
+    unique, inverse, counts = np.unique(scores, return_inverse=True, return_counts=True)
+    sums = np.zeros(len(unique)); np.add.at(sums, inverse, ranks)
+    ranks = (sums / counts)[inverse]
+    return (ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+
+def predict(model, loader):
+    model.eval()
+    ids, probs = [], []
+    with torch.no_grad():
+        for batch in loader:
+            logits = model.forward_features(
+                batch["volumes"].to(device), batch["meta"].to(device),
+                batch["mask"].to(device))
+            probs.append(torch.sigmoid(logits).cpu().numpy())
+            ids += batch[config.ID_COL]
+    return ids, np.concatenate(probs)
+
+
+def train_fold(train_studies, val_studies, seed=0):
+    torch.manual_seed(seed)
+    model = net.KneeNet(None, FEATURE_DIM).to(device)
+    optimiser = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
+    train_loader = make_loader(index, train_studies, shuffle=True)
+    val_loader = make_loader(index, val_studies)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimiser, max_lr=LR * 3, total_steps=EPOCHS * len(train_loader))
+
+    for _ in range(EPOCHS):
+        model.train()
+        for batch in train_loader:
+            optimiser.zero_grad()
+            logits = model.forward_features(
+                batch["volumes"].to(device), batch["meta"].to(device),
+                batch["mask"].to(device))
+            loss = net.weighted_bce(logits, batch["targets"].to(device),
+                                    batch["weights"].to(device))
+            loss.backward()
+            optimiser.step()
+            scheduler.step()
+
+    return model, val_loader
+
+
+keyed = folded.set_index("StudyInstanceUID")
+available = set(index.studies)
+oof = {}
+gold_probs = []
+
+start = time.time()
+for fold in tqdm(range(splits.N_FOLDS), desc="folds"):
+    fold_ids = keyed["fold"]
+    train_studies = [s for s in available if fold_ids.get(s, -1) != fold]
+    val_studies = [s for s in available if fold_ids.get(s, -1) == fold]
+
+    model, val_loader = train_fold(train_studies, val_studies, seed=fold)
+
+    ids, probs = predict(model, val_loader)
+    for study, row in zip(ids, probs):
+        oof[study] = row
+
+    gold_probs.append(predict(model, gold_loader)[1])
+    torch.save(model.state_dict(), f"/kaggle/working/knee_fold{fold}.pt")
+
+print(f"trained {splits.N_FOLDS} folds in {(time.time() - start) / 60:.1f} min")
+""")
+
+    nb.md("""
+## Results
+
+The gold column is the one that matters. The out-of-fold column is measured
+against mined labels, so it shares a noise process with the training targets
+and can reward a model for reproducing extraction errors.
+""")
+
+    nb.code("""
+oof_ids = [s for s in index.studies if s in oof]
+oof_matrix = np.stack([oof[s] for s in oof_ids])
+oof_truth = folded.set_index("StudyInstanceUID").loc[oof_ids]
+
+gold_matrix = np.mean(gold_probs, axis=0)
+gold_ids, _ = predict(model, gold_loader)
+gold_truth = gold.set_index("StudyInstanceUID").loc[gold_ids]
+
+print(f"{'finding':18s} {'OOF (mined)':>12s} {'GOLD (real)':>12s}")
+print("-" * 46)
+oof_scores, gold_scores = [], []
+for i, name in enumerate(config.LABELS):
+    o = auc((oof_truth[name].to_numpy() > 0.5).astype(int), oof_matrix[:, i])
+    g = auc(gold_truth[name].to_numpy().astype(int), gold_matrix[:, i])
+    oof_scores.append(o); gold_scores.append(g)
+    print(f"{name:18s} {o:12.3f} {g:12.3f}")
+print("-" * 46)
+print(f"{'macro':18s} {np.nanmean(oof_scores):12.3f} {np.nanmean(gold_scores):12.3f}")
+print("\\nreference: fused label quality against gold was 0.854")
+
+np.save("/kaggle/working/oof_predictions.npy", oof_matrix)
+pd.DataFrame({"StudyInstanceUID": oof_ids}).to_parquet(
+    "/kaggle/working/oof_ids.parquet", index=False)
+""")
+
+    nb.md("""
+## Next
+
+Publish the fold weights as `knee-model`. The submission notebook loads them
+plus `dinov2_s_reg4.pt`, embeds the test series with no internet, and averages
+the five folds.
+
+If the gold macro AUC is well below the 0.854 of the labels themselves, the
+ceiling is the model rather than the labels, and the next lever is the
+backbone: a fine-tuned ConvNeXt-T on the same folds.
+""")
+
+    nb.write(NOTEBOOKS / "06_train.ipynb")
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
@@ -1360,6 +1651,7 @@ def main():
     build_extract_notebook()
     build_side_notebook()
     build_embed_notebook()
+    build_train_notebook()
 
 
 if __name__ == "__main__":
