@@ -61,7 +61,8 @@ Data. The label extractor therefore runs locally on a Colab GPU.
 | Aggregation training | done — gold-58 macro **0.770** |
 | Submission | done — **public LB 0.787** |
 | Spatial embeddings (grid 4) | **tried, worse** — gold 0.747 vs 0.770 |
-| Fine-tuned ConvNeXt-T | notebook ready — measuring cost first |
+| Fine-tuned ConvNeXt-T | done — gold 0.825 (one fold) |
+| Ensemble submission | done — **public LB 0.839** |
 
 ### The numbers that matter
 
@@ -307,7 +308,47 @@ because either answer leads to the same next step and GPU time is scarce.
 **Grid 1 remains the best model.** Nothing regressed; the 0.787 submission
 stands.
 
-### Next: fine-tuned ConvNeXt-T (notebook 08)
+### Fine-tuned ConvNeXt-T — the big win
+
+Trained on all three shards for 12 epochs, one fold. Gold macro **0.825**
+against the frozen path's 0.770, winning eight of twelve findings.
+
+The two models are complementary rather than one being simply better:
+
+| tuned wins | delta | | frozen wins | delta |
+|---|---|---|---|---|
+| MCL | +0.281 | | PF OA | -0.117 |
+| ACL | +0.185 | | Lateral OA | -0.116 |
+| Lateral Meniscus | +0.133 | | Effusion | -0.031 |
+| Medial Meniscus | +0.107 | | Synovitis | -0.019 |
+| Fracture | +0.097 | | | |
+| Baker's | +0.089 | | | |
+
+A per-finding oracle pick scores ~0.848.
+
+**A leak to be aware of.** Best-epoch checkpointing selects the epoch by gold
+macro, so gold is no longer a pure holdout for this model -- it is partly a
+model-selection set. Picking the best of twelve noisy estimates likely inflates
+the figure by 0.01-0.03. Future runs should select on the validation fold and
+keep gold for reporting only.
+
+### Ensemble — public LB 0.839
+
+Rank-blended, 50/50. The leaderboard progression:
+
+| submission | public LB |
+|---|---|
+| Frozen DINOv2 alone | 0.787 |
+| **Frozen + fine-tuned, rank-blended** | **0.839** |
+
+**Open question worth one submission.** The tuned model has never been
+submitted alone, so the +0.052 cannot be split between "fine-tuning is better"
+and "blending helps". Setting `BLEND = 1.0` answers it, and the answer matters
+for the Efficiency Prize: running both paths roughly doubles inference, and if
+the blend adds nothing over the tuned model alone, dropping the frozen path is
+free score on that track.
+
+### Older notes: fine-tuned ConvNeXt-T (notebook 08)
 
 Runs one fold on one cache shard and reports the projected cost of the full
 sweep before committing to it.
