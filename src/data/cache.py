@@ -5,8 +5,9 @@ divergence between the two produces a train/test preprocessing skew, which is
 invisible in local validation and only shows up as a collapsed leaderboard
 score -- so callers must import from here rather than reimplementing.
 
-Output per series: (CACHE_SLICES, CACHE_SIZE, CACHE_SIZE) uint8, canonicalised
-to a right-knee orientation.
+Output per series: (CACHE_SLICES, CACHE_SIZE, CACHE_SIZE) uint8, in the
+orientation it was acquired in. Mirroring to a canonical side happens at load
+time rather than here -- see config.MIRROR_IN_CACHE for why.
 """
 
 from typing import Dict, List, Optional, Sequence
@@ -85,8 +86,10 @@ def canonicalize_side(volume: np.ndarray, side: Optional[str]) -> np.ndarray:
 
 
 def build_series_volume(headers: Sequence[dict]) -> Dict:
-    """Full pipeline for one series: sort, decode, normalise, resize, mirror.
+    """Full pipeline for one series: sort, decode, normalise, resize.
 
+    Mirroring is applied only when config.MIRROR_IN_CACHE is set, which it is
+    not by default. The recorded `laterality` is what the loader mirrors on.
     Returns the volume plus the provenance needed to audit it later.
     """
     if not headers:
