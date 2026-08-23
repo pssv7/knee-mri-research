@@ -33,6 +33,17 @@ SIDE_MODULES = KAGGLE_MODULES + [
     "src/model/side_classifier.py",
 ]
 
+# The embedding and training notebooks need the whole model package.
+MODEL_MODULES = KAGGLE_MODULES + [
+    "src/model/__init__.py",
+    "src/model/side_classifier.py",
+    "src/model/embed.py",
+    "src/model/dataset.py",
+    "src/model/net.py",
+    "src/model/splits.py",
+    "src/labels/__init__.py",
+]
+
 
 def read(path):
     return (ROOT / path).read_text()
@@ -106,9 +117,11 @@ importlib.invalidate_caches()
 from src import config
 from src.data import dicom_io, cache, index as index_mod
 
-# Only the side-classifier notebook materialises the model package.
+# Only some notebooks materialise the model package.
 if pathlib.Path("src/model/side_classifier.py").exists():
     from src.model import side_classifier
+if pathlib.Path("src/model/net.py").exists():
+    from src.model import embed, dataset as knee_dataset, net, splits
 
 print("modules ready:", len(FILES), "files")
 print("labels:", len(config.LABELS))
@@ -1170,12 +1183,183 @@ slice order for sagittal, columns for coronal and axial.
     nb.write(NOTEBOOKS / "04_side_classifier.ipynb")
 
 
+# ---------------------------------------------------------------------------
+# 05 -- frozen DINOv2 embeddings
+# ---------------------------------------------------------------------------
+
+def build_embed_notebook():
+    nb = Notebook(gpu=True)
+
+    nb.md("""
+# 05 — Frozen DINOv2 Embeddings
+
+Runs DINOv2-S once over every cached slice and stores the result, so the
+aggregation stack afterwards trains on cached features in minutes instead of
+hours.
+
+**Why frozen.** The competition scores a second prize track on
+`AUC + RuntimeSeconds / 32400`, so inference cost is scored rather than merely
+capped. A frozen trunk is cheap at submission, and it makes the aggregation
+design — which is where the modelling actually is — cheap to iterate on.
+
+**Cost:** 24,371 series × 24 slices = ~585,000 forward passes of a 22M
+parameter ViT. About 25–40 min on a T4, once.
+
+**Output:** `embeddings_NN.npy` per shard, float16, 768 dims per slice.
+~0.9 GB total.
+
+Pretrained weights are permitted — confirmed in the competition's Code
+Requirements — but internet is disabled at submission, so the weights are also
+saved here for the inference notebook to load from disk.
+""")
+
+    nb.md("## Setup")
+    nb.code(bootstrap_cell(MODEL_MODULES, require_raw_dicom=False))
+
+    nb.code("""
+import glob
+import os
+
+import numpy as np
+import torch
+
+
+def find_inputs(pattern):
+    # Datasets mount at /kaggle/input/<name>/, attached notebook output at
+    # /kaggle/input/notebooks/<user>/<notebook>/. Skip the competition tree:
+    # ~820,000 DICOM files and never what we are looking for.
+    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    return found
+
+
+cache_files = find_inputs("cache_*_series_*.npy")
+print("caches:")
+for f in cache_files:
+    print(" ", f)
+if not cache_files:
+    raise SystemExit("No cache shards attached.")
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print("device:", device)
+""")
+
+    nb.md("""
+## Load the encoder
+
+Downloaded here with internet on, then saved to the working directory. The
+submission notebook has no internet and loads the checkpoint from disk.
+""")
+
+    nb.code("""
+encoder = embed.build_encoder(pretrained=True).to(device)
+torch.save(encoder.state_dict(), "/kaggle/working/dinov2_s_reg4.pt")
+
+print("model:", embed.MODEL_NAME)
+print("params: %.1fM" % (sum(p.numel() for p in encoder.parameters()) / 1e6))
+print("embedding dim:", embed.EMBED_DIM)
+print("prefix tokens:", encoder.num_prefix_tokens, "(CLS + 4 registers)")
+""")
+
+    nb.md("""
+## Embed
+
+Each series contributes 24 slices, stacked 2.5D so every slice carries its
+neighbours in the three channels a DINOv2 input expects. Stored as float16:
+the precision is irrelevant to a downstream linear layer and it halves both
+the file and the load time.
+""")
+
+    nb.code("""
+import time
+from tqdm.auto import tqdm
+
+BATCH_SLICES = 256   # slices per forward pass
+
+for path in cache_files:
+    stem = os.path.basename(path).replace("cache_", "").replace(".npy", "")
+    out_path = f"/kaggle/working/embeddings_{stem}.npy"
+    if os.path.exists(out_path):
+        print("skip (exists):", out_path)
+        continue
+
+    volumes = np.load(path, mmap_mode="r")
+    count, depth = volumes.shape[0], volumes.shape[1]
+    output = np.zeros((count, depth, embed.EMBED_DIM), dtype=np.float16)
+
+    start = time.time()
+    buffer, positions = [], []
+
+    def flush():
+        if not buffer:
+            return
+        batch = torch.from_numpy(np.concatenate(buffer)).to(device)
+        features = embed.embed_slices(encoder, batch).float().cpu().numpy()
+        cursor = 0
+        for index, length in positions:
+            output[index] = features[cursor:cursor + length].astype(np.float16)
+            cursor += length
+        buffer.clear()
+        positions.clear()
+
+    for i in tqdm(range(count), desc=os.path.basename(path), unit="series"):
+        volume = torch.from_numpy(np.asarray(volumes[i]))[None]
+        slices = net.stack_2p5d(volume).numpy()
+        buffer.append(slices)
+        positions.append((i, depth))
+        if sum(len(b) for b in buffer) >= BATCH_SLICES:
+            flush()
+    flush()
+
+    np.save(out_path, output)
+    print(f"{out_path}  {output.shape}  "
+          f"{os.path.getsize(out_path) / 1e9:.2f} GB  "
+          f"{(time.time() - start) / 60:.1f} min")
+""")
+
+    nb.md("""
+## Sanity check
+
+Embeddings that are constant across series, or that contain non-finite values,
+would train a model that appears to work and predicts nothing. Cheaper to catch
+here than after a training run.
+""")
+
+    nb.code("""
+files = sorted(glob.glob("/kaggle/working/embeddings_*.npy"))
+for path in files:
+    arr = np.load(path, mmap_mode="r")
+    sample = np.asarray(arr[:200]).astype(np.float32)
+    print(os.path.basename(path), arr.shape)
+    print(f"   finite: {np.isfinite(sample).all()}  "
+          f"mean {sample.mean():.3f}  std {sample.std():.3f}")
+    per_series = sample.reshape(len(sample), -1)
+    spread = per_series.std(axis=0).mean()
+    print(f"   between-series spread: {spread:.4f}  "
+          f"{'OK' if spread > 1e-3 else 'SUSPICIOUS -- embeddings barely vary'}")
+""")
+
+    nb.md("""
+## Next
+
+Publish `/kaggle/working` as `knee-embeddings`. Notebook 06 trains the
+aggregation stack on these features, and the submission notebook loads
+`dinov2_s_reg4.pt` to embed the test series with no internet.
+""")
+
+    nb.write(NOTEBOOKS / "05_embeddings.ipynb")
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
     build_cache_notebook()
     build_extract_notebook()
     build_side_notebook()
+    build_embed_notebook()
 
 
 if __name__ == "__main__":
