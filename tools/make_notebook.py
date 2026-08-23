@@ -1658,6 +1658,287 @@ backbone: a fine-tuned ConvNeXt-T on the same folds.
     nb.write(NOTEBOOKS / "06_train.ipynb")
 
 
+# ---------------------------------------------------------------------------
+# 07 -- submission
+# ---------------------------------------------------------------------------
+
+def build_submit_notebook():
+    nb = Notebook(gpu=True)
+
+    nb.md("""
+# 07 — Submission
+
+The whole pipeline, offline, on whatever test set Kaggle mounts:
+
+    DICOM -> volume -> side -> embedding -> 5-fold ensemble -> submission.csv
+
+Every step imports the same modules used in training. Reimplementing any of
+them here is how a train/test preprocessing skew gets introduced, and that
+failure is invisible locally — it shows up only as a collapsed leaderboard
+score.
+
+**Inputs to attach**
+
+| input | for |
+|---|---|
+| competition data | the test DICOMs |
+| `knee_embeddings` | `dinov2_s_reg4.pt` — internet is off, timm cannot fetch |
+| `knee_side_classifier` | `side_model.pt` |
+| `knee-model` | the five fold checkpoints |
+| `knee-labels` | training priors, used as the fallback |
+
+**Processing is per study and streaming.** The public test set is 3 studies but
+the hidden one is far larger, and holding every volume in memory would not
+survive it. Each study is built, embedded, predicted, and discarded.
+""")
+
+    nb.md("## Setup")
+    nb.code(bootstrap_cell(MODEL_MODULES, require_raw_dicom=True))
+
+    nb.code("""
+import glob
+import os
+import time
+
+import numpy as np
+import pandas as pd
+import torch
+
+START = time.time()
+
+# Efficiency track: the score includes RuntimeSeconds / 32400, so inference
+# cost is scored rather than merely capped. Lowering this trades accuracy for
+# runtime and is the first knob to turn if the budget gets tight.
+MAX_SERIES_PER_STUDY = None   # e.g. 5
+BATCH_SLICES = 256
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print("device:", device)
+
+
+def find_inputs(pattern):
+    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    return found
+
+
+def find_one(pattern):
+    hits = find_inputs(pattern)
+    if not hits:
+        raise SystemExit(f"missing input: {pattern}")
+    return hits[0]
+
+
+def find_competition_file(name):
+    for candidate in (f"/kaggle/input/competitions/*/{name}",
+                      f"/kaggle/input/*/{name}"):
+        hits = sorted(glob.glob(candidate))
+        if hits:
+            return hits[0]
+    raise SystemExit(f"missing competition file: {name}")
+""")
+
+    nb.md("""
+## Load the models
+
+All from disk. Nothing here may reach the network.
+""")
+
+    nb.code("""
+encoder = embed.build_encoder(pretrained=False,
+                              checkpoint_path=find_one("dinov2_s_reg4.pt")).to(device)
+
+side_model = side_classifier.SideNet().to(device)
+side_model.load_state_dict(torch.load(find_one("side_model.pt"), map_location=device))
+side_model.eval()
+
+fold_paths = find_inputs("knee_fold*.pt")
+if not fold_paths:
+    raise SystemExit("no fold checkpoints found -- publish notebook 06's output")
+
+fold_models = []
+for path in fold_paths:
+    model = net.KneeNet(None, embed.EMBED_DIM).to(device)
+    model.load_state_dict(torch.load(path, map_location=device))
+    model.eval()
+    fold_models.append(model)
+
+print(f"folds: {len(fold_models)}")
+
+# Fallback used when a study cannot be processed at all. The training prior
+# beats 0.5: it is the best constant prediction available for each finding.
+try:
+    train_labels = pd.read_parquet(find_one("train_labels.parquet"))
+    PRIORS = {n: float(train_labels[n].mean()) for n in config.LABELS}
+except SystemExit:
+    PRIORS = {n: 0.5 for n in config.LABELS}
+print("priors:", {k: round(v, 3) for k, v in list(PRIORS.items())[:4]}, "...")
+""")
+
+    nb.md("""
+## Test studies
+
+Read from `test.csv` rather than by listing directories, so the submission has
+exactly the rows the grader expects even if a study's imaging is unreadable.
+""")
+
+    nb.code("""
+test_csv = pd.read_csv(find_competition_file("test.csv"))
+test_series_csv = pd.read_csv(find_competition_file("test_series.csv"))
+test_root = config.DATA_ROOT / "test_series"
+
+studies = test_csv[config.ID_COL].tolist()
+series_meta = test_series_csv.set_index("SeriesInstanceUID")
+
+print(f"studies: {len(studies)}  series: {len(test_series_csv)}")
+print("root:", test_root)
+""")
+
+    nb.md("""
+## Inference
+
+One study at a time. A study that fails anywhere falls back to the training
+prior rather than aborting the run: a notebook that crashes scores nothing,
+while one that degrades on a few studies still scores.
+""")
+
+    nb.code("""
+from tqdm.auto import tqdm
+
+
+def study_series(study_uid):
+    directory = test_root / study_uid
+    if not directory.exists():
+        return []
+    return sorted(p for p in directory.iterdir() if p.is_dir())
+
+
+def build_volume(series_dir):
+    paths = dicom_io.series_paths(series_dir)
+    if not paths:
+        return None
+    headers = [dicom_io.read_header(p) for p in paths]
+    return cache.build_series_volume(headers)
+
+
+def predict_sides(volumes):
+    # Same slice-channel input the side classifier was trained on.
+    batch = np.stack([side_classifier.prepare_batch(v)[0] for v in volumes])
+    with torch.no_grad():
+        probs = torch.sigmoid(side_model(torch.from_numpy(batch).to(device)))
+    # One knee per study, so the series vote together.
+    return "R" if float(probs.mean()) >= 0.5 else "L"
+
+
+def embed_volumes(volumes):
+    features = []
+    for volume in volumes:
+        slices = net.stack_2p5d(torch.from_numpy(volume)[None])
+        chunks = []
+        for start in range(0, len(slices), BATCH_SLICES):
+            chunk = slices[start:start + BATCH_SLICES].to(device)
+            chunks.append(embed.embed_slices(encoder, chunk).float().cpu())
+        features.append(torch.cat(chunks))
+    return torch.stack(features)
+
+
+rows = []
+failures = 0
+
+for study in tqdm(studies, desc="studies", unit="study"):
+    try:
+        series_dirs = study_series(study)
+        if MAX_SERIES_PER_STUDY and len(series_dirs) > MAX_SERIES_PER_STUDY:
+            keep = np.linspace(0, len(series_dirs) - 1, MAX_SERIES_PER_STUDY)
+            series_dirs = [series_dirs[i] for i in np.unique(keep.round().astype(int))]
+
+        built, uids = [], []
+        for series_dir in series_dirs:
+            result = build_volume(series_dir)
+            if result is not None:
+                built.append(result["volume"])
+                uids.append(series_dir.name)
+        if not built:
+            raise ValueError("no readable series")
+
+        side = predict_sides(built)
+
+        meta = []
+        for uid in uids:
+            row = series_meta.loc[uid].to_dict() if uid in series_meta.index else {}
+            row["side_predicted"] = side
+            meta.append(knee_dataset.series_metadata(pd.Series(row)))
+
+        features = embed_volumes(built).unsqueeze(0).to(device)
+        meta_tensor = torch.from_numpy(np.stack(meta)).unsqueeze(0).to(device)
+        mask = torch.ones(1, len(built), dtype=torch.bool, device=device)
+
+        with torch.no_grad():
+            probs = np.mean([
+                torch.sigmoid(m.forward_features(features, meta_tensor, mask))
+                .cpu().numpy()[0] for m in fold_models], axis=0)
+
+        rows.append({config.ID_COL: study,
+                     **{n: float(p) for n, p in zip(config.LABELS, probs)}})
+
+    except Exception as exc:  # noqa: BLE001
+        failures += 1
+        print(f"  fallback for {study[-12:]}: {str(exc)[:90]}")
+        rows.append({config.ID_COL: study, **PRIORS})
+
+elapsed = time.time() - START
+print(f"\\n{len(rows)} studies in {elapsed / 60:.1f} min  ({failures} fallbacks)")
+print(f"per study: {elapsed / max(len(rows), 1):.2f}s")
+""")
+
+    nb.md("""
+## Write and verify
+
+The header is checked against `sample_submission.csv` rather than trusted. The
+column names carry an apostrophe and spaces, and a mismatch is rejected by the
+grader after the run rather than during it.
+""")
+
+    nb.code("""
+submission = pd.DataFrame(rows)[config.SUBMISSION_COLUMNS]
+submission.to_csv("/kaggle/working/submission.csv", index=False)
+
+sample = pd.read_csv(find_competition_file("sample_submission.csv"))
+assert list(submission.columns) == list(sample.columns), (
+    f"header mismatch\\n got: {list(submission.columns)}\\n"
+    f"want: {list(sample.columns)}")
+assert len(submission) == len(test_csv), "row count does not match test.csv"
+assert submission[config.ID_COL].is_unique, "duplicate study ids"
+assert submission[config.LABELS].notna().all().all(), "missing predictions"
+values = submission[config.LABELS]
+assert ((values >= 0) & (values <= 1)).all().all(), "predictions out of range"
+
+print(submission.head().to_string())
+print(f"\\nwrote submission.csv  {submission.shape}")
+
+# Runtime against the 9-hour cap and the efficiency term.
+projected = elapsed / max(len(rows), 1) * 1500
+print(f"\\nprojected for 1,500 studies: {projected / 3600:.2f} h "
+      f"(cap 9 h, efficiency penalty {projected / 32400:.3f})")
+""")
+
+    nb.md("""
+## Next
+
+Submit. Then compare the leaderboard score against the gold-58 estimate — a
+large gap points at a train/test difference rather than at the model.
+
+If runtime is comfortable, `MAX_SERIES_PER_STUDY` can stay `None`. If it is
+tight, capping series is the cheapest lever, and the efficiency term makes it
+worth measuring even when the budget is not at risk.
+""")
+
+    nb.write(NOTEBOOKS / "07_submit.ipynb")
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
@@ -1666,6 +1947,7 @@ def main():
     build_side_notebook()
     build_embed_notebook()
     build_train_notebook()
+    build_submit_notebook()
 
 
 if __name__ == "__main__":
