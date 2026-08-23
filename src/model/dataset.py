@@ -12,11 +12,21 @@ labels, and a single series often cannot support them -- effusion reads off a
 fluid-sensitive sequence, patellofemoral OA off a different one -- so the model
 has to see the study's series together.
 
-**Mirroring happens here, not in the cache.** Volumes are stored as acquired,
-and the axis reflected depends on the acquisition plane: for sagittal series the
-medial-lateral axis is the slice axis, so mirroring reverses slice order, while
-for coronal and axial it lies in-plane and mirroring flips columns. Doing this
-at load time means side detection can improve without rebuilding 29 GB.
+**Laterality is handled two ways, depending on the path.**
+
+For the end-to-end path, `mirror_volume` reflects left knees onto the canonical
+side at load time, along the axis the acquisition plane dictates: slice order
+for sagittal, where medial-lateral is the slice axis, and columns for coronal
+and axial, where it lies in-plane. Doing it at load time rather than in the
+cache means side detection can improve without rebuilding 29 GB.
+
+For the frozen path this is not available -- the embeddings are computed from
+the volume, so the image can no longer be flipped. There the side travels to
+the model as a covariate (`is_right`, `side_known`) instead. That still
+addresses the original concern, which was that the model should not have to
+*infer* the side from cues that are not reliably present; it is handed the
+answer either way. Which of the two performs better is an experiment, not a
+settled question.
 """
 
 from typing import Dict, List, Optional, Sequence
@@ -36,8 +46,15 @@ DEFAULT_MIRROR_AXIS = 2
 
 # Series metadata fed to the model as conditioning. Findings are
 # sequence-specific, and these three are given in both train and test.
+# `is_right` and `side_known` carry laterality as a covariate rather than
+# normalising it away by mirroring. With precomputed frozen embeddings the
+# image can no longer be flipped -- the features are already computed -- so the
+# side is handed to the model instead, which addresses the original concern
+# (the model should not have to *infer* the side) by a different route.
+# Mirroring remains available for the end-to-end path and is an A/B to run,
+# not a settled question.
 META_COLUMNS = ["Fluid_Sensitive", "Fat_Suppression", "is_sagittal",
-                "is_coronal", "is_axial"]
+                "is_coronal", "is_axial", "is_right", "side_known"]
 
 
 def mirror_volume(volume: np.ndarray, side: Optional[str],
@@ -62,12 +79,16 @@ def series_metadata(row: pd.Series) -> np.ndarray:
     collapsing them would discard the cases where they disagree.
     """
     plane = str(row.get("Anatomical_Plane", ""))
+    side = row.get("side_predicted")
+    known = isinstance(side, str) and side.upper() in ("L", "R")
     return np.array([
         float(row.get("Fluid_Sensitive", 0) or 0),
         float(row.get("Fat_Suppression", 0) or 0),
         float(plane == "Sagittal"),
         float(plane == "Coronal"),
         float(plane == "Axial"),
+        float(known and side.upper() == "R"),
+        float(known),
     ], dtype=np.float32)
 
 

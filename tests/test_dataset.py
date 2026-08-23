@@ -88,7 +88,7 @@ class TestSeriesMetadata:
         row = pd.Series({"Fluid_Sensitive": 1, "Fat_Suppression": 0,
                          "Anatomical_Plane": "Coronal"})
         meta = ds.series_metadata(row)
-        assert meta.tolist() == [1.0, 0.0, 0.0, 1.0, 0.0]
+        assert meta.tolist() == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
 
     def test_fluid_and_fat_stay_separate(self):
         # The data description states these are correlated but not equivalent,
@@ -100,7 +100,7 @@ class TestSeriesMetadata:
 
     def test_missing_values_default_to_zero(self):
         meta = ds.series_metadata(pd.Series({}))
-        assert meta.tolist() == [0.0, 0.0, 0.0, 0.0, 0.0]
+        assert meta.tolist() == [0.0] * len(ds.META_COLUMNS)
 
 
 class TestStudyIndex:
@@ -184,3 +184,38 @@ class TestLoadAndCollate:
         index = ds.StudyIndex(make_manifest(), make_series_meta())
         out = ds.collate_studies([ds.load_study(index, "study1", self.shards())])
         assert "targets" not in out
+
+
+class TestSideAsCovariate:
+    """Laterality is handed to the model rather than normalised away.
+
+    Precomputed frozen embeddings cannot be mirrored -- the features are
+    already computed -- so the side travels as a covariate instead. The
+    distinction between "left knee" and "side unknown" has to survive, since
+    they call for different behaviour: one is information, the other is its
+    absence.
+    """
+
+    def meta(self, side, plane="Coronal"):
+        return ds.series_metadata(pd.Series({
+            "Fluid_Sensitive": 0, "Fat_Suppression": 0,
+            "Anatomical_Plane": plane, "side_predicted": side}))
+
+    def test_right_and_left_differ(self):
+        assert not np.array_equal(self.meta("R"), self.meta("L"))
+
+    def test_unknown_is_distinct_from_left(self):
+        # Both have is_right = 0; only side_known separates them.
+        left, unknown = self.meta("L"), self.meta(None)
+        assert left[-1] == 1.0 and unknown[-1] == 0.0
+
+    def test_right_flag_set_only_for_right(self):
+        assert self.meta("R")[-2] == 1.0
+        assert self.meta("L")[-2] == 0.0
+        assert self.meta(None)[-2] == 0.0
+
+    def test_nan_side_counts_as_unknown(self):
+        assert self.meta(np.nan)[-1] == 0.0
+
+    def test_width_matches_the_column_list(self):
+        assert len(self.meta("R")) == len(ds.META_COLUMNS)
