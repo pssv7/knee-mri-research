@@ -18,3 +18,6 @@ venv/
 # editors / os
 .idea/
 .DS_Store
+
+# full competition page text (rules are the host's; keep the summary only)
+docs/competition_pages.md
