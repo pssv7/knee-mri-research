@@ -295,18 +295,28 @@ if SPLIT == "test_series":
 # The index may sit in either place. /kaggle/working is where notebook 01 wrote
 # it, which works when both notebooks are the same one; a separate notebook --
 # including each of the parallel shard runs -- sees only the published dataset.
+# The index may be attached as a dataset, as another notebook's output, or
+# sit in the working directory from notebook 01. Search rather than requiring
+# a particular name -- attaching a notebook output gives it the notebook's
+# name, which is not predictable.
+import glob as _glob
+
 name = "index_test.parquet" if SPLIT == "test_series" else "index_train.parquet"
-candidates = [
-    f"/kaggle/input/knee-index/{name}",
-    f"/kaggle/working/{name}",
-]
-INDEX_PATH = next((p for p in candidates if os.path.exists(p)), None)
+candidates = (
+    _glob.glob(f"/kaggle/working/{name}")
+    + _glob.glob(f"/kaggle/input/*/{name}")
+    + _glob.glob(f"/kaggle/input/*/*/{name}")
+)
+INDEX_PATH = candidates[0] if candidates else None
 if INDEX_PATH is None:
+    attached = sorted(os.listdir("/kaggle/input")) if os.path.exists("/kaggle/input") else []
     raise SystemExit(
-        f"No {name} found. Run notebook 01 first, then either stay in that "
-        f"notebook or publish its output as a dataset named 'knee-index'.\\n"
-        f"Looked in: {candidates}"
+        f"No {name} found in /kaggle/working or any attached input.\\n"
+        f"Attached: {attached}\\n"
+        "Run notebook 01, or attach its output via + Add Input."
     )
+if len(candidates) > 1:
+    print(f"note: {len(candidates)} copies found, using the first")
 
 OUT_DIR = "/kaggle/working"
 print(f"shard {SHARD + 1} of {N_SHARDS}  split={SPLIT}")
