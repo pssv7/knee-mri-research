@@ -96,12 +96,13 @@ class KneeNet(nn.Module):
     trains in minutes rather than hours.
     """
 
-    def __init__(self, backbone: nn.Module, feature_dim: int,
+    def __init__(self, backbone: Optional[nn.Module], feature_dim: int,
                  n_labels: int = None, series_layers: int = 2,
                  n_heads: int = 8, dropout: float = 0.2,
                  freeze_backbone: bool = False):
         super().__init__()
-        self.backbone = backbone
+        # None is valid on the frozen path, where the trunk ran offline.
+        self.backbone = backbone if backbone is not None else nn.Identity()
         self.feature_dim = feature_dim
         n_labels = n_labels or len(config.LABELS)
 
@@ -135,6 +136,35 @@ class KneeNet(nn.Module):
         features = features.reshape(count, depth, self.feature_dim)
         return self.slice_pool(features)
 
+    def aggregate(self, series: torch.Tensor, meta: torch.Tensor,
+                  mask: torch.Tensor) -> torch.Tensor:
+        """(B, S, F) series embeddings -> (B, n_labels).
+
+        Everything above the backbone. Shared by the end-to-end path and the
+        frozen path so the two cannot drift into different architectures.
+        """
+        series = self.film(series, meta)
+
+        # The transformer takes True for positions to IGNORE, the inverse of
+        # our mask.
+        encoded = self.series_encoder(series, src_key_padding_mask=~mask)
+        # A fully padded row emits NaN from the attention; zero it before
+        # pooling so one short study cannot poison the batch.
+        encoded = torch.nan_to_num(encoded)
+
+        pooled = self.study_pool(encoded, mask=mask)
+        return self.head(pooled)
+
+    def forward_features(self, features: torch.Tensor, meta: torch.Tensor,
+                         mask: torch.Tensor) -> torch.Tensor:
+        """Frozen path: (B, S, D, F) precomputed slice embeddings.
+
+        The backbone has already run, so this starts at the slice pooling.
+        """
+        batch, series, depth, dim = features.shape
+        pooled = self.slice_pool(features.reshape(batch * series, depth, dim))
+        return self.aggregate(pooled.reshape(batch, series, dim), meta, mask)
+
     def forward(self, volumes: torch.Tensor, meta: torch.Tensor,
                 mask: torch.Tensor) -> torch.Tensor:
         # volumes: (B, S, D, H, W), meta: (B, S, M), mask: (B, S)
@@ -142,16 +172,7 @@ class KneeNet(nn.Module):
 
         flat = volumes.reshape(batch * series, *volumes.shape[2:])
         embeddings = self.encode_series(flat).reshape(batch, series, self.feature_dim)
-        embeddings = self.film(embeddings, meta)
-
-        # Transformer takes True for positions to IGNORE, the inverse of ours.
-        encoded = self.series_encoder(embeddings, src_key_padding_mask=~mask)
-        # A fully padded row emits NaN from the attention; zero those out before
-        # pooling so one short study cannot poison the batch.
-        encoded = torch.nan_to_num(encoded)
-
-        pooled = self.study_pool(encoded, mask=mask)
-        return self.head(pooled)
+        return self.aggregate(embeddings, meta, mask)
 
 
 def weighted_bce(logits: torch.Tensor, targets: torch.Tensor,

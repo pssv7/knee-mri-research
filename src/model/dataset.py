@@ -193,6 +193,34 @@ def load_study(index: StudyIndex, study: str, shards: Dict[str, np.ndarray]) -> 
     }
 
 
+def load_study_features(index: StudyIndex, study: str,
+                        shards: Dict[str, np.ndarray]) -> Dict:
+    """Assemble one study from precomputed slice embeddings.
+
+    Mirroring is unavailable here -- the features were computed from the image
+    and cannot be flipped after the fact -- so laterality reaches the model
+    through `series_metadata` instead.
+    """
+    rows = index.series_for(study)
+
+    features, meta = [], []
+    for _, row in rows.iterrows():
+        shard = shards[row["cache_path"]]
+        features.append(np.asarray(shard[int(row["position"])], dtype=np.float32))
+        meta.append(series_metadata(row))
+
+    targets, weights = index.targets_for(study)
+    return {
+        config.ID_COL: study,
+        "volumes": np.stack(features) if features else np.zeros((0, 1, 1),
+                                                                dtype=np.float32),
+        "meta": np.stack(meta) if meta else np.zeros((0, len(META_COLUMNS)),
+                                                     dtype=np.float32),
+        "targets": targets,
+        "weights": weights,
+    }
+
+
 def collate_studies(batch: Sequence[Dict]) -> Dict:
     """Pad a batch of studies to the largest series count, with a mask.
 
@@ -203,9 +231,17 @@ def collate_studies(batch: Sequence[Dict]) -> Dict:
     import torch
 
     longest = max(len(item["volumes"]) for item in batch)
-    depth, size = config.CACHE_SLICES, config.CACHE_SIZE
 
-    volumes = np.zeros((len(batch), longest, depth, size, size), dtype=np.uint8)
+    # Per-series shape is taken from the data rather than assumed, so the same
+    # collate serves raw volumes (D, H, W) and cached embeddings (D, F).
+    reference = next((item["volumes"] for item in batch if len(item["volumes"])),
+                     None)
+    if reference is None:
+        raise ValueError("every study in the batch is empty")
+    per_series = reference.shape[1:]
+    dtype = reference.dtype
+
+    volumes = np.zeros((len(batch), longest, *per_series), dtype=dtype)
     meta = np.zeros((len(batch), longest, len(META_COLUMNS)), dtype=np.float32)
     mask = np.zeros((len(batch), longest), dtype=bool)
 

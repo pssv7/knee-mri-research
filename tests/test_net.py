@@ -183,3 +183,56 @@ class TestWeightedBCE:
         right = net.weighted_bce(torch.full((1, 12), 5.0), torch.ones(1, 12), weights)
         wrong = net.weighted_bce(torch.full((1, 12), -5.0), torch.ones(1, 12), weights)
         assert wrong > right
+
+
+class TestFrozenPath:
+    """The frozen path must produce the same architecture as the end-to-end one.
+
+    Both call `aggregate`, so FiLM, the series transformer, and the pooling
+    cannot drift apart between the path used for fast iteration and the path
+    used for a fine-tuned submission.
+    """
+
+    def test_forward_features_shape(self):
+        model = make_model()
+        features = torch.rand(2, 3, DEPTH, FEATURES)
+        meta = torch.rand(2, 3, len(META_COLUMNS))
+        mask = torch.ones(2, 3, dtype=torch.bool)
+        with torch.no_grad():
+            assert model.forward_features(features, meta, mask).shape == (2, 12)
+
+    def test_masking_holds_on_the_frozen_path(self):
+        model = make_model()
+        torch.manual_seed(5)
+        features = torch.rand(1, 3, DEPTH, FEATURES)
+        meta = torch.rand(1, 3, len(META_COLUMNS))
+        mask = torch.tensor([[True, True, False]])
+        with torch.no_grad():
+            padded = model.forward_features(features, meta, mask)
+            trimmed = model.forward_features(
+                features[:, :2], meta[:, :2], torch.ones(1, 2, dtype=torch.bool))
+        assert torch.allclose(padded, trimmed, atol=1e-5)
+
+    def test_backbone_may_be_omitted(self):
+        # On the frozen path the trunk already ran offline.
+        model = net.KneeNet(None, FEATURES).eval()
+        features = torch.rand(1, 2, DEPTH, FEATURES)
+        with torch.no_grad():
+            out = model.forward_features(
+                features, torch.rand(1, 2, len(META_COLUMNS)),
+                torch.ones(1, 2, dtype=torch.bool))
+        assert out.shape == (1, 12)
+
+    def test_both_paths_share_the_aggregation(self):
+        # Feed the end-to-end path's series embeddings through aggregate
+        # directly and confirm the frozen path reaches the same result.
+        model = make_model()
+        torch.manual_seed(7)
+        series = torch.rand(1, 2, FEATURES)
+        meta = torch.rand(1, 2, len(META_COLUMNS))
+        mask = torch.ones(1, 2, dtype=torch.bool)
+        with torch.no_grad():
+            a = model.aggregate(series, meta, mask)
+            # A depth-1 feature stack pools to the same series embedding.
+            b = model.forward_features(series.unsqueeze(2), meta, mask)
+        assert torch.allclose(a, b, atol=1e-5)

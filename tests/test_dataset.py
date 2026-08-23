@@ -219,3 +219,31 @@ class TestSideAsCovariate:
 
     def test_width_matches_the_column_list(self):
         assert len(self.meta("R")) == len(ds.META_COLUMNS)
+
+
+class TestFeatureLoading:
+    def index(self, n=3):
+        return ds.StudyIndex(make_manifest(n), make_series_meta(n), make_labels())
+
+    def test_loads_precomputed_features(self):
+        shards = {"shard0": np.random.rand(3, DEPTH, 768).astype(np.float16)}
+        item = ds.load_study_features(self.index(), "study1", shards)
+        assert item["volumes"].shape == (3, DEPTH, 768)
+        assert item["volumes"].dtype == np.float32
+
+    def test_collate_infers_the_per_series_shape(self):
+        # The same collate serves raw volumes (D, H, W) and features (D, F).
+        shards = {"shard0": np.random.rand(3, DEPTH, 768).astype(np.float16)}
+        a = ds.load_study_features(self.index(3), "study1", shards)
+        b = ds.load_study_features(self.index(1), "study1", shards)
+        b[config.ID_COL] = "study2"
+        out = ds.collate_studies([a, b])
+        assert out["volumes"].shape == (2, 3, DEPTH, 768)
+        assert out["mask"].tolist() == [[True] * 3, [True, False, False]]
+
+    def test_empty_batch_raises_rather_than_guessing(self):
+        empty = {config.ID_COL: "s", "volumes": np.zeros((0, 1, 1)),
+                 "meta": np.zeros((0, len(ds.META_COLUMNS))),
+                 "targets": None, "weights": None}
+        with pytest.raises(ValueError, match="every study in the batch is empty"):
+            ds.collate_studies([empty])
