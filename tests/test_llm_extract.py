@@ -8,6 +8,8 @@ Every ambiguous path must resolve to None.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import config  # noqa: E402
@@ -133,3 +135,72 @@ class TestAggregation:
     def test_unclear_can_win(self):
         samples = [self._sample(None), self._sample(None), self._sample(1)]
         assert lx.aggregate_samples(samples)["ACL"]["present"] is None
+
+
+class TestProbabilityExtraction:
+    """The categorical contract collapsed 53% of label slots onto one value.
+
+    AUC cannot rank inside a tie block, so a target that ties two thirds of the
+    studies caps what any model trained on it can score. These tests guard the
+    properties that make the probability variant break those ties.
+    """
+
+    def test_prompt_asks_for_all_findings(self):
+        prompt = lx.build_probability_prompt("Normal knee.")
+        for name in config.LABELS:
+            assert name in prompt
+
+    def test_prompt_discourages_round_numbers(self):
+        # Rounding to 0/50/100 would reintroduce the ties this exists to fix.
+        prompt = lx.build_probability_prompt("x")
+        assert "Do not round" in prompt
+
+    def test_prompt_addresses_unmentioned_findings(self):
+        prompt = lx.build_probability_prompt("x")
+        assert "NOT the same as absent" in prompt
+
+    def test_parses_percentages_to_unit_range(self):
+        result = lx.parse_probabilities('{"ACL": 88, "MCL": 3}')
+        assert result["ACL"] == pytest.approx(0.88)
+        assert result["MCL"] == pytest.approx(0.03)
+
+    def test_accepts_string_and_percent_sign(self):
+        result = lx.parse_probabilities('{"ACL": "72%"}')
+        assert result["ACL"] == pytest.approx(0.72)
+
+    def test_missing_finding_stays_none(self):
+        # A fabricated 0.5 would sit mid-ranking and is worse than a gap the
+        # caller fills deliberately.
+        result = lx.parse_probabilities('{"ACL": 10}')
+        assert result["Fracture"] is None
+
+    def test_out_of_range_rejected(self):
+        result = lx.parse_probabilities('{"ACL": 150, "MCL": -4}')
+        assert result["ACL"] is None and result["MCL"] is None
+
+    def test_booleans_rejected(self):
+        # True would otherwise cast to 1.0 and read as a 1% probability.
+        assert lx.parse_probabilities('{"ACL": true}')["ACL"] is None
+
+    def test_garbage_is_all_none(self):
+        for text in ["", None, "no json here", "{{{"]:
+            assert all(v is None for v in lx.parse_probabilities(text).values())
+
+    def test_aggregate_averages_samples(self):
+        samples = [{n: 0.2 for n in config.LABELS},
+                   {n: 0.4 for n in config.LABELS}]
+        out = lx.aggregate_probabilities(samples)
+        assert out["ACL"]["probability"] == pytest.approx(0.3)
+
+    def test_agreement_gives_full_confidence(self):
+        samples = [{n: 0.3 for n in config.LABELS}] * 3
+        assert lx.aggregate_probabilities(samples)["ACL"]["confidence"] == 1.0
+
+    def test_disagreement_lowers_confidence(self):
+        samples = [{n: 0.0 for n in config.LABELS},
+                   {n: 1.0 for n in config.LABELS}]
+        assert lx.aggregate_probabilities(samples)["ACL"]["confidence"] < 0.5
+
+    def test_all_missing_is_none(self):
+        out = lx.aggregate_probabilities([{n: None for n in config.LABELS}])
+        assert out["ACL"]["probability"] is None

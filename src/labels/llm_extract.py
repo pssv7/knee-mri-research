@@ -247,3 +247,127 @@ def extract_finding_from_record(record: Dict, finding: str) -> Dict:
         "severity": entry.get("severity"),
         "span": entry.get("evidence"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Probability extraction
+# ---------------------------------------------------------------------------
+# The categorical contract above collapses 58 gold studies onto ~10-20 distinct
+# target values, and 53% of all label slots share a single one. AUC is a
+# ranking metric: a target that cannot order the studies inside a tie block
+# gives the model nothing to learn there, and caps the achievable score.
+#
+# Asking for a probability instead produces a continuous score per study, which
+# breaks the ties -- including for unmentioned findings, where the model can
+# still reason from context ("severe tricompartmental OA" makes an unmentioned
+# effusion more likely than a report describing an otherwise normal knee).
+
+PROBABILITY_PROMPT = """Read the knee MRI report and estimate, for each of the
+twelve findings, the probability that a musculoskeletal radiologist reviewing
+the images would mark it present.
+
+FINDINGS:
+{definitions}
+
+Give a probability from 0 to 100 for each.
+
+How to think about it:
+- Explicitly described as present: high, 85-99, scaled by how definite and how
+  severe the description is. A "large joint effusion" is higher than a "trace
+  effusion", because the reference standard applies severity thresholds.
+- Explicitly described as absent, normal, or intact: low, 1-10.
+- Hedged ("possible", "suspicious for", "cannot exclude"): middle, 30-60.
+- Not mentioned at all: this is NOT the same as absent. Reports state positives
+  and omit much else, and what gets omitted varies by finding and by
+  radiologist. Estimate from the rest of the report and from how routinely that
+  finding is reported. A report describing severe degenerative change makes an
+  unmentioned effusion more likely; a detailed normal study makes it less so.
+  Most unmentioned findings land between 5 and 35.
+
+Do not round to 0, 50, or 100. Distinguishing two studies that both fail to
+mention a finding is exactly what this is for.
+
+REPORT:
+\"\"\"
+{report}
+\"\"\"
+
+Respond with ONLY a JSON object mapping each finding to a number:
+{{"ACL": 3, "MCL": 12, "Medial Meniscus": 88, ...}}
+Include all twelve findings."""
+
+
+def build_probability_prompt(report: str) -> str:
+    """The probability-valued variant of the extraction prompt."""
+    definitions = "\n".join(
+        f'  "{name}": {definition}' for name, definition in FINDING_DEFINITIONS.items()
+    )
+    return PROBABILITY_PROMPT.format(definitions=definitions, report=report)
+
+
+def parse_probabilities(text: str) -> Dict[str, Optional[float]]:
+    """Parse a probability response into {finding: 0..1} or None per finding.
+
+    A missing or unparseable finding stays None rather than defaulting: a
+    fabricated 0.5 would sit in the middle of the ranking and is worse than an
+    honest gap the caller can fill deliberately.
+    """
+    result = {name: None for name in FINDING_DEFINITIONS}
+    if not isinstance(text, str) or not text.strip():
+        return result
+
+    block = _extract_json_block(text)
+    if block is None:
+        return result
+
+    try:
+        payload = json.loads(block)
+    except json.JSONDecodeError:
+        try:
+            payload = json.loads(re.sub(r",\s*([}\]])", r"\1", block))
+        except json.JSONDecodeError:
+            return result
+
+    if not isinstance(payload, dict):
+        return result
+
+    for name in FINDING_DEFINITIONS:
+        value = payload.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            continue
+        try:
+            number = float(str(value).strip().rstrip("%"))
+        except ValueError:
+            continue
+        if not 0.0 <= number <= 100.0:
+            continue
+        result[name] = number / 100.0
+
+    return result
+
+
+def aggregate_probabilities(samples: List[Dict[str, Optional[float]]]) -> Dict[str, Dict]:
+    """Average self-consistency samples, keeping their spread as a weight.
+
+    Agreement across samples is evidence the estimate is stable; disagreement
+    is a reason to weight that target down during training.
+    """
+    aggregated = {}
+    for name in FINDING_DEFINITIONS:
+        values = [s[name] for s in samples if s.get(name) is not None]
+        if not values:
+            aggregated[name] = {"probability": None, "confidence": 0.0}
+            continue
+
+        mean = sum(values) / len(values)
+        if len(values) > 1:
+            variance = sum((v - mean) ** 2 for v in values) / len(values)
+            spread = variance ** 0.5
+        else:
+            spread = 0.0
+        aggregated[name] = {
+            "probability": mean,
+            # Full weight at perfect agreement, falling as the samples diverge.
+            "confidence": max(0.0, 1.0 - 2.0 * spread),
+        }
+    return aggregated
