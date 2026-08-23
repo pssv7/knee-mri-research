@@ -2083,15 +2083,30 @@ series_meta = pd.read_csv(find_competition_file("train_series.csv"))
 train_csv = pd.read_csv(find_competition_file("train.csv"))
 gold = train_csv[train_csv["ACL"].notna()].reset_index(drop=True)
 
-cache_path = find_inputs("cache_train_series_*.npy")[0]
-manifest_path = cache_path.replace("cache_", "manifest_").replace(".npy", ".parquet")
-if not os.path.exists(manifest_path):
-    manifest_path = find_inputs("manifest_train_series_*.parquet")[0]
+# One shard measures cost; all three train the real thing. Start with one.
+ALL_SHARDS = False
 
-manifest = pd.read_parquet(manifest_path)
-manifest["cache_path"] = cache_path
-shards = {cache_path: np.load(cache_path, mmap_mode="r")}
-print("shard:", os.path.basename(cache_path), shards[cache_path].shape)
+cache_paths = find_inputs("cache_train_series_*.npy")
+if not ALL_SHARDS:
+    cache_paths = cache_paths[:1]
+
+shards, frames = {}, []
+for cache_path in cache_paths:
+    manifest_path = cache_path.replace("cache_", "manifest_").replace(".npy", ".parquet")
+    if not os.path.exists(manifest_path):
+        stem = os.path.basename(cache_path).replace("cache_", "").replace(".npy", "")
+        hits = [m for m in find_inputs("manifest_train_series_*.parquet")
+                if os.path.basename(m).startswith(f"manifest_{stem}")]
+        if not hits:
+            continue
+        manifest_path = hits[0]
+    frame = pd.read_parquet(manifest_path)
+    frame["cache_path"] = cache_path
+    shards[cache_path] = np.load(cache_path, mmap_mode="r")
+    frames.append(frame)
+    print("shard:", os.path.basename(cache_path), shards[cache_path].shape)
+
+manifest = pd.concat(frames, ignore_index=True)
 
 folded = splits.make_folds(labels)
 splits.assert_no_gold_leakage(folded["StudyInstanceUID"], set(gold["StudyInstanceUID"]))
@@ -2176,6 +2191,32 @@ print(f"{BACKBONE}: {FEATURE_DIM} features, "
 device = "cuda"
 model = net.KneeNet(backbone, FEATURE_DIM).to(device)
 print(f"total: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
+
+
+def auc(y_true, scores):
+    y_true = np.asarray(y_true); scores = np.asarray(scores, dtype=float)
+    pos = y_true == 1
+    n_pos, n_neg = int(pos.sum()), int((~pos).sum())
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    order = np.argsort(scores, kind="mergesort")
+    ranks = np.empty(len(scores), dtype=float); ranks[order] = np.arange(1, len(scores) + 1)
+    unique, inverse, counts = np.unique(scores, return_inverse=True, return_counts=True)
+    sums = np.zeros(len(unique)); np.add.at(sums, inverse, ranks)
+    ranks = (sums / counts)[inverse]
+    return (ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+
+def predict(loader):
+    model.eval()
+    ids, probs = [], []
+    with torch.no_grad(), torch.amp.autocast("cuda"):
+        for batch in loader:
+            logits = model(batch["volumes"].to(device), batch["meta"].to(device),
+                           batch["mask"].to(device))
+            probs.append(torch.sigmoid(logits.float()).cpu().numpy())
+            ids += batch[config.ID_COL]
+    return ids, np.concatenate(probs)
 """)
 
     nb.md("""
@@ -2227,7 +2268,17 @@ for epoch in range(EPOCHS):
             scheduler.step()
 
     epoch_times.append(time.time() - start)
-    print(f"  epoch {epoch + 1}: {epoch_times[-1] / 60:.1f} min")
+
+    # Gold is 58 studies, so scoring every epoch is nearly free and shows
+    # whether the run is converging or has already peaked -- which decides
+    # whether more epochs are worth buying.
+    gold_ids, gold_probs = predict(gold_loader)
+    truth = gold.set_index("StudyInstanceUID").loc[gold_ids]
+    macro = float(np.nanmean([
+        auc(truth[name].to_numpy().astype(int), gold_probs[:, i])
+        for i, name in enumerate(config.LABELS)]))
+    print(f"  epoch {epoch + 1}: {epoch_times[-1] / 60:.1f} min  "
+          f"gold macro {macro:.3f}  (frozen grid-1 baseline 0.770)")
 
 torch.save(model.state_dict(), "/kaggle/working/convnext_fold0.pt")
 
@@ -2248,32 +2299,6 @@ number.
 """)
 
     nb.code("""
-def auc(y_true, scores):
-    y_true = np.asarray(y_true); scores = np.asarray(scores, dtype=float)
-    pos = y_true == 1
-    n_pos, n_neg = int(pos.sum()), int((~pos).sum())
-    if n_pos == 0 or n_neg == 0:
-        return float("nan")
-    order = np.argsort(scores, kind="mergesort")
-    ranks = np.empty(len(scores), dtype=float); ranks[order] = np.arange(1, len(scores) + 1)
-    unique, inverse, counts = np.unique(scores, return_inverse=True, return_counts=True)
-    sums = np.zeros(len(unique)); np.add.at(sums, inverse, ranks)
-    ranks = (sums / counts)[inverse]
-    return (ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
-
-
-def predict(loader):
-    model.eval()
-    ids, probs = [], []
-    with torch.no_grad(), torch.amp.autocast("cuda"):
-        for batch in loader:
-            logits = model(batch["volumes"].to(device), batch["meta"].to(device),
-                           batch["mask"].to(device))
-            probs.append(torch.sigmoid(logits.float()).cpu().numpy())
-            ids += batch[config.ID_COL]
-    return ids, np.concatenate(probs)
-
-
 gold_ids, gold_probs = predict(gold_loader)
 truth = gold.set_index("StudyInstanceUID").loc[gold_ids]
 
