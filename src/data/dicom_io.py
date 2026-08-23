@@ -219,3 +219,63 @@ def load_series_volume(paths: Sequence[str]) -> np.ndarray:
 def series_paths(series_dir) -> List[str]:
     """All DICOM files under one series directory."""
     return sorted(str(p) for p in Path(series_dir).glob("*.dcm"))
+
+
+def resolve_study_laterality(series_sides: dict) -> dict:
+    """Fill in unknown series sides from other series in the same study.
+
+    A knee MRI study images one knee, so a side established on any series
+    applies to all of them. This matters because the DICOM side tags are
+    populated inconsistently across the contributing institutions -- a study
+    can carry the tag on its coronal series and omit it on the sagittals.
+
+    Report text is deliberately not used as a source here. Reports exist only
+    for training studies, so recovering a side from them would mirror the
+    training volumes and leave the test volumes untouched -- a train/test skew
+    that is worse than the missing side it fixes.
+
+    Args:
+        series_sides: {study_uid: {series_uid: "L" | "R" | None}}
+
+    Returns:
+        The same structure with unknown entries filled where the study allows.
+        Studies whose series disagree are left untouched, since a conflict
+        means the assumption of one knee per study does not hold there.
+    """
+    resolved = {}
+    for study_uid, series in series_sides.items():
+        known = {side for side in series.values() if side in ("L", "R")}
+
+        if len(known) == 1:
+            side = known.pop()
+            resolved[study_uid] = {uid: side for uid in series}
+        else:
+            # No evidence, or contradictory evidence. Guessing would silently
+            # swap the medial and lateral labels on four of twelve findings.
+            resolved[study_uid] = dict(series)
+
+    return resolved
+
+
+def laterality_coverage(series_sides: dict) -> dict:
+    """Counts before and after study-level propagation, for auditing."""
+    before = sum(1 for s in series_sides.values() for v in s.values()
+                 if v in ("L", "R"))
+    total = sum(len(s) for s in series_sides.values())
+
+    filled = resolve_study_laterality(series_sides)
+    after = sum(1 for s in filled.values() for v in s.values()
+                if v in ("L", "R"))
+
+    conflicts = sum(
+        1 for s in series_sides.values()
+        if len({v for v in s.values() if v in ("L", "R")}) > 1
+    )
+
+    return {
+        "total_series": total,
+        "known_before": before,
+        "known_after": after,
+        "recovered": after - before,
+        "conflicting_studies": conflicts,
+    }

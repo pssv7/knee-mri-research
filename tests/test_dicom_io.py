@@ -188,3 +188,42 @@ class TestRealSeries:
         assert volume.shape[0] == len(ordered)
         assert volume.ndim == 3
         assert volume.std() > 0
+
+
+class TestStudyLateralityPropagation:
+    def test_fills_unknown_series_from_a_tagged_sibling(self):
+        # One study is one knee, so a side found anywhere settles all of it.
+        sides = {"study": {"a": "R", "b": None, "c": None}}
+        filled = dio.resolve_study_laterality(sides)
+        assert filled["study"] == {"a": "R", "b": "R", "c": "R"}
+
+    def test_leaves_a_study_with_no_evidence_alone(self):
+        sides = {"study": {"a": None, "b": None}}
+        assert dio.resolve_study_laterality(sides)["study"] == {"a": None, "b": None}
+
+    def test_conflicting_sides_are_not_resolved(self):
+        # Contradiction means the one-knee-per-study assumption fails here;
+        # guessing would swap medial and lateral on four of twelve labels.
+        sides = {"study": {"a": "L", "b": "R", "c": None}}
+        filled = dio.resolve_study_laterality(sides)
+        assert filled["study"]["c"] is None
+        assert filled["study"]["a"] == "L"
+
+    def test_studies_are_independent(self):
+        sides = {"one": {"a": "L", "b": None}, "two": {"c": "R", "d": None}}
+        filled = dio.resolve_study_laterality(sides)
+        assert filled["one"]["b"] == "L"
+        assert filled["two"]["d"] == "R"
+
+    def test_coverage_counts(self):
+        sides = {
+            "a": {"a1": "L", "a2": None, "a3": None},
+            "b": {"b1": None, "b2": None},
+            "c": {"c1": "L", "c2": "R"},
+        }
+        stats = dio.laterality_coverage(sides)
+        assert stats["total_series"] == 7
+        assert stats["known_before"] == 3
+        assert stats["known_after"] == 5
+        assert stats["recovered"] == 2
+        assert stats["conflicting_studies"] == 1
