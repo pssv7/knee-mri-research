@@ -2590,18 +2590,30 @@ encoder = embed.build_encoder(pretrained=False,
                               checkpoint_path=find_one("dinov2_s_reg4.pt")).to(device)
 
 frozen_models = []
+widths = set()
 for path in find_inputs("knee_fold*.pt"):
     state = torch.load(path, map_location="cpu")
     input_dim = (state["project.weight"].shape[1]
                  if "project.weight" in state else embed.EMBED_DIM)
     feature_dim = state["head.2.weight"].shape[1]
+    widths.add(input_dim)
     model = net.KneeNet(None, feature_dim, input_dim=input_dim).to(device)
     model.load_state_dict(state)
     model.eval()
     frozen_models.append(model)
 
-embed.POOL_GRID = 1 if input_dim == embed.TOKEN_DIM * 2 else int(
-    round(((input_dim / embed.TOKEN_DIM) - 1) ** 0.5))
+if len(widths) > 1:
+    # Checkpoints from two pooling grids are attached. Test slices are embedded
+    # once, at one grid, so half these models would silently receive features
+    # they were never trained on -- and produce plausible-looking noise.
+    raise SystemExit(
+        f"frozen checkpoints expect different input widths: {sorted(widths)}.\\n"
+        "Attach one training run's output, not both.")
+
+if widths:
+    input_dim = widths.pop()
+    embed.POOL_GRID = 1 if input_dim == embed.TOKEN_DIM * 2 else int(
+        round(((input_dim / embed.TOKEN_DIM) - 1) ** 0.5))
 
 # --- fine-tuned path -----------------------------------------------------
 tuned_models = []
