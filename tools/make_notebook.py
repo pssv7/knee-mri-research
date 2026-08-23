@@ -902,13 +902,30 @@ Attach all three `knee-cache-224-*` outputs. The manifests carry
 
     nb.code("""
 import glob
+import os
+
 import numpy as np
 import pandas as pd
 
-cache_files = sorted(glob.glob("/kaggle/input/*/cache_train_series_*.npy")
-                     + glob.glob("/kaggle/input/*/*/cache_train_series_*.npy"))
-manifest_files = sorted(glob.glob("/kaggle/input/*/manifest_train_series_*.parquet")
-                        + glob.glob("/kaggle/input/*/*/manifest_train_series_*.parquet"))
+
+def find_inputs(pattern):
+    """Search attached inputs at any depth.
+
+    A dataset mounts at /kaggle/input/<name>/ but an attached notebook output
+    nests under /kaggle/input/notebooks/<user>/<notebook>/, so a fixed depth
+    misses one of them. The competition directory is skipped: it holds ~820,000
+    DICOM files and is never where these live.
+    """
+    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    return found
+
+
+cache_files = find_inputs("cache_train_series_*.npy")
+manifest_files = find_inputs("manifest_train_series_*.parquet")
 
 print("caches:")
 for f in cache_files:
