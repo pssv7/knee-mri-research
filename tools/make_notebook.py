@@ -1460,10 +1460,19 @@ shards = {}
 manifests = []
 for manifest_path in manifest_files:
     stem = os.path.basename(manifest_path).replace("manifest_", "").replace(".parquet", "")
-    matching = [f for f in embedding_files if f.endswith(f"embeddings_{stem}.npy")]
+    # Prefix match, not exact: a pooling grid appends a suffix
+    # (embeddings_train_series_00_g4.npy), and an exact match would skip every
+    # shard and train on nothing.
+    matching = [f for f in embedding_files
+                if os.path.basename(f).startswith(f"embeddings_{stem}")]
     if not matching:
         print("no embeddings for", stem, "-- skipping")
         continue
+    if len(matching) > 1:
+        raise SystemExit(
+            f"{len(matching)} embedding files match {stem}:\\n  "
+            + "\\n  ".join(matching)
+            + "\\nAttach one variant at a time so the run is unambiguous.")
     frame = pd.read_parquet(manifest_path)
     frame["cache_path"] = matching[0]
     shards[matching[0]] = np.load(matching[0], mmap_mode="r")
