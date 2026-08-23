@@ -163,9 +163,14 @@ def resolve_laterality(headers: Sequence[dict]) -> Optional[str]:
         for field in ("ImageLaterality", "Laterality"):
             value = header.get(field)
             if isinstance(value, str):
+                # The tag holds "L"/"R" but also "LEFT"/"RIGHT", and is far more
+                # often present-but-empty than absent. An empty string is not a
+                # side and must not be read as one.
                 token = value.strip().upper()
-                if token in ("L", "R"):
-                    return token
+                if token in ("L", "LEFT"):
+                    return "L"
+                if token in ("R", "RIGHT"):
+                    return "R"
 
     for field in ("SeriesDescription", "ProtocolName", "BodyPartExamined"):
         for header in headers:

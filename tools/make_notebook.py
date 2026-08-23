@@ -393,6 +393,30 @@ sequentially from the pack.
     nb.code("""
 manifest = pd.DataFrame(records)
 
+# Study-level propagation: one study is one knee, and the side tag is populated
+# inconsistently within a study. Shards are assigned by study hash, so every
+# series of a study is in this shard and propagation is complete here.
+#
+# This runs on the manifest rather than during the build because mirroring is
+# applied at load time, not baked into the volumes -- so side detection can
+# improve later without rebuilding 30 GB.
+sides = {
+    study: dict(zip(group["SeriesInstanceUID"], group["laterality"]))
+    for study, group in manifest.groupby("StudyInstanceUID")
+}
+before = dicom_io.laterality_coverage(sides)
+filled = dicom_io.resolve_study_laterality(sides)
+lookup = {s: side for study in filled.values() for s, side in study.items()}
+manifest["laterality_resolved"] = manifest["SeriesInstanceUID"].map(lookup)
+
+print("laterality coverage")
+print(f"  from tags alone : {before['known_before']}/{before['total_series']} "
+      f"({before['known_before'] / before['total_series']:.1%})")
+print(f"  after propagation: {before['known_after']}/{before['total_series']} "
+      f"({before['known_after'] / before['total_series']:.1%})")
+print(f"  recovered        : {before['recovered']} series")
+print(f"  conflicting studies (left unresolved): {before['conflicting_studies']}")
+
 volumes_path = f"{OUT_DIR}/cache_{SPLIT}_{SHARD:02d}.npy"
 manifest_path = f"{OUT_DIR}/manifest_{SPLIT}_{SHARD:02d}.parquet"
 
@@ -409,10 +433,11 @@ if "error" in manifest.columns:
         print(f"\\n{len(failed)} failures:")
         print(failed["error"].value_counts().head().to_string())
 
-if "laterality" in manifest.columns:
-    print("\\nlaterality:")
-    print(manifest["laterality"].value_counts(dropna=False).to_string())
-    print(f"mirrored: {manifest['mirrored'].sum()} series")
+if "laterality_resolved" in manifest.columns:
+    print("\\nresolved side:")
+    print(manifest["laterality_resolved"].value_counts(dropna=False).to_string())
+    print("\\nVolumes are stored as acquired. The loader mirrors using this "
+          "column, so improving side detection does not require a rebuild.")
 """)
 
     nb.md("""

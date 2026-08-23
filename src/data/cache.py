@@ -102,16 +102,20 @@ def build_series_volume(headers: Sequence[dict]) -> Dict:
     raw = dicom_io.load_series_volume([h["path"] for h in selected])
     resized = resize_volume(raw.astype(np.float32))
     normalized = normalize_intensity(resized)
-    canonical = canonicalize_side(normalized, side)
+
+    # Left as acquired by default; the loader mirrors using the recorded side.
+    # See config.MIRROR_IN_CACHE for why this is not baked in here.
+    volume = canonicalize_side(normalized, side) if config.MIRROR_IN_CACHE else normalized
 
     first = ordered[0]
     return {
-        "volume": canonical,
+        "volume": volume,
         "StudyInstanceUID": first.get("StudyInstanceUID"),
         "SeriesInstanceUID": first.get("SeriesInstanceUID"),
         "n_slices_raw": len(ordered),
         "laterality": side,
-        "mirrored": bool(side is not None and side.upper() != config.CANONICAL_SIDE),
+        "mirrored": bool(config.MIRROR_IN_CACHE and side is not None
+                         and side.upper() != config.CANONICAL_SIDE),
         "geometry_ok": geometry_ok,
         "rows": int(first.get("Rows") or 0),
         "cols": int(first.get("Columns") or 0),

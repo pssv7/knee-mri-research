@@ -57,6 +57,18 @@ CLIP_PCT_HIGH = 99.0
 # medial compartment always falls on the same side of the image.
 CANONICAL_SIDE = "R"
 
+# Mirroring is applied at load time, not baked into the cache.
+#
+# The side tag is blank on most series in this dataset and the series
+# descriptions are anonymised, so roughly 42% of series have no recoverable
+# side from metadata alone. Freezing a mirror decision into 30 GB of cache
+# would mean rebuilding all of it every time side detection improves -- and it
+# is expected to improve, via study-level propagation and then a classifier
+# trained on the series whose side is known. The cache therefore stores volumes
+# in their acquired orientation with the side recorded alongside, and the data
+# loader flips on read, which costs nothing.
+MIRROR_IN_CACHE = False
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------

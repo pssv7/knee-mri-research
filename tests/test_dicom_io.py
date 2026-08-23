@@ -227,3 +227,27 @@ class TestStudyLateralityPropagation:
         assert stats["known_after"] == 5
         assert stats["recovered"] == 2
         assert stats["conflicting_studies"] == 1
+
+
+class TestLateralityTagValues:
+    def test_full_words_are_accepted(self):
+        # The dataset carries LEFT/RIGHT alongside L/R; rejecting the long
+        # form discards real side information.
+        assert dio.resolve_laterality([{"Laterality": "RIGHT"}]) == "R"
+        assert dio.resolve_laterality([{"Laterality": "left"}]) == "L"
+
+    def test_empty_tag_is_not_a_side(self):
+        # Present-but-empty is the most common state of this tag in the
+        # dataset -- roughly 50,000 rows in one shard alone.
+        assert dio.resolve_laterality([{"Laterality": ""}]) is None
+        assert dio.resolve_laterality([{"Laterality": "   "}]) is None
+
+    def test_first_populated_tag_wins_over_blanks(self):
+        headers = [{"Laterality": ""}, {"Laterality": ""}, {"Laterality": "L"}]
+        assert dio.resolve_laterality(headers) == "L"
+
+    def test_anonymised_description_yields_nothing(self):
+        # Descriptions in this dataset are scrubbed, so text parsing cannot
+        # rescue a missing tag.
+        assert dio.resolve_laterality([{"SeriesDescription": "DummySeriesDesc!"}]) is None
+        assert dio.resolve_laterality([{"SeriesDescription": "Sag PD FSE FS"}]) is None
