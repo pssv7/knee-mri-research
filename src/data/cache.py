@@ -69,12 +69,52 @@ def select_slices(count: int, target: int = None) -> List[int]:
     return [int(round(p)) for p in positions]
 
 
-def canonicalize_side(volume: np.ndarray, side: Optional[str]) -> np.ndarray:
+def mirror_axis(orientation: Optional[Sequence[float]]) -> int:
+    """Which array axis runs medial-to-lateral, from the scanner geometry.
+
+    Mirroring a knee means reflecting through the patient's left-right axis,
+    and which array axis that corresponds to depends on the acquisition plane:
+
+        coronal / axial   left-right lies in-plane  -> flip columns (axis 2)
+        sagittal          left-right is the slice axis -> reverse slices (axis 0)
+
+    A blanket column flip is wrong for sagittal series. It leaves medial and
+    lateral exactly where they were -- they are separated across slices, not
+    across the image -- and instead reflects anterior-posterior, moving the
+    patella to the back of the knee.
+
+    Returns 0, 1, or 2: the axis of a (slices, rows, cols) volume to reverse.
+    """
+    left_right = np.array([1.0, 0.0, 0.0])
+
+    if orientation is None or len(orientation) != 6:
+        # No geometry to reason from. Columns is the common case (coronal and
+        # axial together outnumber sagittal), but the caller should prefer not
+        # to mirror at all when geometry is missing.
+        return 2
+
+    width = np.asarray(orientation[:3], dtype=float)    # increasing column index
+    height = np.asarray(orientation[3:], dtype=float)   # increasing row index
+    normal = dicom_io.slice_normal(orientation)
+
+    alignments = [
+        (abs(float(normal @ left_right)), 0),
+        (abs(float(height @ left_right)), 1),
+        (abs(float(width @ left_right)), 2),
+    ]
+    return max(alignments)[1]
+
+
+def canonicalize_side(volume: np.ndarray, side: Optional[str],
+                      orientation: Optional[Sequence[float]] = None) -> np.ndarray:
     """Mirror left knees so the medial compartment is always on one side.
 
     Four labels are compartment-specific (Medial/Lateral Meniscus, Medial/
     Lateral OA). Without this the model would have to infer the side before it
     could place a finding, from a cue that is not reliably in the image.
+
+    The axis reflected is chosen from the acquisition geometry -- see
+    mirror_axis -- because it differs between sagittal and coronal series.
     """
     if side is None:
         # Unknown side: leave untouched and let the caller decide. Guessing
@@ -82,7 +122,9 @@ def canonicalize_side(volume: np.ndarray, side: Optional[str]) -> np.ndarray:
         return volume
     if side.upper() == config.CANONICAL_SIDE:
         return volume
-    return volume[:, :, ::-1].copy()
+
+    axis = mirror_axis(orientation)
+    return np.flip(volume, axis=axis).copy()
 
 
 def build_series_volume(headers: Sequence[dict]) -> Dict:
@@ -96,6 +138,7 @@ def build_series_volume(headers: Sequence[dict]) -> Dict:
         raise ValueError("no headers supplied")
 
     ordered = dicom_io.sort_slices(headers)
+    first_header = ordered[0]
     side = dicom_io.resolve_laterality(ordered)
     geometry_ok = dicom_io.has_geometry(ordered)
 
@@ -108,7 +151,9 @@ def build_series_volume(headers: Sequence[dict]) -> Dict:
 
     # Left as acquired by default; the loader mirrors using the recorded side.
     # See config.MIRROR_IN_CACHE for why this is not baked in here.
-    volume = canonicalize_side(normalized, side) if config.MIRROR_IN_CACHE else normalized
+    volume = (canonicalize_side(normalized, side,
+                                first_header.get("ImageOrientationPatient"))
+              if config.MIRROR_IN_CACHE else normalized)
 
     first = ordered[0]
     return {

@@ -198,10 +198,19 @@ def load_series_volume(paths: Sequence[str]) -> np.ndarray:
     """
     slices = []
     reference_shape = None
+    skipped = 0
 
     for path in paths:
-        ds = pydicom.dcmread(str(path), force=True)
-        pixels = ds.pixel_array.astype(np.float32)
+        try:
+            ds = pydicom.dcmread(str(path), force=True)
+            pixels = ds.pixel_array.astype(np.float32)
+        except Exception:  # noqa: BLE001
+            # A truncated or malformed file loses one slice, not the series.
+            # The dataset contains files whose declared pixel length exceeds
+            # what is actually stored, and dropping 23 good slices over one
+            # bad one costs a whole study its imaging.
+            skipped += 1
+            continue
 
         slope = float(getattr(ds, "RescaleSlope", 1.0) or 1.0)
         intercept = float(getattr(ds, "RescaleIntercept", 0.0) or 0.0)
@@ -211,12 +220,13 @@ def load_series_volume(paths: Sequence[str]) -> np.ndarray:
         if reference_shape is None:
             reference_shape = pixels.shape
         elif pixels.shape != reference_shape:
+            skipped += 1
             continue
 
         slices.append(pixels)
 
     if not slices:
-        raise ValueError("no decodable slices in series")
+        raise ValueError(f"no decodable slices in series ({skipped} unreadable)")
 
     return np.stack(slices, axis=0)
 

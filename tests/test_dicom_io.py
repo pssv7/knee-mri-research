@@ -251,3 +251,25 @@ class TestLateralityTagValues:
         # rescue a missing tag.
         assert dio.resolve_laterality([{"SeriesDescription": "DummySeriesDesc!"}]) is None
         assert dio.resolve_laterality([{"SeriesDescription": "Sag PD FSE FS"}]) is None
+
+
+class TestCorruptSliceTolerance:
+    def test_one_unreadable_slice_does_not_lose_the_series(self, tmp_path):
+        # The dataset contains truncated files whose declared pixel length
+        # exceeds what is stored. Losing 23 good slices over one bad one
+        # costs a study its imaging for no reason.
+        good = DEV_SERIES[:4] if len(DEV_SERIES) >= 4 else []
+        if not good:
+            pytest.skip("no dev series downloaded")
+
+        broken = tmp_path / "truncated.dcm"
+        broken.write_bytes(open(good[0], "rb").read()[: 1024])
+
+        volume = dio.load_series_volume(list(good) + [str(broken)])
+        assert volume.shape[0] == len(good)
+
+    def test_all_slices_unreadable_still_raises(self, tmp_path):
+        broken = tmp_path / "junk.dcm"
+        broken.write_bytes(b"not a dicom file at all")
+        with pytest.raises(ValueError, match="no decodable slices"):
+            dio.load_series_volume([str(broken)])
