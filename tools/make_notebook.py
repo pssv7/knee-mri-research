@@ -2053,8 +2053,11 @@ Replace the notebook slugs with yours if they differ.
 
     nb.code("""
 USER = "pssv27"
-CACHE_NOTEBOOK = f"{USER}/knee-cache-224-01_shard-1"
-SIDE_NOTEBOOK = f"{USER}/knee_side_classifier"
+# Slugs, not titles. Kaggle lowercases the title and turns non-alphanumerics
+# into hyphens, so "knee-cache-224-01_shard-1" is stored as
+# "knee-cache-224-01-shard-1". Confirm with the listing printed above.
+CACHE_NOTEBOOK = f"{USER}/knee-cache-224-01-shard-1"
+SIDE_NOTEBOOK = f"{USER}/knee-side-classifier"
 COMPETITION = "rsna-knee-abnormality-detection"
 
 # Your notebook slugs, exactly as Kaggle stores them. Kaggle derives a slug
