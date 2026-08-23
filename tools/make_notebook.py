@@ -2057,13 +2057,31 @@ CACHE_NOTEBOOK = f"{USER}/knee-cache-224-01_shard-1"
 SIDE_NOTEBOOK = f"{USER}/knee_side_classifier"
 COMPETITION = "rsna-knee-abnormality-detection"
 
+# Your notebook slugs, exactly as Kaggle stores them. Kaggle derives a slug
+# from the title by lowercasing and replacing non-alphanumerics with hyphens,
+# so an underscore in the title is a hyphen in the slug.
+print("your notebooks:")
+subprocess.run(["kaggle", "kernels", "list", "--mine"])
+
+
 def fetch(slug, path):
     path = pathlib.Path(path)
     if path.exists() and any(path.iterdir()):
         print("already present:", path)
         return
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["kaggle", "kernels", "output", slug, "-p", str(path)], check=True)
+
+    result = subprocess.run(["kaggle", "kernels", "output", slug, "-p", str(path)],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        # Surface the real message. check=True raises CalledProcessError with
+        # the output discarded, which says only that something failed.
+        raise SystemExit(
+            f"failed to fetch {slug}\\n"
+            f"stdout: {result.stdout.strip()}\\n"
+            f"stderr: {result.stderr.strip()}\\n"
+            "Check the slug against the listing above.")
+    print(result.stdout.strip()[-300:])
 
 fetch(CACHE_NOTEBOOK, "data/cache")
 fetch(SIDE_NOTEBOOK, "data/side")
