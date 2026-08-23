@@ -311,6 +311,25 @@ if INDEX_PATH is None:
 OUT_DIR = "/kaggle/working"
 print(f"shard {SHARD + 1} of {N_SHARDS}  split={SPLIT}")
 print(f"index: {INDEX_PATH}")
+
+# Check the disk before the build, not after. /kaggle/working caps at 20 GB and
+# a shard is ~9.7 GB, so a previous shard left in place makes the save fail --
+# after the fifteen minutes of work, with the array stranded in memory.
+import glob
+import shutil
+
+free_gb = shutil.disk_usage(OUT_DIR).free / 1e9
+stale = sorted(glob.glob(f"{OUT_DIR}/cache_*.npy"))
+print(f"free space: {free_gb:.1f} GB")
+for path in stale:
+    print(f"  existing shard: {path}  {os.path.getsize(path) / 1e9:.1f} GB")
+
+if free_gb < 11.0:
+    raise SystemExit(
+        f"Only {free_gb:.1f} GB free; a shard needs ~10 GB plus headroom.\\n"
+        "Publish the previous shard as a dataset, then remove its .npy from "
+        f"{OUT_DIR}. Keep the index parquet -- it is small and needed here."
+    )
 """)
 
     nb.md("""
