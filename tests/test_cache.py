@@ -82,3 +82,30 @@ class TestCanonicalizeSide:
         # fail or silently copy downstream in torch.
         out = cache.canonicalize_side(self.volume(), "L", SAGITTAL)
         assert out.flags["C_CONTIGUOUS"]
+
+
+class TestFixedOutputDepth:
+    """The cache is a fixed-shape array, so every volume must be exactly
+    CACHE_SLICES deep. A series that loses slices to corrupt files still has
+    to fit, or the assignment into the pack raises mid-run.
+    """
+
+    def test_select_slices_always_returns_the_target_count(self):
+        for count in (1, 2, 5, 23, 24, 25, 40, 300):
+            assert len(cache.select_slices(count)) == config.CACHE_SLICES
+
+    def test_short_series_are_padded_by_repetition(self):
+        # Repeat edge slices rather than zero-pad, so the volume stays
+        # anatomically continuous.
+        indices = cache.select_slices(5)
+        assert len(indices) == config.CACHE_SLICES
+        assert min(indices) == 0 and max(indices) == 4
+
+    def test_empty_series_raises(self):
+        with pytest.raises(ValueError, match="cannot select slices"):
+            cache.select_slices(0)
+
+    def test_selection_is_monotonic(self):
+        # Out-of-order indices would scramble the volume.
+        indices = cache.select_slices(50)
+        assert indices == sorted(indices)

@@ -146,6 +146,13 @@ def build_series_volume(headers: Sequence[dict]) -> Dict:
     selected = [ordered[i] for i in indices]
 
     raw = dicom_io.load_series_volume([h["path"] for h in selected])
+
+    # Slices skipped as unreadable leave the volume short of CACHE_SLICES, and
+    # the cache is a fixed-shape array. Re-select across whatever decoded so
+    # the depth is exact regardless of how many files were dropped.
+    if raw.shape[0] != config.CACHE_SLICES:
+        raw = raw[select_slices(raw.shape[0])]
+
     resized = resize_volume(raw.astype(np.float32))
     normalized = normalize_intensity(resized)
 
