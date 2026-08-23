@@ -1975,185 +1975,103 @@ def build_finetune_notebook():
     nb = Notebook(gpu=True)
 
     nb.md("""
-# 08 — Fine-Tuned Backbone (Colab)
+# 08 — Fine-Tuned Backbone
 
 Trains a ConvNeXt-T end to end instead of reading frozen DINOv2 features. Prior
 RSNA competitions were won by fine-tuned ImageNet CNNs, so this is the arm most
-likely to top the leaderboard — and the one the frozen path exists to be
+likely to top the leaderboard, and the one the frozen path exists to be
 measured against.
 
-**This run measures before it commits.** Fine-tuning here is expensive: one
-study is ~5.5 series × 24 slices ≈ 130 slice-forwards, so a full epoch over
-4,349 studies is ~570,000. The first cell after training reports actual
-throughput and projects the cost of the full sweep. Read that before launching
-five folds.
+**Runs on Kaggle, not Colab.** Fine-tuning needs raw volumes, and one cache
+shard is 9.7 GB. Pulling that to Colab failed twice at ~5.5 GB with
+IncompleteRead -- a consistent ceiling rather than a flaky connection. On
+Kaggle the cache is already mounted and nothing transfers. A T4 is slower than
+an A100, but not slower than a download that never finishes.
 
-**Subsampling is how the cost is controlled**, and both knobs are honest
-trade-offs rather than free wins:
+**Attach:** one cache dataset, `knee-labels`, `knee_side_classifier`, and the
+competition data. GPU on.
 
-    SLICES_PER_SERIES   8 of 24    the tear may fall in a dropped slice
-    MAX_SERIES          3 of ~5.5  a finding may live only in a dropped series
+**This run measures before it commits.** One study is ~5.5 series x 24 slices
+= ~130 slice-forwards, so a full epoch over 4,349 studies is ~570,000. The
+training cell reports actual throughput and projects the full sweep. Read that
+before launching five folds.
 
-**Mirroring is used here**, unlike the frozen path. Raw volumes can be
+Subsampling controls the cost, and both knobs are real trade-offs:
+
+    SLICES_PER_SERIES   8 of 24     a tear may fall in a dropped slice
+    MAX_SERIES          3 of ~5.5   a finding may live only in a dropped series
+
+**Mirroring is used here**, unlike the frozen path: raw volumes can be
 reflected, so left knees are mapped onto the canonical side along the axis the
-acquisition plane dictates. That makes this run an A/B against the frozen
-path's covariate approach as well as a backbone comparison — two variables at
-once, which is worth remembering when reading the result.
+acquisition plane dictates. That makes this a comparison of two things at once,
+backbone and laterality handling, which is worth remembering when reading the
+result.
 """)
 
-    nb.md("""
-## 1. Setup
-
-Colab, A100 recommended. The cache is pulled from your Kaggle notebook outputs,
-so an API token is needed.
-""")
+    nb.md("## 1. Setup")
 
     nb.code("""
-# --upgrade matters: Colab preinstalls kaggle 2.0.2 and pip otherwise reports
-# the requirement already satisfied, leaving the old client in place.
-!pip install -q --upgrade timm kaggle
+!pip install -q timm
 
-import os, pathlib, subprocess, torch
+import os
+import torch
+
 print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NONE")
 if not torch.cuda.is_available():
-    raise SystemExit("Runtime -> Change runtime type -> A100 GPU")
+    raise SystemExit("Settings -> Accelerator -> GPU T4 x2")
 """)
 
-    nb.md("""
-## 2. Kaggle credentials
-
-Upload `~/.kaggle/access_token` (or `kaggle.json`) from the machine where the
-Kaggle CLI already works. Nothing is printed.
-""")
-
-    nb.code("""
-from google.colab import files
-
-target = pathlib.Path.home() / ".kaggle"
-target.mkdir(exist_ok=True)
-
-if not (target / "access_token").exists() and not (target / "kaggle.json").exists():
-    print("Select access_token or kaggle.json ...")
-    uploaded = files.upload()
-    for name, content in uploaded.items():
-        destination = target / ("kaggle.json" if name.endswith(".json") else "access_token")
-        destination.write_bytes(content)
-        destination.chmod(0o600)
-
-print("credentials:", sorted(p.name for p in target.iterdir()))
-""")
-
-    nb.md("""
-## 3. Pull the data
-
-One cache shard only — roughly 1,460 studies, which is plenty to measure
-throughput and get a first fold. Downloading all three would cost 29 GB before
-a single step of training.
-
-Replace the notebook slugs with yours if they differ.
-""")
-
-    nb.code("""
-USER = "pssv27"
-# Slugs, not titles. Kaggle lowercases the title and turns non-alphanumerics
-# into hyphens, so "knee-cache-224-01_shard-1" is stored as
-# "knee-cache-224-01-shard-1". Confirm with the listing printed above.
-CACHE_NOTEBOOK = f"{USER}/knee-cache-224-01-shard-1"
-SIDE_NOTEBOOK = f"{USER}/knee-side-classifier"
-COMPETITION = "rsna-knee-abnormality-detection"
-
-# Your notebook slugs, exactly as Kaggle stores them. Kaggle derives a slug
-# from the title by lowercasing and replacing non-alphanumerics with hyphens,
-# so an underscore in the title is a hyphen in the slug.
-print("your notebooks:")
-subprocess.run(["kaggle", "kernels", "list", "--mine"])
-
-
-def fetch(slug, path, attempts=4):
-    # Download a notebook's output, retrying on a broken connection. A ~10 GB
-    # single-stream download fails often enough that one attempt is not a
-    # reasonable design. IncompleteRead leaves a partial file behind, so the
-    # directory is cleared before each retry rather than resumed: the client
-    # has no resume support, and a truncated .npy would load as silently
-    # corrupt data rather than failing.
-    import shutil
-    import time as _time
-
-    path = pathlib.Path(path)
-    if path.exists() and any(f.suffix == ".npy" for f in path.iterdir()):
-        print("already present:", path)
-        return
-
-    for attempt in range(1, attempts + 1):
-        if path.exists():
-            shutil.rmtree(path)
-        path.mkdir(parents=True, exist_ok=True)
-
-        print(f"fetching {slug} (attempt {attempt}/{attempts})")
-        result = subprocess.run(["kaggle", "kernels", "output", slug, "-p", str(path)],
-                                capture_output=True, text=True)
-        message = (result.stdout + result.stderr).strip()
-
-        if result.returncode == 0 and not "IncompleteRead" in message:
-            print(message[-300:])
-            return
-
-        print(f"  failed: {message.strip()[-200:]}")
-        if attempt < attempts:
-            _time.sleep(10)
-
-    raise SystemExit(
-        f"could not fetch {slug} after {attempts} attempts.\\n"
-        "If the connection keeps breaking, publish the shard as a Kaggle "
-        "dataset and use `kaggle datasets download -d <slug> --unzip`, which "
-        "transfers a single zip rather than many files.")
-
-fetch(CACHE_NOTEBOOK, "data/cache")
-fetch(SIDE_NOTEBOOK, "data/side")
-
-for name in ("train.csv", "train_series.csv"):
-    if not pathlib.Path(f"data/{name}").exists():
-        subprocess.run(["kaggle", "competitions", "download", COMPETITION,
-                        "-f", name, "-p", "data", "-q"], check=True)
-
-print(sorted(os.listdir("data/cache")))
-""")
-
-    nb.md("""
-## 4. Repo modules
-
-Generated from `src/` — edit the modules and regenerate rather than editing
-here, or this notebook and the repo will disagree about preprocessing.
-""")
-
+    nb.md("## 2. Repo modules")
     nb.code(bootstrap_cell(MODEL_MODULES, require_raw_dicom=False))
 
-    nb.md("## 5. Assemble")
+    nb.md("""
+## 3. Assemble
+
+One shard only. ~1,460 studies is enough to measure throughput and train a
+first fold, and loading all three would cost memory without changing what this
+run establishes.
+""")
 
     nb.code("""
 import glob
+
 import numpy as np
 import pandas as pd
 
-# train_labels.parquet is built locally by src/labels/fuse.py -- upload it if
-# this cell cannot find it.
-label_paths = glob.glob("data/**/train_labels.parquet", recursive=True)
-if not label_paths:
-    print("Select train_labels.parquet ...")
-    uploaded = files.upload()
-    label_paths = [list(uploaded.keys())[0]]
 
-labels = pd.read_parquet(label_paths[0])
-sides = pd.read_parquet(glob.glob("data/**/side_predictions.parquet", recursive=True)[0])
-series_meta = pd.read_csv("data/train_series.csv")
-train_csv = pd.read_csv("data/train.csv")
+def find_inputs(pattern):
+    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    return found
+
+
+def find_competition_file(name):
+    for candidate in (f"/kaggle/input/competitions/*/{name}",
+                      f"/kaggle/input/*/{name}"):
+        hits = sorted(glob.glob(candidate))
+        if hits:
+            return hits[0]
+    raise SystemExit(f"missing competition file: {name}")
+
+
+labels = pd.read_parquet(find_inputs("train_labels.parquet")[0])
+sides = pd.read_parquet(find_inputs("side_predictions.parquet")[0])
+series_meta = pd.read_csv(find_competition_file("train_series.csv"))
+train_csv = pd.read_csv(find_competition_file("train.csv"))
 gold = train_csv[train_csv["ACL"].notna()].reset_index(drop=True)
 
-cache_path = glob.glob("data/cache/cache_train_series_*.npy")[0]
-manifest = pd.read_parquet(glob.glob("data/cache/manifest_train_series_*.parquet")[0])
+cache_path = find_inputs("cache_train_series_*.npy")[0]
+manifest_path = cache_path.replace("cache_", "manifest_").replace(".npy", ".parquet")
+if not os.path.exists(manifest_path):
+    manifest_path = find_inputs("manifest_train_series_*.parquet")[0]
+
+manifest = pd.read_parquet(manifest_path)
 manifest["cache_path"] = cache_path
 shards = {cache_path: np.load(cache_path, mmap_mode="r")}
-print("volumes:", shards[cache_path].shape)
+print("shard:", os.path.basename(cache_path), shards[cache_path].shape)
 
 folded = splits.make_folds(labels)
 splits.assert_no_gold_leakage(folded["StudyInstanceUID"], set(gold["StudyInstanceUID"]))
@@ -2168,7 +2086,7 @@ print(f"studies in this shard: {len(index)}  gold present: {len(gold_index)}")
 """)
 
     nb.md("""
-## 6. Dataset
+## 4. Dataset
 
 Slices are subsampled evenly rather than at random, so a validation score is
 reproducible. Horizontal flips are **not** used as augmentation: after
@@ -2177,7 +2095,6 @@ silently corrupting four of the twelve labels.
 """)
 
     nb.code("""
-import torch
 from torch.utils.data import DataLoader, Dataset
 
 SLICES_PER_SERIES = 8
@@ -2201,7 +2118,7 @@ class StudyVolumeDataset(Dataset):
         item["volumes"] = item["volumes"][:, self.keep]
 
         if self.augment:
-            # Intensity jitter only. Geometric flips would swap medial and
+            # Intensity jitter only. A geometric flip would swap medial and
             # lateral; rotation is safe but left out of this first measurement.
             scale = np.random.uniform(0.9, 1.1)
             item["volumes"] = np.clip(
@@ -2217,7 +2134,7 @@ def make_loader(study_index, studies, shuffle=False, augment=False):
 """)
 
     nb.md("""
-## 7. Model
+## 5. Model
 
 ConvNeXt-T with ImageNet weights, which the competition permits. The
 aggregation above it is the same `KneeNet` the frozen path uses, so the
@@ -2239,7 +2156,7 @@ print(f"total: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
 """)
 
     nb.md("""
-## 8. Train one fold, and measure
+## 6. Train one fold, and measure
 
 The projection printed at the end is the point of this run. Do not launch five
 folds before reading it.
@@ -2247,6 +2164,7 @@ folds before reading it.
 
     nb.code("""
 import time
+
 from tqdm.auto import tqdm
 
 EPOCHS = 4
@@ -2256,7 +2174,6 @@ keyed = folded.set_index("StudyInstanceUID")
 train_studies = [s for s in index.studies if keyed.loc[s, "fold"] != 0]
 val_studies = [s for s in index.studies if keyed.loc[s, "fold"] == 0]
 train_loader = make_loader(index, train_studies, shuffle=True, augment=True)
-val_loader = make_loader(index, val_studies)
 gold_loader = make_loader(gold_index, gold_index.studies)
 print(f"train {len(train_studies)}  val {len(val_studies)}  gold {len(gold_index)}")
 
@@ -2289,9 +2206,9 @@ for epoch in range(EPOCHS):
     epoch_times.append(time.time() - start)
     print(f"  epoch {epoch + 1}: {epoch_times[-1] / 60:.1f} min")
 
-torch.save(model.state_dict(), "convnext_fold0.pt")
+torch.save(model.state_dict(), "/kaggle/working/convnext_fold0.pt")
 
-per_epoch = np.mean(epoch_times)
+per_epoch = float(np.mean(epoch_times))
 share = len(index) / 4349
 full_epoch = per_epoch / share
 print(f"\\nthis shard is {share:.0%} of the training set")
@@ -2300,11 +2217,11 @@ print(f"projected 5 folds x {EPOCHS} epochs: {full_epoch * EPOCHS * 5 / 3600:.1f
 """)
 
     nb.md("""
-## 9. Score
+## 7. Score
 
-Against the gold studies present in this shard. There are only about a third of
-the 58 here, so the estimate is noisier than the frozen path's — treat it as a
-direction rather than a number.
+Against the gold studies present in this shard -- roughly a third of the 58, so
+this is noisier than the frozen path's estimate. Read it as a direction, not a
+number.
 """)
 
     nb.code("""
@@ -2323,7 +2240,8 @@ def auc(y_true, scores):
 
 
 def predict(loader):
-    model.eval(); ids, probs = [], []
+    model.eval()
+    ids, probs = [], []
     with torch.no_grad(), torch.amp.autocast("cuda"):
         for batch in loader:
             logits = model(batch["volumes"].to(device), batch["meta"].to(device),
@@ -2336,11 +2254,12 @@ def predict(loader):
 gold_ids, gold_probs = predict(gold_loader)
 truth = gold.set_index("StudyInstanceUID").loc[gold_ids]
 
-print(f"{'finding':18s} {'gold AUC':>9s}  {'frozen DINOv2':>13s}")
-print("-" * 44)
 FROZEN = dict(zip(config.LABELS,
                   [0.728, 0.671, 0.698, 0.680, 0.895, 0.899,
                    0.772, 0.897, 0.746, 0.862, 0.711, 0.683]))
+
+print(f"{'finding':18s} {'this run':>9s}  {'frozen DINOv2':>13s}")
+print("-" * 44)
 scores = []
 for i, name in enumerate(config.LABELS):
     value = auc(truth[name].to_numpy().astype(int), gold_probs[:, i])
@@ -2355,14 +2274,15 @@ print(f"{'macro':18s} {np.nanmean(scores):9.3f}  {np.mean(list(FROZEN.values()))
 
 Two things decide what follows.
 
-**The runtime projection.** If five folds fit comfortably, run them and compare
-against the frozen path properly. If not, the levers are `SLICES_PER_SERIES`,
-`MAX_SERIES`, fewer folds, or freezing the backbone's early stages.
+**The runtime projection.** If five folds fit in the weekly GPU quota, run them
+and compare against the frozen path properly. If not, the levers are
+`SLICES_PER_SERIES`, `MAX_SERIES`, fewer folds, or freezing the backbone's
+early stages.
 
-**The focal findings.** Fine-tuning is expected to help meniscus, ligaments,
-and fracture most — those are the ones frozen natural-image features handle
-worst. If they do not move, the limit is elsewhere: the mined labels, or the
-224px resolution relative to the size of the structures.
+**The focal findings.** Fine-tuning should help meniscus, ligaments, and
+fracture most, since those are what frozen natural-image features handle worst.
+If they do not move, the limit is elsewhere: the mined labels, or 224px
+resolution against the size of the structures.
 """)
 
     nb.write(NOTEBOOKS / "08_finetune.ipynb")
