@@ -58,8 +58,8 @@ Data. The label extractor therefore runs locally on a Colab GPU.
 | Report label mining | done — fused macro AUC **0.854** against gold |
 | Side classifier | done — **98.97%** study accuracy |
 | Frozen DINOv2 embeddings | done — 0.9 GB, 768 dims/slice |
-| Aggregation training | notebook ready, **not yet run** |
-| Submission notebook | not written |
+| Aggregation training | done — gold-58 macro **0.770** |
+| Submission | done — **public LB 0.787** |
 
 ### The numbers that matter
 
@@ -77,6 +77,40 @@ five would have been dropped from the loss entirely.
 **Side classifier:** 97.28% per series, 98.97% per study after voting. Trained
 on the 14,403 series whose DICOM tag gives a side, applied to the 9,968 that
 lack one.
+
+**First model, frozen DINOv2-S, five folds:**
+
+| | macro AUC |
+|---|---|
+| Out-of-fold, against mined labels | 0.789 |
+| **Gold 58** | **0.770** |
+| **Public leaderboard** | **0.787** |
+
+The gold estimate tracked the leaderboard within 0.017. That is the most useful
+result so far: local measurement on the held-out 58 predicts the real score, so
+development can proceed without spending submissions to learn anything.
+
+**Where the model is strong and weak** — the split is clean and actionable:
+
+| large / regional | gold | | small / focal | gold |
+|---|---|---|---|---|
+| Lateral OA | 0.899 | | ACL | 0.728 |
+| Effusion | 0.897 | | Contusion | 0.711 |
+| Medial OA | 0.895 | | Medial Meniscus | 0.698 |
+| Baker's | 0.862 | | Fracture | 0.683 |
+| PF OA | 0.772 | | Lateral Meniscus | 0.680 |
+| | | | MCL | 0.671 |
+| **mean 0.865** | | | **mean 0.695** | |
+
+A 0.17 gap along exactly the axis the embedding choice predicted: CLS plus
+mean-patch captures regional appearance and loses fine local detail. This is
+the evidence that makes the spatial-patch variant worth its storage.
+
+Two smaller observations. Synovitis scores 0.883 out-of-fold but 0.746 on gold
+-- the largest divergence of any finding, and it also had the worst mined-label
+quality, so the model learned extractor artefacts there. Conversely Medial OA,
+Lateral OA, and Effusion all score *higher* on gold than out-of-fold, meaning
+the model is denoising its own training labels. So 0.854 is not a ceiling.
 
 ---
 
