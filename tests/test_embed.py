@@ -90,3 +90,56 @@ class TestNormalisation:
         x = torch.full((1, 3, 4, 4), 128, dtype=torch.uint8)
         out = embed.normalize(x)
         assert not torch.allclose(out[0, 0], out[0, 2])
+
+
+class TestSpatialPooling:
+    """Patch tokens pooled to a grid rather than averaged flat.
+
+    The mean over 256 patches is where a focal finding disappears. What must
+    hold is that pooling respects the 2D layout -- averaging a patch with its
+    spatial neighbours, not with whatever sat beside it in a flattened
+    sequence.
+    """
+
+    def test_dimensions_follow_the_grid(self):
+        assert embed.embed_dim(1) == embed.TOKEN_DIM * 2
+        assert embed.embed_dim(2) == embed.TOKEN_DIM * 5
+        assert embed.embed_dim(4) == embed.TOKEN_DIM * 17
+
+    def test_encoder_output_matches_declared_width(self, encoder):
+        x = torch.randint(0, 255, (2, 3, embed.INPUT_SIZE, embed.INPUT_SIZE),
+                          dtype=torch.uint8)
+        for grid in (1, 2, 4):
+            out = embed.embed_slices(encoder, x, grid=grid)
+            assert out.shape == (2, embed.embed_dim(grid)), grid
+
+    def test_pooling_is_spatial_not_sequential(self):
+        # A gradient across the grid must survive pooling as a gradient.
+        # Flat-sequence pooling would scramble it.
+        side, channels = 4, 2
+        values = torch.arange(side * side, dtype=torch.float32)
+        patches = values.view(1, side * side, 1).repeat(1, 1, channels)
+        pooled = embed.pool_patches(patches, grid=2).view(2, 2, channels)
+        # Top-left quadrant averages {0,1,4,5} = 2.5; bottom-right {10,11,14,15} = 12.5
+        assert pooled[0, 0, 0].item() == pytest.approx(2.5)
+        assert pooled[1, 1, 0].item() == pytest.approx(12.5)
+
+    def test_grid_one_is_the_plain_mean(self, encoder):
+        x = torch.rand(1, 3, embed.INPUT_SIZE, embed.INPUT_SIZE)
+        out = embed.embed_slices(encoder, x, grid=1)
+        assert out.shape[-1] == embed.TOKEN_DIM * 2
+
+    def test_non_square_patch_count_falls_back(self):
+        # Rather than reshaping into the wrong grid.
+        patches = torch.rand(1, 7, 3)
+        assert embed.pool_patches(patches, grid=2).shape == (1, 3)
+
+    def test_spatial_retains_more_than_the_mean(self):
+        # Two arrangements of the same patch values: the mean cannot tell them
+        # apart, the grid must.
+        side = 4
+        a = torch.arange(side * side, dtype=torch.float32).view(1, -1, 1)
+        b = a.flip(1)
+        assert torch.allclose(a.mean(1), b.mean(1))
+        assert not torch.allclose(embed.pool_patches(a, 2),
+                                  embed.pool_patches(b, 2))

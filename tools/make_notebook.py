@@ -1279,16 +1279,26 @@ from tqdm.auto import tqdm
 
 BATCH_SLICES = 256   # slices per forward pass
 
+# 1 = CLS + mean patch (768 dims, 0.9 GB) -- the first model's setting.
+# 4 = CLS + 4x4 pooled grid (6,528 dims, 7.6 GB) -- aimed at the focal
+#     findings, which averaged 0.695 on gold against 0.865 for regional ones.
+# 2 = a middle option at 1,920 dims and 2.3 GB.
+embed.POOL_GRID = 4
+DIM = embed.embed_dim()
+print(f"pool grid {embed.POOL_GRID} -> {DIM} dims/slice "
+      f"({24371 * 24 * DIM * 2 / 1e9:.1f} GB over the dataset)")
+
 for path in cache_files:
     stem = os.path.basename(path).replace("cache_", "").replace(".npy", "")
-    out_path = f"/kaggle/working/embeddings_{stem}.npy"
+    suffix = "" if embed.POOL_GRID == 1 else f"_g{embed.POOL_GRID}"
+    out_path = f"/kaggle/working/embeddings_{stem}{suffix}.npy"
     if os.path.exists(out_path):
         print("skip (exists):", out_path)
         continue
 
     volumes = np.load(path, mmap_mode="r")
     count, depth = volumes.shape[0], volumes.shape[1]
-    output = np.zeros((count, depth, embed.EMBED_DIM), dtype=np.float16)
+    output = np.zeros((count, depth, DIM), dtype=np.float16)
 
     start = time.time()
     buffer, positions = [], []
@@ -1425,6 +1435,7 @@ def find_one(pattern):
     return hits[0]
 
 
+# Both the plain and the grid-pooled names; the newest wins if both exist.
 embedding_files = find_inputs("embeddings_train_series_*.npy")
 manifest_files = find_inputs("manifest_train_series_*.parquet")
 print("embeddings:", [os.path.basename(f) for f in embedding_files])
@@ -1530,7 +1541,13 @@ from tqdm.auto import tqdm
 
 EPOCHS = 12
 LR = 3e-4
-FEATURE_DIM = embed.EMBED_DIM
+
+# Width is read from the embeddings rather than assumed, so the same notebook
+# trains on any pooling grid. Anything wider than the stack gets projected --
+# running the aggregation at 6,528 would put ~769M parameters in it.
+INPUT_DIM = int(next(iter(shards.values())).shape[-1])
+FEATURE_DIM = 512 if INPUT_DIM > 1024 else INPUT_DIM
+print(f"embedding width {INPUT_DIM} -> stack width {FEATURE_DIM}")
 
 
 def auc(y_true, scores):
@@ -1563,7 +1580,7 @@ def predict(model, loader):
 
 def train_fold(train_studies, val_studies, seed=0):
     torch.manual_seed(seed)
-    model = net.KneeNet(None, FEATURE_DIM).to(device)
+    model = net.KneeNet(None, FEATURE_DIM, input_dim=INPUT_DIM).to(device)
     optimiser = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
     train_loader = make_loader(index, train_studies, shuffle=True)
     val_loader = make_loader(index, val_studies)
@@ -1759,9 +1776,20 @@ fold_paths = find_inputs("knee_fold*.pt")
 if not fold_paths:
     raise SystemExit("no fold checkpoints found -- publish notebook 06's output")
 
+# The checkpoint carries the widths it was trained at; reading them from the
+# state dict avoids a silent mismatch if the pooling grid changed.
+state = torch.load(fold_paths[0], map_location="cpu")
+INPUT_DIM = (state["project.weight"].shape[1]
+             if "project.weight" in state else embed.EMBED_DIM)
+FEATURE_DIM = state["head.2.weight"].shape[1]
+embed.POOL_GRID = 1 if INPUT_DIM == embed.TOKEN_DIM * 2 else int(
+    round(((INPUT_DIM / embed.TOKEN_DIM) - 1) ** 0.5))
+print(f"checkpoints: input {INPUT_DIM}, stack {FEATURE_DIM}, "
+      f"pool grid {embed.POOL_GRID}")
+
 fold_models = []
 for path in fold_paths:
-    model = net.KneeNet(None, embed.EMBED_DIM).to(device)
+    model = net.KneeNet(None, FEATURE_DIM, input_dim=INPUT_DIM).to(device)
     model.load_state_dict(torch.load(path, map_location=device))
     model.eval()
     fold_models.append(model)

@@ -99,7 +99,8 @@ class KneeNet(nn.Module):
     def __init__(self, backbone: Optional[nn.Module], feature_dim: int,
                  n_labels: int = None, series_layers: int = 2,
                  n_heads: int = 8, dropout: float = 0.2,
-                 freeze_backbone: bool = False):
+                 freeze_backbone: bool = False,
+                 input_dim: Optional[int] = None):
         super().__init__()
         # None is valid on the frozen path, where the trunk ran offline.
         self.backbone = backbone if backbone is not None else nn.Identity()
@@ -109,6 +110,13 @@ class KneeNet(nn.Module):
         if freeze_backbone:
             for parameter in self.backbone.parameters():
                 parameter.requires_grad = False
+
+        # Spatially pooled embeddings are wide (6,528 for a 4x4 grid), and
+        # running the whole stack at that width would put ~85M parameters in
+        # FiLM alone. A projection keeps the aggregation at a sane size.
+        self.project = (nn.Linear(input_dim, feature_dim)
+                        if input_dim and input_dim != feature_dim
+                        else nn.Identity())
 
         self.slice_pool = AttentionPool(feature_dim)
         self.film = FiLM(feature_dim)
@@ -161,9 +169,11 @@ class KneeNet(nn.Module):
 
         The backbone has already run, so this starts at the slice pooling.
         """
-        batch, series, depth, dim = features.shape
-        pooled = self.slice_pool(features.reshape(batch * series, depth, dim))
-        return self.aggregate(pooled.reshape(batch, series, dim), meta, mask)
+        batch, series, depth, _ = features.shape
+        projected = self.project(features.reshape(batch * series, depth, -1))
+        pooled = self.slice_pool(projected)
+        return self.aggregate(pooled.reshape(batch, series, self.feature_dim),
+                              meta, mask)
 
     def forward(self, volumes: torch.Tensor, meta: torch.Tensor,
                 mask: torch.Tensor) -> torch.Tensor:

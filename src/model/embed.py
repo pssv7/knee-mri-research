@@ -12,13 +12,24 @@ than a ceiling to stay under. A frozen trunk is cheap at submission and lets
 the aggregation design -- which is where the modelling actually happens -- be
 iterated dozens of times a day instead of three.
 
-**What is stored per slice.** The CLS token concatenated with the mean of the
-patch tokens: 768 dimensions from DINOv2-S. Storing the full 16x16 patch grid
-would preserve more spatial detail, which matters for the small local findings
-(a meniscal tear is a thin line tens of pixels across), but costs ~115 GB
-against ~0.9 GB. The mean-patch half is a hedge: it carries some of what the
-CLS token discards. If meniscus and fracture lag the regional findings, a
-spatially pooled variant is the first thing to try.
+**What is stored per slice.** The CLS token concatenated with the patch tokens
+reduced by `POOL_GRID`:
+
+    grid 1     CLS + mean of all patches      768 dims    0.9 GB
+    grid 2     CLS + 2x2 pooled grid        1,920 dims    2.3 GB
+    grid 4     CLS + 4x4 pooled grid        6,528 dims    7.6 GB
+
+Storing the full 16x16 grid would cost ~115 GB, which is why it is not offered.
+
+The first model used grid 1, and its weakness appeared exactly where the mean
+predicts one: regional findings (effusion, OA, Baker's) averaged 0.865 on gold
+while focal ones (meniscus, ligaments, fracture) averaged 0.695. A meniscal
+tear occupies two or three patches out of 256, so a mean over all of them
+buries it in 250-odd patches of normal tissue.
+
+Wide embeddings must be projected before the aggregation stack -- see
+`KneeNet(input_dim=...)`. Running the stack at 6,528 wide puts ~769M parameters
+in it against 8.2M with a projection.
 """
 
 from typing import Optional
@@ -44,9 +55,30 @@ MODEL_NAME = "vit_small_patch14_reg4_dinov2.lvd142m"
 # position embeddings are interpolated rather than silently mismatched.
 INPUT_SIZE = config.CACHE_SIZE
 
-# DINOv2-S: 384-dim tokens, and we keep CLS plus mean-patch.
+# DINOv2-S token width.
 TOKEN_DIM = 384
-EMBED_DIM = TOKEN_DIM * 2
+
+# How the 16x16 patch grid is reduced before storage.
+#
+#   1  mean over all patches       768 dims   0.9 GB over the dataset
+#   4  4x4 average-pooled grid   6,528 dims   7.6 GB
+#
+# The mean is what the first model used, and its weakness showed up exactly
+# where predicted: regional findings averaged 0.865 on gold while focal ones
+# averaged 0.695. A meniscal tear occupies two or three patches out of 256, so
+# averaging buries it. A 4x4 grid keeps enough spatial structure for the
+# attention pooling to find it.
+POOL_GRID = 1
+
+
+def embed_dim(grid: int = None) -> int:
+    """Stored width per slice: CLS plus the pooled patch tokens."""
+    grid = POOL_GRID if grid is None else grid
+    tokens = 1 + (grid * grid if grid > 1 else 1)
+    return TOKEN_DIM * tokens
+
+
+EMBED_DIM = embed_dim()
 
 # ImageNet statistics, which DINOv2 was trained under.
 MEAN = (0.485, 0.456, 0.406)
@@ -88,24 +120,49 @@ def normalize(slices):
     return (x - mean) / std
 
 
-def embed_slices(encoder, slices) -> "torch.Tensor":
-    """(N, 3, H, W) -> (N, 768): CLS concatenated with the mean patch token.
+def pool_patches(patches: "torch.Tensor", grid: int) -> "torch.Tensor":
+    """(N, P, C) patch tokens -> (N, grid*grid*C), spatially pooled.
 
-    Uses forward_features so the patch tokens are reachable. Taking the model's
-    default pooled output would discard them, and the mean patch is the half
-    that retains anything spatial.
+    The patch sequence is reshaped back to its square grid before pooling, so
+    neighbouring patches are averaged with their neighbours rather than with
+    whatever happened to sit beside them in a flattened sequence.
     """
+    import torch.nn.functional as F
+
+    count, n_patches, channels = patches.shape
+    side = int(round(n_patches ** 0.5))
+    if side * side != n_patches:
+        # Not a square grid; fall back to the mean rather than mis-shaping it.
+        return patches.mean(dim=1)
+
+    square = patches.transpose(1, 2).reshape(count, channels, side, side)
+    pooled = F.adaptive_avg_pool2d(square, grid)
+    return pooled.flatten(2).transpose(1, 2).reshape(count, grid * grid * channels)
+
+
+def embed_slices(encoder, slices, grid: int = None) -> "torch.Tensor":
+    """(N, 3, H, W) -> (N, embed_dim(grid)): CLS plus pooled patch tokens.
+
+    Uses forward_features so the patch tokens are reachable at all; the model's
+    default pooled output discards them.
+    """
+    grid = POOL_GRID if grid is None else grid
+
     with torch.no_grad():
         tokens = encoder.forward_features(normalize(slices))
 
         if tokens.ndim == 2:
-            # A backbone that already pools; duplicate so the width is stable.
-            return torch.cat([tokens, tokens], dim=-1)
+            # A backbone that already pools; repeat so the width is predictable.
+            repeats = embed_dim(grid) // tokens.shape[-1]
+            return tokens.repeat(1, repeats)
 
         cls = tokens[:, 0]
         prefix = getattr(encoder, "num_prefix_tokens", 1)
-        patches = tokens[:, prefix:].mean(dim=1)
-        return torch.cat([cls, patches], dim=-1)
+        patches = tokens[:, prefix:]
+
+        if grid > 1:
+            return torch.cat([cls, pool_patches(patches, grid)], dim=-1)
+        return torch.cat([cls, patches.mean(dim=1)], dim=-1)
 
 
 class CachedEmbeddingBackbone(nn.Module if nn is not None else object):

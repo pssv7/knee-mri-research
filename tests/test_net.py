@@ -236,3 +236,46 @@ class TestFrozenPath:
             # A depth-1 feature stack pools to the same series embedding.
             b = model.forward_features(series.unsqueeze(2), meta, mask)
         assert torch.allclose(a, b, atol=1e-5)
+
+
+class TestInputProjection:
+    """Wide spatial embeddings are projected before the aggregation stack.
+
+    Running the stack at 6,528 wide puts roughly 769M parameters in it, against
+    8.2M with a projection -- most of it in FiLM, which emits two vectors per
+    feature.
+    """
+
+    def test_projection_reduces_width(self):
+        model = net.KneeNet(None, 64, input_dim=512).eval()
+        features = torch.rand(2, 3, DEPTH, 512)
+        meta = torch.rand(2, 3, len(META_COLUMNS))
+        mask = torch.ones(2, 3, dtype=torch.bool)
+        with torch.no_grad():
+            assert model.forward_features(features, meta, mask).shape == (2, 12)
+
+    def test_identity_when_widths_match(self):
+        model = net.KneeNet(None, FEATURES, input_dim=FEATURES)
+        assert isinstance(model.project, torch.nn.Identity)
+
+    def test_omitting_input_dim_is_identity(self):
+        model = net.KneeNet(None, FEATURES)
+        assert isinstance(model.project, torch.nn.Identity)
+
+    def test_projection_keeps_the_stack_small(self):
+        wide = net.KneeNet(None, 512, input_dim=6528)
+        naive = net.KneeNet(None, 6528)
+        assert sum(p.numel() for p in wide.parameters()) < \
+            sum(p.numel() for p in naive.parameters()) / 20
+
+    def test_masking_still_holds_with_a_projection(self):
+        model = net.KneeNet(None, 64, input_dim=256).eval()
+        torch.manual_seed(11)
+        features = torch.rand(1, 3, DEPTH, 256)
+        meta = torch.rand(1, 3, len(META_COLUMNS))
+        with torch.no_grad():
+            padded = model.forward_features(
+                features, meta, torch.tensor([[True, True, False]]))
+            trimmed = model.forward_features(
+                features[:, :2], meta[:, :2], torch.ones(1, 2, dtype=torch.bool))
+        assert torch.allclose(padded, trimmed, atol=1e-5)
