@@ -2537,9 +2537,15 @@ import torch
 
 START = time.time()
 
-# 0.5 blends evenly. Raise toward 1.0 to favour the fine-tuned model, which
-# wins on eight of twelve findings.
+# 0.5 blends evenly. 1.0 is the fine-tuned model alone, 0.0 the frozen one.
+#
+# At 0.0 or 1.0 the other path is skipped entirely rather than computed and
+# discarded. That matters because the Efficiency Prize scores runtime: a
+# single-path run must be timed as a single-path run, or the comparison
+# measures nothing useful.
 BLEND = 0.5
+USE_FROZEN = BLEND < 1.0
+USE_TUNED = BLEND > 0.0
 
 # Must match how the fine-tuned model was trained.
 TUNED_SLICES = 8
@@ -2630,8 +2636,10 @@ side_model = side_classifier.SideNet().to(device)
 side_model.load_state_dict(torch.load(find_one("side_model.pt"), map_location=device))
 side_model.eval()
 
-print(f"frozen folds: {len(frozen_models)} (pool grid {embed.POOL_GRID})")
-print(f"tuned folds : {len(tuned_models)}")
+print(f"frozen folds: {len(frozen_models)} (pool grid {embed.POOL_GRID})"
+      + ("" if USE_FROZEN else "  [skipped, BLEND=1.0]"))
+print(f"tuned folds : {len(tuned_models)}"
+      + ("" if USE_TUNED else "  [skipped, BLEND=0.0]"))
 if not frozen_models and not tuned_models:
     raise SystemExit("no model checkpoints found")
 
@@ -2741,10 +2749,10 @@ for study in tqdm(studies, desc="studies", unit="study"):
         meta = meta_tensor(uids, side)
         mask = torch.ones(1, len(volumes), dtype=torch.bool, device=device)
 
-        frozen_rows.append(frozen_predict(volumes, meta, mask) if frozen_models
-                           else None)
-        tuned_rows.append(tuned_predict(volumes, uids, side) if tuned_models
-                          else None)
+        frozen_rows.append(frozen_predict(volumes, meta, mask)
+                           if (frozen_models and USE_FROZEN) else None)
+        tuned_rows.append(tuned_predict(volumes, uids, side)
+                          if (tuned_models and USE_TUNED) else None)
     except Exception as exc:  # noqa: BLE001
         failures += 1
         print(f"  fallback for {study[-12:]}: {str(exc)[:80]}")
@@ -2778,8 +2786,11 @@ def to_ranks(matrix):
     return ranks / max(len(matrix) - 1, 1)
 
 
-frozen_matrix = np.stack([r for r in frozen_rows]) if frozen_models else None
-tuned_matrix = np.stack([r for r in tuned_rows]) if tuned_models else None
+have_frozen = frozen_models and USE_FROZEN and all(r is not None for r in frozen_rows)
+have_tuned = tuned_models and USE_TUNED and all(r is not None for r in tuned_rows)
+frozen_matrix = np.stack(frozen_rows) if have_frozen else None
+tuned_matrix = np.stack(tuned_rows) if have_tuned else None
+print(f"blending: frozen={have_frozen} tuned={have_tuned} weight={BLEND}")
 
 if frozen_matrix is not None and tuned_matrix is not None and len(ids) > 1:
     blended = BLEND * to_ranks(tuned_matrix) + (1 - BLEND) * to_ranks(frozen_matrix)
