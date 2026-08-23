@@ -71,9 +71,19 @@ def build_index(
     if not root.exists():
         raise FileNotFoundError(f"{root} does not exist")
 
+    try:
+        from tqdm.auto import tqdm
+    except ImportError:  # progress is a convenience, never a requirement
+        tqdm = None
+
     frames = []
     batch: List[Path] = []
     scanned = 0
+
+    # The tree is walked lazily, so the total is unknown until the end. tqdm
+    # counts files without a total rather than forcing a full listing first,
+    # which on this dataset would mean stat-ing ~820,000 paths up front.
+    progress = tqdm(total=limit, unit="file", desc=f"scanning {split}") if tqdm else None
 
     for path in iter_dicom_paths(root):
         batch.append(path)
@@ -82,12 +92,21 @@ def build_index(
         if len(batch) >= batch_size:
             frames.append(scan_paths(batch, workers=workers))
             scanned += len(batch)
+            if progress is not None:
+                progress.update(len(batch))
+                progress.set_postfix(series=int(frames[-1]["SeriesInstanceUID"].nunique()))
+            else:
+                print(f"  scanned {scanned} files", flush=True)
             batch = []
-            print(f"  scanned {scanned} files", flush=True)
 
     if batch:
         frames.append(scan_paths(batch, workers=workers))
         scanned += len(batch)
+        if progress is not None:
+            progress.update(len(batch))
+
+    if progress is not None:
+        progress.close()
 
     if not frames:
         raise RuntimeError(f"no DICOM files found under {root}")

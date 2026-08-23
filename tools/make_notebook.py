@@ -348,6 +348,7 @@ which ones to investigate.
 import time
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
+from tqdm.auto import tqdm
 
 # cache.build_series_record is a module-level function on purpose. A worker
 # defined in a notebook cell cannot be pickled by name, so a process pool
@@ -363,8 +364,11 @@ failures = 0
 start = time.time()
 
 with ProcessPoolExecutor(max_workers=WORKERS) as pool:
-    for position, (uid, volume, record) in enumerate(
-            pool.map(cache.build_series_record, work, chunksize=8)):
+    stream = pool.map(cache.build_series_record, work, chunksize=8)
+    progress = tqdm(stream, total=len(work), unit="series",
+                    desc=f"shard {SHARD}", smoothing=0.05)
+
+    for position, (uid, volume, record) in enumerate(progress):
         if volume is not None:
             volumes[position] = volume
         else:
@@ -372,14 +376,11 @@ with ProcessPoolExecutor(max_workers=WORKERS) as pool:
         record["position"] = position
         records.append(record)
 
-        if position % 500 == 0 and position:
-            rate = position / (time.time() - start)
-            remaining = (len(work) - position) / rate / 60
-            print(f"  {position}/{len(work)}  {rate:.1f}/s  "
-                  f"~{remaining:.0f} min left  failures={failures}", flush=True)
+        if failures:
+            progress.set_postfix(failures=failures)
 
 elapsed = (time.time() - start) / 60
-print(f"\\nbuilt {len(work) - failures}/{len(work)} in {elapsed:.1f} min")
+print(f"built {len(work) - failures}/{len(work)} in {elapsed:.1f} min")
 """)
 
     nb.md("""
