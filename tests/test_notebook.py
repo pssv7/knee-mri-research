@@ -121,11 +121,21 @@ class TestBootstrapReloads:
     """
 
     def bootstrap(self):
-        for cell in code_cells():
-            source = cell_source(cell)
-            if "FILES = {" in source:
-                return source
-        pytest.fail("no bootstrap cell found")
+        # The bootstrap lives in the Kaggle notebooks, not the Colab one --
+        # only Kaggle needs the repo modules materialised.
+        for name in ("01_scan_index.ipynb", "02_build_cache.ipynb"):
+            path = os.path.join(ROOT, "notebooks", name)
+            if not os.path.exists(path):
+                continue
+            with open(path) as handle:
+                cells = json.load(handle)["cells"]
+            for cell in cells:
+                if cell["cell_type"] != "code":
+                    continue
+                source = "".join(cell["source"])
+                if "FILES = {" in source:
+                    return source
+        pytest.fail("no bootstrap cell found in the Kaggle notebooks")
 
     def test_evicts_previously_imported_modules(self):
         source = self.bootstrap()
