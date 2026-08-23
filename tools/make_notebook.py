@@ -2486,6 +2486,322 @@ either place.
     nb.write(NOTEBOOKS / "09_export_for_colab.ipynb")
 
 
+# ---------------------------------------------------------------------------
+# 10 -- ensemble submission
+# ---------------------------------------------------------------------------
+
+def build_ensemble_notebook():
+    nb = Notebook(gpu=True)
+
+    nb.md("""
+# 10 — Ensemble Submission
+
+Runs both models over the test set and blends them.
+
+    frozen DINOv2-S + KneeNet   gold 0.770   strong on PF OA, Lateral OA, Effusion, Synovitis
+    fine-tuned ConvNeXt-T       gold 0.825   strong on MCL, ACL, meniscus, Baker's, Fracture
+
+They are complementary: a per-finding oracle pick of the better one scores
+~0.848 against 0.825 for the better model alone.
+
+**Blending is by rank, not by probability.** The two models are calibrated
+differently -- one reads frozen features, the other was trained end to end --
+so averaging raw probabilities lets the more confident model dominate
+regardless of which is more accurate. The metric is AUC, which depends only on
+ordering, so ranks are the natural currency and calibration stops mattering.
+
+**A fixed blend weight, not per-finding weights.** Per-finding weights fitted on
+58 gold studies is exactly what was tried during label fusion: it scored 0.860
+in-sample and 0.812 under leave-one-out, worse than the better single source.
+The same trap applies here with the same sample size, so the blend is one
+number rather than twelve.
+
+**Inputs:** competition data, `knee_embeddings` (DINOv2 weights),
+`knee_side_classifier`, `knee-train` (frozen folds), `knee-convnext` (tuned
+folds), `knee-labels` (priors for the fallback).
+""")
+
+    nb.md("## Setup")
+    nb.code(bootstrap_cell(MODEL_MODULES, require_raw_dicom=True))
+
+    nb.code("""
+!pip install -q timm
+
+import glob
+import os
+import time
+
+import numpy as np
+import pandas as pd
+import torch
+
+START = time.time()
+
+# 0.5 blends evenly. Raise toward 1.0 to favour the fine-tuned model, which
+# wins on eight of twelve findings.
+BLEND = 0.5
+
+# Must match how the fine-tuned model was trained.
+TUNED_SLICES = 8
+TUNED_MAX_SERIES = 3
+
+BATCH_SLICES = 256
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print("device:", device, "| blend:", BLEND)
+
+
+def find_inputs(pattern):
+    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    return found
+
+
+def find_one(pattern):
+    hits = find_inputs(pattern)
+    if not hits:
+        raise SystemExit(f"missing input: {pattern}")
+    return hits[0]
+
+
+def find_competition_file(name):
+    for candidate in (f"/kaggle/input/competitions/*/{name}",
+                      f"/kaggle/input/*/{name}"):
+        hits = sorted(glob.glob(candidate))
+        if hits:
+            return hits[0]
+    raise SystemExit(f"missing competition file: {name}")
+""")
+
+    nb.md("""
+## Load both models
+
+Everything from disk. The ConvNeXt checkpoint carries its own backbone weights,
+so `pretrained=False` is correct here -- timm cannot reach the network anyway.
+""")
+
+    nb.code("""
+import timm
+
+# --- frozen path ---------------------------------------------------------
+encoder = embed.build_encoder(pretrained=False,
+                              checkpoint_path=find_one("dinov2_s_reg4.pt")).to(device)
+
+frozen_models = []
+for path in find_inputs("knee_fold*.pt"):
+    state = torch.load(path, map_location="cpu")
+    input_dim = (state["project.weight"].shape[1]
+                 if "project.weight" in state else embed.EMBED_DIM)
+    feature_dim = state["head.2.weight"].shape[1]
+    model = net.KneeNet(None, feature_dim, input_dim=input_dim).to(device)
+    model.load_state_dict(state)
+    model.eval()
+    frozen_models.append(model)
+
+embed.POOL_GRID = 1 if input_dim == embed.TOKEN_DIM * 2 else int(
+    round(((input_dim / embed.TOKEN_DIM) - 1) ** 0.5))
+
+# --- fine-tuned path -----------------------------------------------------
+tuned_models = []
+for path in find_inputs("convnext_fold*.pt"):
+    state = torch.load(path, map_location="cpu")
+    backbone = timm.create_model("convnext_tiny.fb_in22k_ft_in1k",
+                                 pretrained=False, num_classes=0, in_chans=3)
+    model = net.KneeNet(backbone, backbone.num_features).to(device)
+    model.load_state_dict(state)
+    model.eval()
+    tuned_models.append(model)
+
+side_model = side_classifier.SideNet().to(device)
+side_model.load_state_dict(torch.load(find_one("side_model.pt"), map_location=device))
+side_model.eval()
+
+print(f"frozen folds: {len(frozen_models)} (pool grid {embed.POOL_GRID})")
+print(f"tuned folds : {len(tuned_models)}")
+if not frozen_models and not tuned_models:
+    raise SystemExit("no model checkpoints found")
+
+try:
+    train_labels = pd.read_parquet(find_one("train_labels.parquet"))
+    PRIORS = {n: float(train_labels[n].mean()) for n in config.LABELS}
+except SystemExit:
+    PRIORS = {n: 0.5 for n in config.LABELS}
+""")
+
+    nb.md("""
+## Inference
+
+Volumes are built once per study and fed to both paths: the frozen path embeds
+them with DINOv2, the tuned path mirrors and subsamples them exactly as it was
+trained. A study that fails anywhere falls back to the training prior.
+""")
+
+    nb.code("""
+from tqdm.auto import tqdm
+
+test_csv = pd.read_csv(find_competition_file("test.csv"))
+test_series_csv = pd.read_csv(find_competition_file("test_series.csv"))
+series_meta = test_series_csv.set_index("SeriesInstanceUID")
+test_root = config.DATA_ROOT / "test_series"
+studies = test_csv[config.ID_COL].tolist()
+print(f"studies: {len(studies)}")
+
+KEEP = np.linspace(0, config.CACHE_SLICES - 1, TUNED_SLICES).round().astype(int)
+
+
+def build_volumes(study_uid):
+    directory = test_root / study_uid
+    if not directory.exists():
+        return [], []
+    volumes, uids = [], []
+    for series_dir in sorted(p for p in directory.iterdir() if p.is_dir()):
+        paths = dicom_io.series_paths(series_dir)
+        if not paths:
+            continue
+        headers = [dicom_io.read_header(p) for p in paths]
+        volumes.append(cache.build_series_volume(headers)["volume"])
+        uids.append(series_dir.name)
+    return volumes, uids
+
+
+def predict_side(volumes):
+    batch = np.stack([side_classifier.prepare_batch(v)[0] for v in volumes])
+    with torch.no_grad():
+        probs = torch.sigmoid(side_model(torch.from_numpy(batch).to(device)))
+    return "R" if float(probs.mean()) >= 0.5 else "L"
+
+
+def meta_tensor(uids, side):
+    rows = []
+    for uid in uids:
+        row = series_meta.loc[uid].to_dict() if uid in series_meta.index else {}
+        row["side_predicted"] = side
+        rows.append(knee_dataset.series_metadata(pd.Series(row)))
+    return torch.from_numpy(np.stack(rows)).unsqueeze(0).to(device)
+
+
+def frozen_predict(volumes, meta, mask):
+    features = []
+    for volume in volumes:
+        slices = net.stack_2p5d(torch.from_numpy(volume)[None])
+        chunks = [embed.embed_slices(encoder, slices[i:i + BATCH_SLICES].to(device)).float().cpu()
+                  for i in range(0, len(slices), BATCH_SLICES)]
+        features.append(torch.cat(chunks))
+    stacked = torch.stack(features).unsqueeze(0).to(device)
+    with torch.no_grad():
+        return np.mean([torch.sigmoid(m.forward_features(stacked, meta, mask))
+                        .cpu().numpy()[0] for m in frozen_models], axis=0)
+
+
+def tuned_predict(volumes, uids, side):
+    # Mirrored and subsampled exactly as during training.
+    picked = volumes[:TUNED_MAX_SERIES]
+    picked_uids = uids[:TUNED_MAX_SERIES]
+    mirrored = []
+    for volume, uid in zip(picked, picked_uids):
+        plane = series_meta.loc[uid]["Anatomical_Plane"] if uid in series_meta.index else None
+        mirrored.append(knee_dataset.mirror_volume(volume, side, plane)[KEEP])
+
+    batch = torch.from_numpy(np.stack(mirrored)).unsqueeze(0).to(device)
+    meta = meta_tensor(picked_uids, side)
+    mask = torch.ones(1, len(mirrored), dtype=torch.bool, device=device)
+    with torch.no_grad(), torch.amp.autocast("cuda"):
+        return np.mean([torch.sigmoid(m(batch, meta, mask).float()).cpu().numpy()[0]
+                        for m in tuned_models], axis=0)
+
+
+ids, frozen_rows, tuned_rows, failures = [], [], [], 0
+
+for study in tqdm(studies, desc="studies", unit="study"):
+    try:
+        volumes, uids = build_volumes(study)
+        if not volumes:
+            raise ValueError("no readable series")
+        side = predict_side(volumes)
+
+        meta = meta_tensor(uids, side)
+        mask = torch.ones(1, len(volumes), dtype=torch.bool, device=device)
+
+        frozen_rows.append(frozen_predict(volumes, meta, mask) if frozen_models
+                           else None)
+        tuned_rows.append(tuned_predict(volumes, uids, side) if tuned_models
+                          else None)
+    except Exception as exc:  # noqa: BLE001
+        failures += 1
+        print(f"  fallback for {study[-12:]}: {str(exc)[:80]}")
+        prior = np.array([PRIORS[n] for n in config.LABELS])
+        frozen_rows.append(prior)
+        tuned_rows.append(prior)
+    ids.append(study)
+
+elapsed = time.time() - START
+print(f"\\n{len(ids)} studies in {elapsed / 60:.1f} min ({failures} fallbacks)")
+""")
+
+    nb.md("""
+## Blend by rank and write
+
+Ranks are taken per finding across the test set, so each model contributes its
+ordering rather than its confidence. With a single test study ranking is
+degenerate, so the raw probabilities are used instead.
+""")
+
+    nb.code("""
+def to_ranks(matrix):
+    ranks = np.empty_like(matrix, dtype=float)
+    for column in range(matrix.shape[1]):
+        order = np.argsort(matrix[:, column], kind="mergesort")
+        ranks[order, column] = np.arange(len(matrix))
+    return ranks / max(len(matrix) - 1, 1)
+
+
+frozen_matrix = np.stack([r for r in frozen_rows]) if frozen_models else None
+tuned_matrix = np.stack([r for r in tuned_rows]) if tuned_models else None
+
+if frozen_matrix is not None and tuned_matrix is not None and len(ids) > 1:
+    blended = BLEND * to_ranks(tuned_matrix) + (1 - BLEND) * to_ranks(frozen_matrix)
+elif frozen_matrix is not None and tuned_matrix is not None:
+    blended = BLEND * tuned_matrix + (1 - BLEND) * frozen_matrix
+else:
+    blended = tuned_matrix if tuned_matrix is not None else frozen_matrix
+
+submission = pd.DataFrame(blended, columns=config.LABELS)
+submission.insert(0, config.ID_COL, ids)
+submission = submission[config.SUBMISSION_COLUMNS]
+submission.to_csv("/kaggle/working/submission.csv", index=False)
+
+sample = pd.read_csv(find_competition_file("sample_submission.csv"))
+assert list(submission.columns) == list(sample.columns), "header mismatch"
+assert len(submission) == len(test_csv), "row count does not match test.csv"
+assert submission[config.ID_COL].is_unique, "duplicate study ids"
+values = submission[config.LABELS]
+assert values.notna().all().all(), "missing predictions"
+assert ((values >= 0) & (values <= 1)).all().all(), "predictions out of range"
+
+print(submission.head().to_string())
+projected = elapsed / max(len(ids), 1) * 1500
+print(f"\\nprojected for 1,500 studies: {projected / 3600:.2f} h "
+      f"(cap 9 h, efficiency penalty {projected / 32400:.3f})")
+""")
+
+    nb.md("""
+## Next
+
+Submit, and compare against the two single-model scores. If the blend does not
+beat the better of them, `BLEND` is the knob -- and the honest way to set it is
+the leaderboard, not the 58 gold studies, which have already been used once for
+checkpoint selection.
+
+Running both paths roughly doubles inference cost, which the Efficiency Prize
+charges for. Worth checking whether the blend earns its runtime on that metric
+as well as on AUC.
+""")
+
+    nb.write(NOTEBOOKS / "10_submit_ensemble.ipynb")
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
@@ -2497,6 +2813,7 @@ def main():
     build_submit_notebook()
     build_finetune_notebook()
     build_export_notebook()
+    build_ensemble_notebook()
 
 
 if __name__ == "__main__":

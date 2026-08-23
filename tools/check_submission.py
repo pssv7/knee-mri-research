@@ -81,6 +81,7 @@ def build_fake_competition(base: pathlib.Path):
 
 def build_fake_checkpoints(target: pathlib.Path):
     """Randomly initialised stand-ins for the trained weights."""
+    import timm
     import torch
     from src.model import embed, net, side_classifier
 
@@ -91,6 +92,13 @@ def build_fake_checkpoints(target: pathlib.Path):
     for fold in range(2):
         torch.save(net.KneeNet(None, embed.EMBED_DIM).state_dict(),
                    target / f"knee_fold{fold}.pt")
+
+    # The fine-tuned arm: a real timm backbone so the state dict has the
+    # shape the ensemble notebook will load.
+    backbone = timm.create_model("convnext_tiny.fb_in22k_ft_in1k",
+                                 pretrained=False, num_classes=0, in_chans=3)
+    torch.save(net.KneeNet(backbone, backbone.num_features).state_dict(),
+               target / "convnext_fold0.pt")
 
     import pandas as pd
     from src import config
@@ -137,13 +145,18 @@ def main():
             'pathlib.Path("/kaggle/input")': f'pathlib.Path("{base / "input"}")',
         }
 
-        print("\n07_submit.ipynb")
-        cells = code_cells(ROOT / "notebooks" / "07_submit.ipynb")
+        notebook = os.environ.get("CHECK_NOTEBOOK", "07_submit.ipynb")
+        print(f"\n{notebook}")
+        cells = code_cells(ROOT / "notebooks" / notebook)
         namespace = {"__name__": "__main__"}
         for index in sorted(cells):
             source = cells[index]
             for old, new in rewrites.items():
                 source = source.replace(old, new)
+            # Strip shell magics rather than skipping the cell: a cell can
+            # open with !pip and then define everything the next ones use.
+            source = "\n".join(line for line in source.splitlines()
+                                if not line.lstrip().startswith(("!", "%")))
             try:
                 exec(source, namespace)  # noqa: S102
                 print(f"  cell {index}: OK")
