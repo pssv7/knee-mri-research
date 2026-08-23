@@ -2726,6 +2726,11 @@ def tuned_predict(volumes, uids, side):
 
 ids, frozen_rows, tuned_rows, failures = [], [], [], 0
 
+# Timed separately from setup. Model loading is a fixed cost, and amortising
+# it over three public studies inflates the per-study figure enormously --
+# it is noise against a real test set.
+loop_start = time.time()
+
 for study in tqdm(studies, desc="studies", unit="study"):
     try:
         volumes, uids = build_volumes(study)
@@ -2748,8 +2753,12 @@ for study in tqdm(studies, desc="studies", unit="study"):
         tuned_rows.append(prior)
     ids.append(study)
 
+loop_elapsed = time.time() - loop_start
 elapsed = time.time() - START
-print(f"\\n{len(ids)} studies in {elapsed / 60:.1f} min ({failures} fallbacks)")
+setup = elapsed - loop_elapsed
+print(f"\\n{len(ids)} studies in {loop_elapsed / 60:.1f} min "
+      f"({failures} fallbacks); setup took {setup / 60:.1f} min")
+print(f"per study: {loop_elapsed / max(len(ids), 1):.2f}s")
 """)
 
     nb.md("""
@@ -2793,7 +2802,8 @@ assert values.notna().all().all(), "missing predictions"
 assert ((values >= 0) & (values <= 1)).all().all(), "predictions out of range"
 
 print(submission.head().to_string())
-projected = elapsed / max(len(ids), 1) * 1500
+# Setup counted once, inference scaled -- rather than scaling both.
+projected = setup + loop_elapsed / max(len(ids), 1) * 1500
 print(f"\\nprojected for 1,500 studies: {projected / 3600:.2f} h "
       f"(cap 9 h, efficiency penalty {projected / 32400:.3f})")
 """)
