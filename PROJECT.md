@@ -60,6 +60,8 @@ Data. The label extractor therefore runs locally on a Colab GPU.
 | Frozen DINOv2 embeddings | done — 0.9 GB, 768 dims/slice |
 | Aggregation training | done — gold-58 macro **0.770** |
 | Submission | done — **public LB 0.787** |
+| Spatial embeddings (grid 4) | notebook ready — experiment in flight |
+| Fine-tuned ConvNeXt-T | notebook ready — measuring cost first |
 
 ### The numbers that matter
 
@@ -122,7 +124,9 @@ raw DICOM (570 GB, Kaggle only)
       └─ 02 cache   → cache_*.npy + manifests      (~29 GB, 24×224×224 uint8)
           ├─ 04 side classifier → side_predictions.parquet
           └─ 05 embeddings      → embeddings_*.npy (~0.9 GB, 768/slice)
-              └─ 06 train       → knee_fold*.pt
+              ├─ 06 train       → knee_fold*.pt
+              │   └─ 07 submit  → submission.csv
+              └─ 08 finetune (Colab, from volumes not embeddings)
 
 train.csv reports
   └─ 03 extract (Colab)  → llm_labels.parquet
@@ -159,10 +163,11 @@ tools/
   make_notebook.py       generates every notebook from src/
   check_notebook.py      executes the Colab notebook's cells locally
   check_kaggle_notebooks.py  runs notebooks 01/02 against a fake mini-dataset
+  check_submission.py    runs notebook 07 end to end on a fake test set
 docs/
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   209 tests
+tests/                   220 tests
 ```
 
 ---
@@ -270,6 +275,27 @@ Each of these cost real time. They are all guarded by tests now.
 **Reference point:** the fused labels score 0.854 against gold. A model well
 below that is limited by itself, not by its labels, and the lever is the
 backbone rather than more aggregation.
+
+---
+
+## Experiments in flight
+
+**Spatial patch embeddings (`POOL_GRID = 4`).** The first model split cleanly by
+finding size — regional 0.865, focal 0.695 — which is what a mean over 256 patch
+tokens predicts. Grid 4 keeps a 4x4 pooled grid instead: 6,528 dims, 7.6 GB.
+
+*What would confirm the hypothesis:* the six focal findings improve and the
+regional ones do not move much. A uniform rise across all twelve means the gain
+is extra capacity rather than spatial detail. No movement means DINOv2 features
+are simply out of domain for MRI, and the backbone is the lever.
+
+**Fine-tuned ConvNeXt-T (notebook 08, Colab).** Runs one fold on one cache shard
+and reports the projected cost of the full sweep before committing to it.
+
+*Caveat when reading it:* this run also mirrors volumes geometrically, which the
+frozen path cannot do. Backbone and laterality handling vary together, so a
+difference cannot be attributed to either alone without a third run. Its gold
+estimate is noisier too — only about a third of the 58 live in one shard.
 
 ---
 
