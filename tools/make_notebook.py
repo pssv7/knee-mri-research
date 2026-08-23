@@ -2083,8 +2083,10 @@ series_meta = pd.read_csv(find_competition_file("train_series.csv"))
 train_csv = pd.read_csv(find_competition_file("train.csv"))
 gold = train_csv[train_csv["ACL"].notna()].reset_index(drop=True)
 
-# One shard measures cost; all three train the real thing. Start with one.
-ALL_SHARDS = False
+# The measurement run is done: 2.5 min/epoch on one shard, ~7.6 min on all
+# three, and the gold score was still climbing at epoch 4 rather than
+# plateauing. So this is the real run.
+ALL_SHARDS = True
 
 cache_paths = find_inputs("cache_train_series_*.npy")
 if not ALL_SHARDS:
@@ -2231,7 +2233,10 @@ import time
 
 from tqdm.auto import tqdm
 
-EPOCHS = 4
+# The measurement run reached 0.729 at epoch 4 and was still rising
+# (0.584 -> 0.679 -> 0.708 -> 0.729), so four was undertrained. Twelve epochs
+# over three shards is ~7.5 h for five folds, which fits a 25 h weekly budget.
+EPOCHS = 12
 LR = 1e-4
 
 keyed = folded.set_index("StudyInstanceUID")
@@ -2248,6 +2253,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     total_steps=EPOCHS * (len(train_loader) // ACCUM_STEPS + 1))
 
 epoch_times = []
+best_macro = 0.0
 for epoch in range(EPOCHS):
     model.train()
     start = time.time()
@@ -2277,10 +2283,19 @@ for epoch in range(EPOCHS):
     macro = float(np.nanmean([
         auc(truth[name].to_numpy().astype(int), gold_probs[:, i])
         for i, name in enumerate(config.LABELS)]))
-    print(f"  epoch {epoch + 1}: {epoch_times[-1] / 60:.1f} min  "
-          f"gold macro {macro:.3f}  (frozen grid-1 baseline 0.770)")
+    marker = ""
+    if macro > best_macro:
+        best_macro, marker = macro, "  <- best"
+        torch.save(model.state_dict(), "/kaggle/working/convnext_fold0.pt")
 
-torch.save(model.state_dict(), "/kaggle/working/convnext_fold0.pt")
+    print(f"  epoch {epoch + 1}: {epoch_times[-1] / 60:.1f} min  "
+          f"gold macro {macro:.3f}  (frozen grid-1 baseline 0.770){marker}")
+
+# The last epoch is not reliably the best one, and with 58 gold studies the
+# per-epoch estimate is noisy enough that the final weights can be meaningfully
+# worse than an earlier checkpoint.
+print(f"\\nbest gold macro: {best_macro:.3f}")
+model.load_state_dict(torch.load("/kaggle/working/convnext_fold0.pt"))
 
 per_epoch = float(np.mean(epoch_times))
 share = len(index) / 4349
