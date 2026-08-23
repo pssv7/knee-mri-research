@@ -146,5 +146,9 @@ class TestBootstrapReloads:
         assert "importlib.invalidate_caches()" in self.bootstrap()
 
     def test_eviction_precedes_the_imports(self):
+        # Compare only within the executable tail. The embedded module sources
+        # contain "from src import config" themselves, and matching that copy
+        # makes the ordering look wrong when it is not.
         source = self.bootstrap()
-        assert source.index("del sys.modules[") < source.index("from src import config")
+        tail = source[source.index('sys.path.insert(0, ".")'):]
+        assert tail.index("del sys.modules[") < tail.index("from src import config")
