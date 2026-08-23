@@ -40,6 +40,18 @@ def code_cells():
     return [c for c in load_cells() if c["cell_type"] == "code"]
 
 
+def as_python(source):
+    """Strip notebook magics so the rest can be parsed as Python.
+
+    Shell and line magics are valid in a cell but not valid Python, and they
+    can appear anywhere in it -- not only on the first line, which is what an
+    earlier version of this check assumed.
+    """
+    kept = [line for line in source.splitlines()
+            if not line.lstrip().startswith(("!", "%"))]
+    return "\n".join(kept)
+
+
 class TestStructure:
     def test_is_valid_nbformat(self):
         with open(NOTEBOOK) as handle:
@@ -66,11 +78,8 @@ class TestStructure:
 class TestCellsCompile:
     def test_every_code_cell_parses(self):
         for index, cell in enumerate(code_cells()):
-            source = cell_source(cell)
-            if source.lstrip().startswith("!"):
-                continue  # shell magic is not Python
             try:
-                ast.parse(source)
+                ast.parse(as_python(cell_source(cell)))
             except SyntaxError as exc:
                 pytest.fail(f"code cell {index} line {exc.lineno}: {exc.text}")
 
@@ -178,10 +187,7 @@ class TestGeneratorIsValid:
             for index, cell in enumerate(cells):
                 if cell["cell_type"] != "code":
                     continue
-                source = "".join(cell["source"])
-                if source.lstrip().startswith("!"):
-                    continue
                 try:
-                    ast.parse(source)
+                    ast.parse(as_python("".join(cell["source"])))
                 except SyntaxError as exc:
                     pytest.fail(f"{name} cell {index}: {exc}")

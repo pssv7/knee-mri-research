@@ -2070,14 +2070,12 @@ subprocess.run(["kaggle", "kernels", "list", "--mine"])
 
 
 def fetch(slug, path, attempts=4):
-    """Download a notebook's output, retrying on a broken connection.
-
-    A ~10 GB single-stream download fails often enough that one attempt is not
-    a reasonable design. IncompleteRead leaves a partial file behind, so the
-    directory is cleared before each retry rather than resumed -- the client
-    has no resume support and a truncated .npy would load as silently
-    corrupt data.
-    """
+    # Download a notebook's output, retrying on a broken connection. A ~10 GB
+    # single-stream download fails often enough that one attempt is not a
+    # reasonable design. IncompleteRead leaves a partial file behind, so the
+    # directory is cleared before each retry rather than resumed: the client
+    # has no resume support, and a truncated .npy would load as silently
+    # corrupt data rather than failing.
     import shutil
     import time as _time
 
