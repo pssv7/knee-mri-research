@@ -313,11 +313,15 @@ if SPLIT == "test_series":
 import glob as _glob
 
 name = "index_test.parquet" if SPLIT == "test_series" else "index_train.parquet"
-candidates = (
-    _glob.glob(f"/kaggle/working/{name}")
-    + _glob.glob(f"/kaggle/input/*/{name}")
-    + _glob.glob(f"/kaggle/input/*/*/{name}")
-)
+# Attached notebook output nests several levels deep
+# (/kaggle/input/notebooks/<user>/<notebook>/...), so search recursively --
+# but skip the competition directory, which holds ~820,000 files and would
+# take minutes to walk for a file that is never in there.
+candidates = _glob.glob(f"/kaggle/working/{name}")
+for _root in sorted(_glob.glob("/kaggle/input/*")):
+    if os.path.basename(_root) == "competitions":
+        continue
+    candidates += _glob.glob(f"{_root}/**/{name}", recursive=True)
 INDEX_PATH = candidates[0] if candidates else None
 if INDEX_PATH is None:
     attached = sorted(os.listdir("/kaggle/input")) if os.path.exists("/kaggle/input") else []
