@@ -27,6 +27,12 @@ KAGGLE_MODULES = [
     "src/data/index.py",
 ]
 
+# The side classifier notebook needs the model package as well.
+SIDE_MODULES = KAGGLE_MODULES + [
+    "src/model/__init__.py",
+    "src/model/side_classifier.py",
+]
+
 
 def read(path):
     return (ROOT / path).read_text()
@@ -100,6 +106,10 @@ importlib.invalidate_caches()
 from src import config
 from src.data import dicom_io, cache, index as index_mod
 
+# Only the side-classifier notebook materialises the model package.
+if pathlib.Path("src/model/side_classifier.py").exists():
+    from src.model import side_classifier
+
 print("modules ready:", len(FILES), "files")
 print("labels:", len(config.LABELS))
 print("cache geometry:", config.CACHE_SLICES, "x", config.CACHE_SIZE)
@@ -121,7 +131,7 @@ print("data OK:", sorted(p.name for p in config.DATA_ROOT.iterdir())[:8])
 """
 
 
-def bootstrap_cell():
+def bootstrap_cell(modules=None):
     """A cell that materialises the repo modules on a machine without the repo.
 
     Sources are embedded via repr() so quoting and escapes survive intact.
@@ -130,7 +140,8 @@ def bootstrap_cell():
     newline escape became a literal line break in the generated notebook.
     """
     entries = ",\n".join(
-        "    {0!r}: {1!r}".format(path, read(path)) for path in KAGGLE_MODULES
+        "    {0!r}: {1!r}".format(path, read(path))
+        for path in (modules or KAGGLE_MODULES)
     )
     return BOOTSTRAP_HEAD + entries + BOOTSTRAP_TAIL
 
@@ -836,11 +847,309 @@ with a low sample weight rather than a fabricated prior.
     nb.write(NOTEBOOKS / "03_extract_labels.ipynb")
 
 
+
+
+# ---------------------------------------------------------------------------
+# 04 -- left/right side classifier
+# ---------------------------------------------------------------------------
+
+def build_side_notebook():
+    nb = Notebook(gpu=True)
+
+    nb.md("""
+# 04 — Left/Right Side Classifier
+
+Predicts which knee a series images, for the 41.7% (10,161 of 24,371) whose
+DICOM side tag is blank.
+
+Four of the twelve findings are compartment-specific — medial and lateral
+meniscus, medial and lateral OA — and the medial compartment sits on opposite
+sides of the frame for a left versus a right knee. Without a side those four
+labels cannot be placed.
+
+Metadata is exhausted: `ImageLaterality` is never populated, `Laterality` is
+present-but-empty on the majority of rows, series descriptions are anonymised
+to `DummySeriesDesc!`, and study-level propagation recovered under 1% because
+the tag is populated per study rather than per series. So the side is predicted
+from the imaging.
+
+**Trains on 14,210 series with a known side, predicts the remaining 10,161.**
+Both come from the same cache, so this behaves identically at submission time.
+
+**Where:** Kaggle with the cache datasets attached, GPU on. ~20 minutes.
+""")
+
+    nb.md("## Setup")
+    nb.code(bootstrap_cell(SIDE_MODULES))
+
+    nb.md("""
+## Load the cache
+
+Attach all three `knee-cache-224-*` outputs. The manifests carry
+`laterality_resolved`, which is the training label where present.
+""")
+
+    nb.code("""
+import glob
+import numpy as np
+import pandas as pd
+
+cache_files = sorted(glob.glob("/kaggle/input/*/cache_train_series_*.npy")
+                     + glob.glob("/kaggle/input/*/*/cache_train_series_*.npy"))
+manifest_files = sorted(glob.glob("/kaggle/input/*/manifest_train_series_*.parquet")
+                        + glob.glob("/kaggle/input/*/*/manifest_train_series_*.parquet"))
+
+print("caches:")
+for f in cache_files:
+    print(" ", f)
+if not cache_files:
+    raise SystemExit("No cache shards attached. + Add Input -> your cache datasets.")
+
+manifests = []
+for path in manifest_files:
+    frame = pd.read_parquet(path)
+    frame["shard_file"] = path
+    manifests.append(frame)
+manifest = pd.concat(manifests, ignore_index=True)
+
+print(f"\\nseries: {len(manifest)}")
+print(manifest["laterality_resolved"].value_counts(dropna=False).to_string())
+""")
+
+    nb.md("""
+## Memory-map the volumes
+
+The shards total ~29 GB, well past RAM. `mmap_mode="r"` reads pages on demand,
+so batches are pulled from disk without loading a shard whole.
+""")
+
+    nb.code("""
+shards = {}
+for path in cache_files:
+    shards[path] = np.load(path, mmap_mode="r")
+    print(path.split("/")[-1], shards[path].shape)
+
+# Map each manifest row to (shard array, row index).
+def locate(row):
+    stem = row["shard_file"].split("/")[-1].replace("manifest_", "cache_").replace(".parquet", ".npy")
+    for path in shards:
+        if path.endswith(stem):
+            return path
+    return None
+
+manifest["cache_path"] = manifest.apply(locate, axis=1)
+missing = manifest["cache_path"].isna().sum()
+if missing:
+    print(f"WARNING: {missing} rows have no matching cache shard")
+    manifest = manifest[manifest["cache_path"].notna()].reset_index(drop=True)
+""")
+
+    nb.md("""
+## Splits
+
+Grouped by study, never by series. Series from one study are near-duplicates of
+each other — same knee, same session — so a random series split would put
+near-copies on both sides and report an accuracy that does not exist.
+""")
+
+    nb.code("""
+labelled = manifest[manifest["laterality_resolved"].notna()].reset_index(drop=True)
+unlabelled = manifest[manifest["laterality_resolved"].isna()].reset_index(drop=True)
+
+rng = np.random.default_rng(0)
+studies = labelled["StudyInstanceUID"].unique()
+rng.shuffle(studies)
+cut = int(0.85 * len(studies))
+train_studies = set(studies[:cut])
+
+train_rows = labelled[labelled["StudyInstanceUID"].isin(train_studies)].reset_index(drop=True)
+val_rows = labelled[~labelled["StudyInstanceUID"].isin(train_studies)].reset_index(drop=True)
+
+print(f"train {len(train_rows)} series / {train_rows['StudyInstanceUID'].nunique()} studies")
+print(f"val   {len(val_rows)} series / {val_rows['StudyInstanceUID'].nunique()} studies")
+print(f"to predict: {len(unlabelled)} series")
+print("\\nclass balance (train):")
+print(train_rows["laterality_resolved"].value_counts(normalize=True).to_string())
+""")
+
+    nb.md("""
+## Dataset
+
+Slices go in as ordered channels. For sagittal series the medial-lateral axis
+*is* the slice axis, so the side is encoded in the direction of travel through
+the volume and in nothing else — a single slice cannot express it, and pooling
+or sorting slices destroys it.
+
+Mirroring is the natural augmentation here: flipping the input along its
+medial-lateral axis flips the label. That doubles the data and stops the model
+keying on any left/right imbalance in the source institutions.
+""")
+
+    nb.code("""
+import torch
+from torch.utils.data import Dataset, DataLoader
+
+class SideDataset(Dataset):
+    def __init__(self, rows, augment=False):
+        self.rows = rows.reset_index(drop=True)
+        self.augment = augment
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, i):
+        row = self.rows.iloc[i]
+        volume = np.asarray(shards[row["cache_path"]][int(row["position"])])
+        x = side_classifier.prepare_batch(volume)[0]
+
+        side = row.get("laterality_resolved")
+        y = 1.0 if side == "R" else 0.0
+
+        if self.augment and np.random.rand() < 0.5:
+            # Mirror along the slice axis; label flips with it. Sagittal is the
+            # majority plane and this is the axis that matters there.
+            x = x[::-1].copy()
+            y = 1.0 - y
+
+        return torch.from_numpy(x), torch.tensor(y, dtype=torch.float32)
+
+
+train_loader = DataLoader(SideDataset(train_rows, augment=True), batch_size=32,
+                          shuffle=True, num_workers=2, drop_last=True)
+val_loader = DataLoader(SideDataset(val_rows), batch_size=64, num_workers=2)
+print("batches per epoch:", len(train_loader))
+""")
+
+    nb.md("## Train")
+
+    nb.code("""
+import time
+from tqdm.auto import tqdm
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = side_classifier.SideNet().to(device)
+optimiser = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+criterion = torch.nn.BCEWithLogitsLoss()
+
+EPOCHS = 6
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    optimiser, max_lr=1e-3, total_steps=EPOCHS * len(train_loader))
+
+best = 0.0
+for epoch in range(EPOCHS):
+    model.train()
+    for x, y in tqdm(train_loader, desc=f"epoch {epoch + 1}/{EPOCHS}"):
+        x, y = x.to(device), y.to(device)
+        optimiser.zero_grad()
+        loss = criterion(model(x), y)
+        loss.backward()
+        optimiser.step()
+        scheduler.step()
+
+    model.eval()
+    correct = total = 0
+    with torch.no_grad():
+        for x, y in val_loader:
+            probs = torch.sigmoid(model(x.to(device))).cpu().numpy()
+            correct += int(((probs >= 0.5) == y.numpy().astype(bool)).sum())
+            total += len(y)
+    accuracy = correct / total
+    print(f"  val accuracy {accuracy:.4f}")
+    if accuracy > best:
+        best = accuracy
+        torch.save(model.state_dict(), "/kaggle/working/side_model.pt")
+
+print(f"\\nbest validation accuracy: {best:.4f}")
+""")
+
+    nb.md("""
+## Sanity check the failures
+
+Before trusting the model, look at where it is wrong. If errors concentrate in
+one acquisition plane — sagittal being the plausible one, since the cue there
+is subtler — that is worth knowing rather than averaging away.
+""")
+
+    nb.code("""
+model.load_state_dict(torch.load("/kaggle/working/side_model.pt"))
+model.eval()
+
+probs = []
+with torch.no_grad():
+    for x, _ in DataLoader(SideDataset(val_rows), batch_size=64, num_workers=2):
+        probs.append(torch.sigmoid(model(x.to(device))).cpu().numpy())
+probs = np.concatenate(probs)
+
+truth = (val_rows["laterality_resolved"] == "R").to_numpy().astype(int)
+val_rows = val_rows.copy()
+val_rows["prob_right"] = probs
+val_rows["correct"] = (probs >= 0.5).astype(int) == truth
+
+print(f"series accuracy: {val_rows['correct'].mean():.4f}")
+
+votes = side_classifier.study_level_vote(probs, val_rows["StudyInstanceUID"].tolist())
+study_truth = val_rows.groupby("StudyInstanceUID")["laterality_resolved"].first()
+agree = sum(votes[s] == study_truth[s] for s in study_truth.index)
+print(f"study accuracy after voting: {agree / len(study_truth):.4f}")
+
+print("\\naccuracy by slice count:")
+val_rows["slices"] = pd.cut(val_rows["n_slices_raw"], [0, 20, 30, 40, 1000])
+print(val_rows.groupby("slices", observed=True)["correct"].agg(["mean", "size"]).to_string())
+""")
+
+    nb.md("""
+## Predict the unknown side and save
+
+Predictions are made per series, then voted per study — a study is one knee, so
+its series must agree, and voting across roughly five of them is more reliable
+than any single one.
+""")
+
+    nb.code("""
+unknown_loader = DataLoader(SideDataset(unlabelled), batch_size=64, num_workers=2)
+probs = []
+with torch.no_grad():
+    for x, _ in tqdm(unknown_loader, desc="predicting"):
+        probs.append(torch.sigmoid(model(x.to(device))).cpu().numpy())
+probs = np.concatenate(probs)
+
+votes = side_classifier.study_level_vote(probs, unlabelled["StudyInstanceUID"].tolist())
+
+predictions = unlabelled[["StudyInstanceUID", "SeriesInstanceUID"]].copy()
+predictions["prob_right"] = probs
+predictions["side_predicted"] = predictions["StudyInstanceUID"].map(votes)
+predictions["source"] = "model"
+
+known = labelled[["StudyInstanceUID", "SeriesInstanceUID"]].copy()
+known["prob_right"] = np.nan
+known["side_predicted"] = labelled["laterality_resolved"].values
+known["source"] = "tag"
+
+out = pd.concat([known, predictions], ignore_index=True)
+out.to_parquet("/kaggle/working/side_predictions.parquet", index=False)
+
+print(out["source"].value_counts().to_string())
+print(out["side_predicted"].value_counts().to_string())
+print(f"\\nwrote side_predictions.parquet  {out.shape}")
+""")
+
+    nb.md("""
+## Next
+
+`side_predictions.parquet` goes into `data/meta/`. The training loader mirrors
+each volume using `side_predicted`, along the axis chosen by acquisition plane —
+slice order for sagittal, columns for coronal and axial.
+""")
+
+    nb.write(NOTEBOOKS / "04_side_classifier.ipynb")
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
     build_cache_notebook()
     build_extract_notebook()
+    build_side_notebook()
 
 
 if __name__ == "__main__":
