@@ -1395,17 +1395,31 @@ import pandas as pd
 import torch
 
 
-def find_inputs(pattern, skip_competition=True):
+def find_inputs(pattern):
+    # Recursive, because an attached notebook output nests under
+    # /kaggle/input/notebooks/<user>/<notebook>/. The competition tree is
+    # excluded: ~820,000 DICOM files, and recursing it takes minutes.
     found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
     for root in sorted(glob.glob("/kaggle/input/*")):
-        if skip_competition and os.path.basename(root) == "competitions":
+        if os.path.basename(root) == "competitions":
             continue
         found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
     return found
 
 
-def find_one(pattern, **kwargs):
-    hits = find_inputs(pattern, **kwargs)
+def find_competition_file(name):
+    # The competition CSVs sit at a known shallow depth, so this is matched
+    # explicitly rather than by recursing 820,000 files to find a 6 MB csv.
+    for candidate in (f"/kaggle/input/competitions/*/{name}",
+                      f"/kaggle/input/*/{name}"):
+        hits = sorted(glob.glob(candidate))
+        if hits:
+            return hits[0]
+    raise SystemExit(f"missing competition file: {name}")
+
+
+def find_one(pattern):
+    hits = find_inputs(pattern)
     if not hits:
         raise SystemExit(f"missing input: {pattern}")
     return hits[0]
@@ -1449,8 +1463,8 @@ print(f"series: {len(manifest)}  studies: {manifest['StudyInstanceUID'].nunique(
 
 labels = pd.read_parquet(find_one("train_labels.parquet"))
 sides = pd.read_parquet(find_one("side_predictions.parquet"))
-series_meta = pd.read_csv(find_one("train_series.csv", skip_competition=False))
-train_csv = pd.read_csv(find_one("train.csv", skip_competition=False))
+series_meta = pd.read_csv(find_competition_file("train_series.csv"))
+train_csv = pd.read_csv(find_competition_file("train.csv"))
 
 gold = train_csv[train_csv["ACL"].notna()].reset_index(drop=True)
 print(f"mined labels: {len(labels)}  gold: {len(gold)}  sides: {len(sides)}")
