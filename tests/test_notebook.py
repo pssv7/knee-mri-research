@@ -152,3 +152,36 @@ class TestBootstrapReloads:
         source = self.bootstrap()
         tail = source[source.index('sys.path.insert(0, ".")'):]
         assert tail.index("del sys.modules[") < tail.index("from src import config")
+
+
+class TestGeneratorIsValid:
+    """The generator emitted a broken file and it was committed unnoticed.
+
+    A cell body containing a triple-quoted docstring terminates the
+    nb.code('''...''') string that carries it, so the generator itself stops
+    parsing. Nothing else in the suite reads the generator, so the failure
+    surfaced only on the next run of it.
+    """
+
+    def test_generator_parses(self):
+        path = os.path.join(ROOT, "tools", "make_notebook.py")
+        with open(path) as handle:
+            ast.parse(handle.read())
+
+    def test_every_notebook_is_present_and_parses(self):
+        directory = os.path.join(ROOT, "notebooks")
+        notebooks = [f for f in os.listdir(directory) if f.endswith(".ipynb")]
+        assert len(notebooks) >= 4, notebooks
+        for name in notebooks:
+            with open(os.path.join(directory, name)) as handle:
+                cells = json.load(handle)["cells"]
+            for index, cell in enumerate(cells):
+                if cell["cell_type"] != "code":
+                    continue
+                source = "".join(cell["source"])
+                if source.lstrip().startswith("!"):
+                    continue
+                try:
+                    ast.parse(source)
+                except SyntaxError as exc:
+                    pytest.fail(f"{name} cell {index}: {exc}")

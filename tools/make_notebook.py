@@ -909,13 +909,11 @@ import pandas as pd
 
 
 def find_inputs(pattern):
-    """Search attached inputs at any depth.
-
-    A dataset mounts at /kaggle/input/<name>/ but an attached notebook output
-    nests under /kaggle/input/notebooks/<user>/<notebook>/, so a fixed depth
-    misses one of them. The competition directory is skipped: it holds ~820,000
-    DICOM files and is never where these live.
-    """
+    # Search attached inputs at any depth. A dataset mounts at
+    # /kaggle/input/<name>/ but an attached notebook output nests under
+    # /kaggle/input/notebooks/<user>/<notebook>/, so a fixed depth misses one
+    # of them. The competition directory is skipped: it holds ~820,000 DICOM
+    # files and is never where these live.
     found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
     for root in sorted(glob.glob("/kaggle/input/*")):
         if os.path.basename(root) == "competitions":
