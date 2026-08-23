@@ -1596,8 +1596,11 @@ def train_fold(train_studies, val_studies, seed=0):
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimiser, max_lr=LR * 3, total_steps=EPOCHS * len(train_loader))
 
-    for _ in range(EPOCHS):
+    # Per-epoch rather than per-fold: a bar that only ticks once a fold
+    # completes is indistinguishable from a hang for ten minutes at a time.
+    for epoch in tqdm(range(EPOCHS), desc=f"fold {seed}", leave=False):
         model.train()
+        running = 0.0
         for batch in train_loader:
             optimiser.zero_grad()
             logits = model.forward_features(
@@ -1608,6 +1611,10 @@ def train_fold(train_studies, val_studies, seed=0):
             loss.backward()
             optimiser.step()
             scheduler.step()
+            running += float(loss)
+        if epoch == 0 or (epoch + 1) % 4 == 0:
+            print(f"    fold {seed} epoch {epoch + 1}/{EPOCHS} "
+                  f"loss {running / len(train_loader):.4f}", flush=True)
 
     return model, val_loader
 
