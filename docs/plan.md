@@ -58,7 +58,9 @@ suggests the relevant anatomy is not reaching the network rather than that
 the network is too small — a meniscal tear can occupy one or two slices, and
 8 of 24 evenly-spaced slices can miss it outright.
 
-1. **`SLICES_PER_SERIES` 8 → 16 — implemented, ready to run.** `BATCH_STUDIES`
+1. **`SLICES_PER_SERIES` 8 → 16 — DONE, honest gold 0.817 → 0.840.** The
+   largest single gain on the project; submission pending. Everything below
+   this line is now the live ladder. `BATCH_STUDIES`
    drops to 2 so the per-step image count is unchanged (2 × 3 × 16 = 96), and
    `ACCUM_STEPS` is now derived (`8 // (BATCH_STUDIES × DEVICES)`) so the
    effective batch stays at eight studies on one GPU or two. Notebook 08 also

@@ -38,21 +38,34 @@ in train but **not** in test, so text is a training-time signal only.
 each other at 0.94+, which means a known recipe exists and the gap is structural
 rather than a matter of tuning.
 
-### The leading hypothesis is now under active challenge
+### The leading hypothesis was wrong, and the replacement is measured
 
 The original reading: fused labels scored 0.854 against the gold 58, the model
 trained on them scored 0.845, so the model sat at its label ceiling rather than
 its own — and 0.854 is low for what is essentially reading comprehension.
 
-**That prediction has now been tested and did not hold.** Labels improved to
-0.891 (+0.037 on gold) and the leaderboard moved −0.002. Two candidate
-explanations were found and fixed in the delivery of those labels rather than
-in the labels themselves — target-shape dilution (fixed by
-`fuse.sharpen_targets`, worth +0.016) and a silently retired silence
-down-weighting (fixed in `mode_fusion.combine`, untested as of this writing).
-Until a fold-0 run trains on correctly-weighted new labels, the competing
-hypothesis — that the imaging pipeline, not the labels, is now the binding
-constraint — has not had a fair test. `docs/plan.md` holds the decision.
+**That prediction was tested three times and did not hold.** Labels improved to
+0.891 (+0.037 on gold) and the leaderboard moved −0.002 across three label
+configurations. Two delivery bugs were found and fixed along the way
+(target-shape dilution, worth +0.016; a silently retired silence
+down-weighting), and neither closed the gap.
+
+**Capacity was the binding constraint.** Doubling slices per series from 8 to
+16 — nothing else changed — lifted honest gold from 0.817 to **0.840**, the
+largest single gain measured on this project and well outside the ±0.02 noise
+floor of the gold 58. Honest gold by configuration:
+
+| configuration | honest gold |
+|---|---|
+| 8 slices, sharpened labels | 0.827 |
+| 8 slices, + silence weights | 0.817 |
+| **16 slices, same labels** | **0.840** |
+
+The reading now: at 8 of 24 slices the model could not see enough of the knee
+to use the label quality it already had. Label work is not exhausted, but it
+is no longer the first lever. `docs/plan.md` holds the remaining ladder —
+series count (3 of ~5.5) is the next rung, and its per-finding case is
+recorded there.
 
 **The mechanism was diagnosed and is concrete.** The categorical extractor ties
 **369 of 696 label slots** on a single value:

@@ -50,16 +50,17 @@ Kaggle GPUs. Not yet run.**
   rather than training quietly on short volumes.
 - New `src/model/lightning.py` holding the dataset, LightningModule, an
   epoch reporter, and the checkpoint exporter. It lives in `src/` rather than
-  a notebook cell because `ddp_notebook` spawns and pickles: a class defined
-  in a cell belongs to `__main__` and does not survive, the same rule that
+  a notebook cell because dataloader workers and the spawn start method
+  pickle: a class defined in a cell belongs to `__main__` and does not
+  survive that. (`ddp_notebook` itself forks -- corrected below.) Same rule that
   put the cache's pool worker in `src/data/cache.py`.
 - Three DDP hazards handled explicitly, each of which fails silently:
   memmaps are opened lazily per process and dropped in `__getstate__` (so
   ~29 GB never gets serialised into a worker); AUC is computed over
   all-gathered predictions, since averaging per-rank AUCs is not the AUC of
   the set; and the checkpoint is exported by reading the file rather than a
-  module in memory, because the process that calls `fit` under spawn is not
-  the process that trained.
+  module in memory, because the process that calls `fit` is not the process
+  that trained.
 - **A test caught a real bug before it reached Kaggle**: the prediction buffer
   was named `self._buffers`, which collides with `nn.Module`'s reserved
   attribute and corrupts `state_dict`, `load_state_dict`, and `.to(device)`.
