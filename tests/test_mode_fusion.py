@@ -153,11 +153,14 @@ class TestFrameContract:
             scores = mode_fusion.combine(cat, prob, strategy)["ACL"]
             assert ((scores >= 0.0) & (scores <= 1.0)).all()
 
-    def test_informative_is_either_mode(self):
+    def test_informative_tracks_the_categorical_mode_only(self):
+        # See TestSilenceSurvivesProbabilities: a probability estimate for an
+        # unmentioned finding is a context guess, not an assertion, and must
+        # not lift the row off WEIGHT_SILENT.
         cat = cat_frame([1, None, None, None], [1.0, None, None, None])
         prob = prob_frame([np.nan, 0.3, np.nan, 0.9])
         combined = mode_fusion.combine(cat, prob)
-        assert list(combined["ACL_informative"]) == [True, True, False, True]
+        assert list(combined["ACL_informative"]) == [True, False, False, False]
 
     def test_call_prefers_the_categorical_verdict(self):
         # A categorical negative with a high probability stays a negative
@@ -209,6 +212,59 @@ class TestFuseScoresEquivalence:
             assert np.allclose(old[name], new[name]), name
             assert np.allclose(old[f"{name}_weight"],
                                new[f"{name}_weight"]), name
+
+
+class TestSilenceSurvivesProbabilities:
+    """The probability mode must not retire the silence down-weighting.
+
+    It answers for every finding, including ones the report never mentions,
+    so treating "it emitted a number" as informative would lift 34.5% of
+    slots off WEIGHT_SILENT and train hard on the least trustworthy third of
+    the corpus. The estimate still orders those studies; it just does not
+    get to claim certainty.
+    """
+
+    def test_probability_alone_is_not_informative(self):
+        cat = cat_frame([None, None, 1], [None, None, 1.0])
+        prob = prob_frame([0.9, 0.2, 0.9])
+        combined = mode_fusion.combine(cat, prob)
+        assert list(combined["ACL_informative"]) == [False, False, True]
+
+    def test_silent_rows_keep_their_probability_ordering(self):
+        # Weight goes down, but the target still ranks the silent studies.
+        cat = cat_frame([None, None, None], [None, None, None])
+        prob = prob_frame([0.1, 0.8, 0.4])
+        combined = mode_fusion.combine(cat, prob)
+        scores = combined["ACL"].to_numpy()
+        assert scores[0] < scores[2] < scores[1]
+        assert not combined["ACL_informative"].any()
+
+    def test_weights_match_the_categorical_only_pipeline(self):
+        # The invariant that would have caught the regression: adding a
+        # probability frame changes targets, never sample weights.
+        rng = np.random.default_rng(11)
+        n = 60
+        lex = {config.ID_COL: [f"s{i}" for i in range(n)]}
+        cat = {config.ID_COL: [f"s{i}" for i in range(n)]}
+        prob = {config.ID_COL: [f"s{i}" for i in range(n)]}
+        for name in config.LABELS:
+            lex[name] = list(rng.choice([1, 0, None], n))
+            lex[f"{name}_severity"] = list(rng.choice([1.0, 0.5, None], n))
+            cat[name] = list(rng.choice([1, 0, None], n))
+            cat[f"{name}_severity"] = list(rng.choice([1.0, 0.35, None], n))
+            cat[f"{name}_confidence"] = list(rng.uniform(0.5, 1.0, n))
+            prob[name] = list(rng.uniform(0.01, 0.99, n))
+            prob[f"{name}_confidence"] = list(rng.uniform(0.5, 1.0, n))
+        lex, cat, prob = (pd.DataFrame(lex), pd.DataFrame(cat),
+                          pd.DataFrame(prob))
+
+        cat_only = fuse.fuse_scores(lex, mode_fusion.from_categorical(cat))
+        dual = fuse.fuse_scores(lex, mode_fusion.combine(cat, prob))
+        for name in config.LABELS:
+            assert np.array_equal(cat_only[f"{name}_weight"],
+                                  dual[f"{name}_weight"]), name
+        # And the targets did move, or the test proves nothing.
+        assert not np.allclose(cat_only["ACL"], dual["ACL"])
 
 
 class TestSharpenTargets:

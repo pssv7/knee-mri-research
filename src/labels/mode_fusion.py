@@ -144,9 +144,11 @@ def combine(cat_frame: pd.DataFrame, prob_frame: pd.DataFrame,
     """Merge the two extraction modes into one score frame.
 
     Output has, per finding: `<name>` (score in [0, 1]), `<name>_informative`
-    (either mode said something), and `<name>_call` (the positive/negative
-    call used for agreement weighting downstream -- the categorical call where
-    it exists, else probability >= 0.5).
+    (the *categorical* mode asserted something -- see the comment below, this
+    deliberately excludes the probability mode's context-guesses), and
+    `<name>_call` (the positive/negative call used for agreement weighting
+    downstream -- the categorical call where it exists, else probability
+    >= 0.5).
     """
     merged = cat_frame.merge(prob_frame, on=config.ID_COL,
                              suffixes=("", "_prob"))
@@ -171,7 +173,17 @@ def combine(cat_frame: pd.DataFrame, prob_frame: pd.DataFrame,
         combined = _combine_finding(cat_score, cat_ok, prob, prob_conf,
                                     cat_conf, strategy)
         output[name] = np.clip(combined, 0.0, 1.0)
-        output[f"{name}_informative"] = cat_ok | has_prob
+        # Informative means an extractor *asserted* something, which only the
+        # categorical mode tracks. The probability mode is never silent -- its
+        # prompt asks it to estimate unmentioned findings from context -- so
+        # `cat_ok | has_prob` would be True everywhere and would silently
+        # retire the silence down-weighting. That is not a free change: 34.5%
+        # of slots are both-silent, and lifting them from WEIGHT_SILENT to
+        # WEIGHT_SINGLE puts 2.8x the training mass on the least trustworthy
+        # third of the corpus. The probability estimate still ranks studies
+        # inside that block, which is the tie-breaking gain worth having --
+        # the value is kept, the certainty is not asserted.
+        output[f"{name}_informative"] = cat_ok
         output[f"{name}_call"] = np.where(
             cat_ok, cat_score > 0, np.where(has_prob, prob >= 0.5, False)
         ).astype(bool)

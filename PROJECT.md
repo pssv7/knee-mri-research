@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-24 (fold-0 LB 0.827 diagnosed as target-shape dilution; sharpened labels ready).
+Last updated: 2026-08-24 (sharpened fold-0 LB 0.843; silence weighting restored, clean fold-0 pending).
 
 ---
 
@@ -27,7 +27,9 @@ in train but **not** in test, so text is a training-time signal only.
 |---|---|
 | Frozen DINOv2-S + aggregation | 0.787 |
 | Frozen + fine-tuned, 50/50 blend | 0.839 |
-| **Fine-tuned ConvNeXt-T alone** | **0.845 ← best** |
+| **Fine-tuned ConvNeXt-T, categorical labels** | **0.845 ← best** |
+| Fine-tuned ConvNeXt-T, dual-mode soft labels | 0.827 |
+| Fine-tuned ConvNeXt-T, dual-mode sharpened | 0.843 |
 | Leaderboard top | 0.952 |
 | Leaderboard 20th | 0.941 |
 
@@ -35,12 +37,21 @@ in train but **not** in test, so text is a training-time signal only.
 each other at 0.94+, which means a known recipe exists and the gap is structural
 rather than a matter of tuning.
 
-### The leading hypothesis: labels, not models
+### The leading hypothesis is now under active challenge
 
-Fused training labels score **0.854** against the gold 58. The model trained on
-them scores **0.845**. The model is at its label ceiling, not its own. And 0.854
-is low for what is essentially reading comprehension — the reports describe
-these findings explicitly.
+The original reading: fused labels scored 0.854 against the gold 58, the model
+trained on them scored 0.845, so the model sat at its label ceiling rather than
+its own — and 0.854 is low for what is essentially reading comprehension.
+
+**That prediction has now been tested and did not hold.** Labels improved to
+0.891 (+0.037 on gold) and the leaderboard moved −0.002. Two candidate
+explanations were found and fixed in the delivery of those labels rather than
+in the labels themselves — target-shape dilution (fixed by
+`fuse.sharpen_targets`, worth +0.016) and a silently retired silence
+down-weighting (fixed in `mode_fusion.combine`, untested as of this writing).
+Until a fold-0 run trains on correctly-weighted new labels, the competing
+hypothesis — that the imaging pipeline, not the labels, is now the binding
+constraint — has not had a fair test. `docs/plan.md` holds the decision.
 
 **The mechanism was diagnosed and is concrete.** The categorical extractor ties
 **369 of 696 label slots** on a single value:
@@ -160,7 +171,7 @@ docs/
   worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   259 tests
+tests/                   262 tests
 ```
 
 ---

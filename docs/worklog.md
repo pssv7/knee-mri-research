@@ -5,6 +5,44 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-24 (b) — sharpened fold-0 LB 0.843; silence weighting found retired
+
+**Outcome: sharpening recovered +0.016 (0.827 → 0.843) but still ties the
+old-label baseline 0.845. Selection exonerated. Root cause of the remaining
+gap identified as a second half of the same bundled change: the probability
+extractor silently retired the silence down-weighting.**
+
+- Sharpened fold-0: gold 0.827 at the selected epoch, **LB 0.843**. Three
+  fold-0 points now exist: old labels 0.845, soft dual 0.827, sharpened dual
+  0.843 — labels improved 0.854 → 0.891 on gold (+0.037) and the LB moved
+  −0.002. The label gain is not reaching the model.
+- **Selection exonerated.** Val peaked epoch 10 (0.846, gold 0.827); gold's
+  own peak was epoch 7 (0.829). Val's pick costs 0.002 against an oracle
+  selecting on gold, and both curves flatten after epoch 10, so 12 epochs is
+  the right length. The validation signal is working as designed.
+- **Root cause found by auditing the weights, not the targets.** The
+  probability mode answers for every finding, so `_informative` was true
+  everywhere and `WEIGHT_SILENT` never fired: 34.5% of slots (both
+  extractors silent) went from 0.25 to 0.7+, a **2.8x increase in training
+  mass on the least trustworthy third of the corpus**. Mean weight 0.63 →
+  0.78. This contradicted a documented design decision ("silence is weighted
+  down, not imputed") and was never a deliberate change — the label swap
+  moved targets *and* weights together, the bundling the playbook warns of.
+- Fix: `_informative` now tracks the categorical mode alone, which is the
+  only extractor with a mention signal. The probability estimate still
+  orders studies inside the silent block (the tie-breaking gain is kept);
+  it just no longer asserts certainty. Verified: weights are now bit-for-bit
+  identical to the old pipeline (mean 0.625, 34.5% at WEIGHT_SILENT), gold
+  AUC unchanged at 0.891, targets still dual-mode and 75% extreme.
+- Three new tests, including the invariant that would have caught this:
+  adding a probability frame must change targets and never weights. Suite
+  at 262.
+- **Consequence for the standing hypotheses:** the capacity hypothesis has
+  *not* had a clean test — the model has never trained on the new labels
+  with correct weighting. Capacity (Phase B) waits one more fold-0 run.
+
+---
+
 ## 2026-08-24 — fold-0 LB 0.827: soft targets diagnosed, sharpening added
 
 **Outcome: the fold-0 gate fired (LB 0.827 vs old 0.845); the regression was

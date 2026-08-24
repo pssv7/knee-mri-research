@@ -3,48 +3,71 @@
 State document: `PROJECT.md` (read it first; it holds what exists and what
 failed). This file holds only what happens next and the gates between steps.
 
-Position as of 2026-08-24: training labels score 0.891 on gold (was 0.854).
-Fold 0 retrained on them scored **LB 0.827 against the old fold-0's 0.845** —
-the gate caught it before folds 1–4 were spent. Diagnosis: the dual-mode
-targets rank better but drained the confident mass out of the distribution
-(extreme targets 73% → 60% of slots; Medial Meniscus mid-zone 35% → 63%) while
-mean sample weight rose 0.63 → 0.78 — more mushy targets, counted harder,
-with weaker gradients. The fix is `fuse.sharpen_targets`: a strictly monotone
-quantile map back onto the categorical fusion's shape, which preserves the
-0.891 gold AUC exactly (verified) while restoring 75% extreme targets.
+Position as of 2026-08-24. Three fold-0 submissions now exist:
+
+| labels | gold (labels) | gold (model) | LB |
+|---|---|---|---|
+| categorical, leaked selection | 0.854 | 0.825 | 0.845 |
+| dual-mode soft | 0.891 | 0.816 | 0.827 |
+| dual-mode sharpened | 0.891 | 0.827 | 0.843 |
+
+**Labels improved 0.037 on gold; the leaderboard moved −0.002.** Sharpening
+recovered most of the soft-label regression. Selection is exonerated (val
+peaked epoch 10, gold's own peak was epoch 7, a 0.002 difference). The
+remaining cause was found in the *weights*, not the targets: the probability
+extractor answers for every finding, so `WEIGHT_SILENT` never fired and 34.5%
+of slots — the both-silent third of the corpus — carried 2.8x their intended
+training mass. Fixed; weights are now bit-for-bit identical to the old
+pipeline while targets keep the dual-mode ordering and sharpened shape.
 
 ---
 
-## Phase A — five-fold cycle (restarted on sharpened labels)
+## Phase A — one clean fold-0 (the capacity hypothesis needs a fair test)
 
-1. Upload the sharpened `train_labels.parquet` as a new `knee-labels`
-   version; rerun notebook 08 with `FOLD = 0` (~1.5 h).
-2. **Gate**: fold-0 submission LB must beat 0.845 (old labels) — 0.827
-   (soft labels) merely beaten is not enough to justify five folds.
-   - **LB > 0.845** → folds 1–4, five-fold submission.
-   - **LB ≈ 0.83–0.845** → the ordering gain isn't reaching the model;
-     inspect the epoch logs for a selection-signal problem (val binarised at
-     0.5 against sharp targets is cleaner truth, but check where gold peaked
-     vs where val selected) before touching capacity.
-   - **LB < 0.83** → something else regressed; diff the two runs' epoch logs
-     before any further training.
-3. Folds 1–4: four sessions, editing only `FOLD`; same shards, same labels
-   version. Upload all five `convnext_fold*.pt` to `knee-convnxt` (replace,
-   don't accumulate — notebook 10 globs and averages everything it finds).
-   Save & Run All on notebook 10, submit. Five folds historically buy
-   +0.005–0.010.
+The model has never trained on the new labels with correct weighting, so
+Phase B's trigger cannot be evaluated yet. This run is a single-variable
+change from the 0.843 run: **only the sample weights differ.**
 
-## Phase B — capacity ladder (only if the model trails its labels badly)
+1. Upload the rebuilt `train_labels.parquet` as a new `knee-labels` version;
+   rerun notebook 08 with `FOLD = 0` (~1.5 h); submit fold-0 alone.
+2. **Gate**:
+   - **LB > 0.845** → the label gain is finally reaching the model. Run
+     folds 1–4 and submit the five-fold ensemble (+0.005–0.010 historically).
+   - **LB ≈ 0.843–0.845** → labels are not the binding constraint at this
+     capacity. The capacity hypothesis is then cleanly convicted → Phase B.
+   - **LB < 0.83** → the weight change hurt; that would mean silence carries
+     more signal than assumed, which is itself informative. Revert and go to
+     Phase B.
+3. Do **not** run folds 1–4 on a config that merely ties 0.845. Five folds
+   multiply a config; they do not rescue one. Bank the current checkpoint as
+   the fallback and spend quota on finding a better config first.
 
-Trigger: fold-0 LB ≤ 0.845, or the five-fold LB lands more than ~0.03 below
-the labels' 0.891. One change at a time, each measured as a fold-0 run
-against the Phase A fold-0 baseline before buying five folds of it:
+## Phase B — capacity ladder
 
-1. `SLICES_PER_SERIES` 8 → 16 (~2x epoch time).
-2. `max_series` 3 → 5 (most studies have ~5.5 series).
+Trigger: the Phase A clean fold-0 fails to beat 0.845. One change at a time,
+each measured as a fold-0 run against the 0.843 baseline before buying five
+folds of it.
+
+**The per-finding evidence points at coverage, not raw capacity.** From the
+sharpened run, the tuned model beats frozen DINOv2 enormously on some
+findings (MCL +0.217, Fracture +0.118, Contusion +0.090) yet *loses* on
+Lateral OA (0.795 vs 0.899) and PF OA (0.725 vs 0.772), and its weakest
+findings are the focal ones (Lateral Meniscus 0.725, PF OA 0.725, Synovitis
+0.730, Medial Meniscus 0.750). Losing to frozen natural-image features
+suggests the relevant anatomy is not reaching the network rather than that
+the network is too small — a meniscal tear can occupy one or two slices, and
+8 of 24 evenly-spaced slices can miss it outright.
+
+1. `SLICES_PER_SERIES` 8 → 16 (~2x epoch time → ~2.8 h for 12 epochs).
+   **Will likely OOM on a T4 at the current batch shape** (4 studies × 3
+   series × 16 slices = 192 images/step). Drop `BATCH_STUDIES` 4 → 2 and
+   raise `ACCUM_STEPS` 2 → 4 to hold the effective batch constant.
+2. `max_series` 3 → 5 (most studies have ~5.5). Cheaper than slices and the
+   likelier fix for PF OA specifically, since the patella may simply be
+   absent from the three series currently chosen.
 3. Backbone ConvNeXt-T → ConvNeXt-S.
-4. Resolution last — 224 → 384 requires rebuilding the 29 GB cache; expensive,
-   only if everything else plateaus.
+4. Resolution last — 224 → 384 requires rebuilding the 29 GB cache;
+   expensive, only if everything else plateaus.
 
 ## Phase C — extraction v3 (the lever that reaches toward 0.94)
 
