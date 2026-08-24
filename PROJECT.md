@@ -62,7 +62,9 @@ Data. The label extractor therefore runs locally on a Colab GPU.
 | Submission | done — **public LB 0.787** |
 | Spatial embeddings (grid 4) | **tried, worse** — gold 0.747 vs 0.770 |
 | Fine-tuned ConvNeXt-T | done — gold 0.825 (one fold) |
-| Ensemble submission | done — **public LB 0.839** |
+| Ensemble submission | done — 0.839 |
+| Fine-tuned alone | done — **public LB 0.845, best so far** |
+| Probability labels | **in progress — the main lever** |
 
 ### The numbers that matter
 
@@ -341,12 +343,42 @@ Rank-blended, 50/50. The leaderboard progression:
 | Frozen DINOv2 alone | 0.787 |
 | **Frozen + fine-tuned, rank-blended** | **0.839** |
 
-**Open question worth one submission.** The tuned model has never been
-submitted alone, so the +0.052 cannot be split between "fine-tuning is better"
-and "blending helps". Setting `BLEND = 1.0` answers it, and the answer matters
-for the Efficiency Prize: running both paths roughly doubles inference, and if
-the blend adds nothing over the tuned model alone, dropping the frozen path is
-free score on that track.
+**Answered: the frozen path hurts.**
+
+| submission | public LB |
+|---|---|
+| Frozen alone | 0.787 |
+| Frozen + tuned, 50/50 | 0.839 |
+| **Tuned alone** | **0.845** |
+
+The blend lands between the two single models, which is what averaging a weak
+and a strong ranker does. The per-finding complementarity measured on 58 gold
+studies did not survive as a net gain on the real test set -- a reminder of how
+little 58 studies can settle.
+
+Dropping the frozen path raises the score and halves inference cost, which the
+Efficiency Prize charges for directly. Submit with `BLEND = 1.0`.
+
+## The real gap
+
+Top of the leaderboard is 0.952, with twenty teams inside 0.011 of each other
+at 0.94+. Our 0.845 is roughly 0.10 behind, and a cluster that tight means a
+known recipe rather than incremental tuning.
+
+**The labels are the leading suspect.** Fused labels score 0.854 against gold
+and the model trained on them scores 0.845 -- the model is at its label
+ceiling, not its own. And 0.854 is low for what is essentially reading
+comprehension: the reports describe these findings explicitly.
+
+The diagnosis: the categorical extractor ties **369 of 696 label slots** on a
+single value. Baker's ties 41 of 58 studies, Fracture 41, Synovitis 37. AUC is
+a ranking metric and cannot order studies inside a tie block, so more than half
+the training signal carries no ordering information at all.
+
+The fix in flight is probability-valued extraction -- ask for 0-100 per finding
+rather than a category, which breaks the ties and lets unmentioned findings be
+ranked by context. Iterate it against the 58 gold reports, where a loop takes
+seconds, before spending an hour on 4,349.
 
 ### Older notes: fine-tuned ConvNeXt-T (notebook 08)
 
