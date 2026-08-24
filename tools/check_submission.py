@@ -96,11 +96,20 @@ def build_fake_checkpoints(target: pathlib.Path):
     # The fine-tuned arm: a real timm backbone so the state dict has the
     # shape the ensemble notebook will load. Two folds, so the check exercises
     # the same multi-checkpoint averaging a five-fold upload goes through.
-    for fold in range(2):
-        backbone = timm.create_model("convnext_tiny.fb_in22k_ft_in1k",
-                                     pretrained=False, num_classes=0, in_chans=3)
-        torch.save(net.KneeNet(backbone, backbone.num_features).state_dict(),
-                   target / f"convnext_fold{fold}.pt")
+    #
+    # CHECK_OMIT_TUNED=1 leaves them out, which is not a broken run but a
+    # deliberate one: with BLEND=1.0 the frozen checkpoints below still exist,
+    # so a naive "did any checkpoint turn up?" guard passes and the notebook
+    # goes on to write a submission of NaN. The notebook must refuse instead.
+    if os.environ.get("CHECK_OMIT_TUNED") == "1":
+        print("  (omitting the tuned checkpoints on purpose)")
+    else:
+        for fold in range(2):
+            backbone = timm.create_model("convnext_tiny.fb_in22k_ft_in1k",
+                                         pretrained=False, num_classes=0,
+                                         in_chans=3)
+            torch.save(net.KneeNet(backbone, backbone.num_features).state_dict(),
+                       target / f"convnext_fold{fold}.pt")
 
     import pandas as pd
     from src import config
@@ -162,11 +171,30 @@ def main():
             try:
                 exec(source, namespace)  # noqa: S102
                 print(f"  cell {index}: OK")
+            except SystemExit as exc:
+                # SystemExit is how the notebooks refuse a bad configuration,
+                # and it is a BaseException, so it would otherwise sail past
+                # the handler below and end the check with a zero status.
+                expected = (os.environ.get("CHECK_OMIT_TUNED") == "1"
+                            and "convnext_fold" in str(exc))
+                os.chdir(ROOT)
+                if expected:
+                    print(f"  cell {index}: refused as intended -- {exc}")
+                    print("\nthe missing-tuned guard fired")
+                    return 0
+                print(f"  cell {index}: FAILED (refused) -- {exc}")
+                return 1
             except Exception:
                 print(f"  cell {index}: FAILED")
                 traceback.print_exc()
                 os.chdir(ROOT)
                 return 1
+
+        if os.environ.get("CHECK_OMIT_TUNED") == "1":
+            os.chdir(ROOT)
+            print("\nFAILED: ran to completion without the tuned checkpoints; "
+                  "the guard did not fire and the submission would be NaN")
+            return 1
 
         submission = working / "submission.csv"
         print(f"\nsubmission.csv exists: {submission.exists()}")

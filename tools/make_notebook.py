@@ -2829,8 +2829,19 @@ print(f"frozen folds: {len(frozen_models)} (pool grid {embed.POOL_GRID})"
       + ("" if USE_FROZEN else "  [skipped, BLEND=1.0]"))
 print(f"tuned folds : {len(tuned_models)}"
       + ("" if USE_TUNED else "  [skipped, BLEND=0.0]"))
-if not frozen_models and not tuned_models:
-    raise SystemExit("no model checkpoints found")
+# Check the paths the blend actually uses, not whether any checkpoint at all
+# turned up. A BLEND of 1.0 with the frozen weights attached and the tuned
+# ones missing passes an "is anything here?" test, then skips the frozen path
+# by design and predicts None for every study -- which becomes an empty frame
+# and a submission of NaN, several cells later and far from the cause.
+if USE_TUNED and not tuned_models:
+    raise SystemExit(
+        f"BLEND={BLEND} needs the tuned path, but no convnext_fold*.pt was "
+        "found. Attach the dataset holding the fine-tuned checkpoints.")
+if USE_FROZEN and not frozen_models:
+    raise SystemExit(
+        f"BLEND={BLEND} needs the frozen path, but no knee_fold*.pt was "
+        "found. Attach the frozen training output.")
 
 try:
     train_labels = pd.read_parquet(find_one("train_labels.parquet"))
@@ -2987,6 +2998,13 @@ elif frozen_matrix is not None and tuned_matrix is not None:
     blended = BLEND * tuned_matrix + (1 - BLEND) * frozen_matrix
 else:
     blended = tuned_matrix if tuned_matrix is not None else frozen_matrix
+
+# pd.DataFrame(None, columns=...) is an empty frame, not an error, and the
+# insert below would then pad it into rows of NaN. Say so here instead.
+if blended is None:
+    raise SystemExit(
+        "no predictions to write: every row of the active path was None. "
+        "Check the fold counts printed above.")
 
 submission = pd.DataFrame(blended, columns=config.LABELS)
 submission.insert(0, config.ID_COL, ids)

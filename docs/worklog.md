@@ -5,6 +5,30 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-24 (e) — a missing input became a submission of NaN
+
+The sixteen-slice submission failed its own validator with "missing
+predictions". Cause was not the model: `knee-convnxt` was not attached, so
+`find_inputs("convnext_fold*.pt")` returned nothing and every tuned
+prediction was None.
+
+- The guard asked whether *any* checkpoint had been found. With `BLEND = 1.0`
+  the attached frozen weights satisfied it, the frozen path was then skipped
+  by design, and `pd.DataFrame(None, columns=...)` produced an empty frame
+  that the id insert padded into rows of NaN -- several cells downstream of
+  the actual problem, and printed as `tuned folds : 0` where it was easy to
+  scroll past.
+- Guards now check the paths the blend actually uses, and a `blended` of None
+  refuses before the frame is built. `check_submission.py` gained
+  `CHECK_OMIT_TUNED=1`, which withholds the tuned checkpoints and asserts the
+  notebook refuses; verified both ways. Four tests.
+- The reason this reached a submission at all: notebook 08's section 7 scores
+  gold *from the exported checkpoint* and would have caught an export
+  problem, but the earlier reporting crash meant it never ran. Export
+  verification is not optional before notebook 10.
+
+---
+
 ## 2026-08-24 (d) — 16 slices: honest gold 0.817 -> 0.840
 
 **Outcome: the capacity change is the largest single gain measured on this

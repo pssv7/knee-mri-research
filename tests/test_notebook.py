@@ -201,3 +201,36 @@ class TestGeneratorIsValid:
                     ast.parse(as_python("".join(cell["source"])))
                 except SyntaxError as exc:
                     pytest.fail(f"{name} cell {index}: {exc}")
+
+
+class TestSubmissionGuardsTheActivePath:
+    """A missing checkpoint must refuse, not produce a submission of NaN.
+
+    With `BLEND = 1.0` the frozen path is skipped by design. If the tuned
+    checkpoints are also absent, a guard that merely asks "did any checkpoint
+    turn up?" is satisfied by the frozen ones, every prediction comes back
+    None, and `pd.DataFrame(None, columns=...)` becomes an empty frame that
+    the id insert pads into rows of NaN. That reached a real submission once.
+
+    `python tools/check_submission.py` with CHECK_OMIT_TUNED=1 exercises the
+    same thing end to end.
+    """
+
+    def _ensemble_source(self):
+        source = open(os.path.join(ROOT, "tools", "make_notebook.py")).read()
+        return source[source.index("def build_ensemble_notebook"):]
+
+    def test_guard_is_conditioned_on_the_active_path(self):
+        ensemble = self._ensemble_source()
+        assert "if USE_TUNED and not tuned_models:" in ensemble
+        assert "if USE_FROZEN and not frozen_models:" in ensemble
+
+    def test_the_old_any_checkpoint_guard_is_gone(self):
+        ensemble = self._ensemble_source()
+        assert "if not frozen_models and not tuned_models:" not in ensemble
+
+    def test_empty_predictions_refuse_before_the_frame_is_built(self):
+        ensemble = self._ensemble_source()
+        guard_at = ensemble.index("no predictions to write")
+        frame_at = ensemble.index("submission = pd.DataFrame(blended")
+        assert guard_at < frame_at
