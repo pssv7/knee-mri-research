@@ -5,6 +5,34 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-24 (d) — 16 slices: honest gold 0.817 -> 0.840
+
+**Outcome: the capacity change is the largest single gain measured on this
+project. Submission pending.**
+
+Per-epoch, two T4s, effective batch held at eight studies:
+
+    epoch   1     4     7     9    12
+    val   0.727 0.847 0.860 0.858 0.854
+    gold  0.700 0.835 0.840 0.842 0.839
+
+- Selected epoch 7 (val peak 0.860), gold there **0.840**. Gold's own peak was
+  0.842 at epoch 9, so validation-fold selection cost 0.002 -- consistent with
+  every prior run and further evidence the selection signal is sound.
+- Epoch 1 val 0.727 sat inside the 0.73-0.75 band predicted from the 8-slice
+  runs, which was the agreed check that the DDP port had not silently broken
+  something. It had not.
+- Honest gold by configuration: 0.827 (8 slices, sharpened) -> 0.817 (plus
+  silence weights) -> **0.840** (16 slices). The capacity hypothesis, which
+  the label experiments pointed at by elimination, is confirmed on gold.
+- Converged rather than truncated: val flat from epoch 7, so twelve epochs is
+  right and more would not obviously help. The next capacity rung is series
+  (3 of ~5.5), not epochs.
+- Two bugs paid for on the way: `torch.cuda.is_available()` poisoning the
+  fork, and the metrics read sitting in front of the checkpoint export.
+
+---
+
 ## 2026-08-24 (c) — Phase B step 1: 16 slices, and Lightning for T4 x2
 
 **Outcome: notebook 08 trains at 16 slices under Lightning DDP across both

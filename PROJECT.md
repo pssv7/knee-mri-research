@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-24 (two-GPU run blocked on fork poisoning by torch.cuda.is_available; fixed, ready to rerun).
+Last updated: 2026-08-24 (16 slices lifted honest gold 0.817 -> 0.840, the largest gain yet; submission pending).
 
 ---
 
@@ -30,6 +30,7 @@ in train but **not** in test, so text is a training-time signal only.
 | **Fine-tuned ConvNeXt-T, categorical labels** | **0.845 ← best** |
 | Fine-tuned ConvNeXt-T, dual-mode soft labels | 0.827 |
 | Fine-tuned ConvNeXt-T, dual-mode sharpened | 0.843 |
+| **ConvNeXt-T, 16 slices, gold 0.840** | **pending submission** |
 | Leaderboard top | 0.952 |
 | Leaderboard 20th | 0.941 |
 
@@ -172,7 +173,7 @@ docs/
   worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   284 tests
+tests/                   287 tests
 ```
 
 ---
