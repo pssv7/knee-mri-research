@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-23 (night: score_average frozen at gold 0.891; corpus run pending).
+Last updated: 2026-08-23 (late: corpus extracted, labels rebuilt at gold 0.891; Kaggle training next).
 
 ---
 
@@ -254,14 +254,26 @@ Medial Meniscus and MCL stay collapsed under probability extraction — 12 and 8
 distinct values, 45 and 51 tied — so those two should probably come from the
 categorical extractor.
 
-**Immediate next step (user, Colab):** run notebook 03 in full — the ~1 h
-corpus pass with the 32B — and download `llm_probs.parquet` (plus the
-refreshed `llm_probs_gold.parquet`) into `data/meta/`. Then locally:
-`python -m src.labels.fuse` writes the new `train_labels.parquet`; check the
-report shows macro ≈ 0.89 and every finding above the 0.70 kill threshold.
-Upload it as a new version of the `knee-labels` Kaggle dataset, then run five
-fold-training sessions of notebook 08 (~2 GPU-h each, editing `FOLD` per
-session), upload the checkpoints, and submit notebook 10.
+**The corpus run is done (2026-08-23, 32B).** `llm_probs.parquet` lives in
+`data/meta/` and `python -m src.labels.fuse` rebuilt `train_labels.parquet`:
+macro **0.891** on gold, weakest finding Synovitis 0.792, all twelve above the
+0.70 kill threshold. Targets are continuous now — 300–975 distinct values per
+finding against the tie-collapsed categorical labels — and target means track
+gold prevalence where reports mention a finding.
+
+**Immediate next steps (user, Kaggle):**
+1. Upload the new `data/meta/train_labels.parquet` as a new version of the
+   `knee-labels` dataset.
+2. Update the Kaggle copies of notebooks 08 and 10 from the repo — both
+   changed (validation-fold selection + `FOLD` constant; `BLEND = 1.0`).
+3. Run notebook 08 with `FOLD = 0` first (~2 GPU-h). Gate: its monitor-only
+   gold macro should land ≥ ~0.82 at the selected epoch (the old labels
+   produced 0.825 *with* the selection leak; the new labels are 0.037 better,
+   so materially less than that means something is wrong — stop and compare
+   epoch curves before spending the other four sessions).
+4. Folds 1–4 as four more sessions, editing `FOLD` each time. Save & Run All,
+   never Quick Save. Upload the five `.pt` files as the `knee-convnext`
+   dataset, then submit notebook 10.
 
 **Beware the recurring trap:** per-finding selection on 58 studies is the same
 overfit that sank the fusion weights. A robust blend capturing most of the
