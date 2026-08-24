@@ -2382,7 +2382,8 @@ report = knee_lightning.EpochReport()
 # a forked child, and a child's prints do not always find their way back to
 # the cell output -- so the per-epoch numbers are read back from disk below,
 # in this process, where they are guaranteed to be visible.
-csv_logger = pl.loggers.CSVLogger("/kaggle/working", name=f"lit_fold{FOLD}")
+csv_logger = pl.loggers.CSVLogger("/kaggle/working", name=f"lit_fold{FOLD}",
+                                  version="metrics")
 
 # ddp_notebook forks rather than re-executing the script, which is what makes
 # DDP usable from a notebook at all -- plain "ddp" deadlocks here. If the fork
@@ -2420,26 +2421,37 @@ trainer.fit(module, train_dataloaders=train_loader,
             val_dataloaders=[val_loader, gold_loader])
 elapsed = time.time() - start
 
-# Re-read the epoch table here rather than trusting the forked ranks' stdout.
-history = pd.read_csv(os.path.join(csv_logger.log_dir, "metrics.csv"))
-per_epoch_rows = (history.dropna(subset=["val_macro"])
-                  .groupby("epoch")[["val_macro", "gold_macro"]].last())
-best_epoch = per_epoch_rows["val_macro"].idxmax()
-print(f"\\n{'epoch':>5s} {'val macro':>9s} {'gold':>7s}")
-for epoch_no, row in per_epoch_rows.iterrows():
-    marker = "  <- selected" if epoch_no == best_epoch else ""
-    print(f"{epoch_no + 1:5d} {row['val_macro']:9.3f} "
-          f"{row['gold_macro']:7.3f}{marker}")
-
+# EXPORT FIRST. Ninety minutes of GPU time exist only as a checkpoint file at
+# this point, and anything that runs before the export is a chance to lose it
+# to an unrelated error -- which is exactly what a stray reporting bug did on
+# the first two-GPU run. Reporting is cosmetic and comes after, wrapped.
 print(f"\\nbest val macro: {checkpointer.best_model_score:.3f}")
 print("best checkpoint:", checkpointer.best_model_path)
 
 # Convert Lightning's checkpoint into the bare KneeNet state dict notebook 10
-# loads. Read from the file, not from `module`: under the spawn strategy the
-# process that called fit is not the process that trained.
+# loads. Read from the file, not from `module`: the process that called fit is
+# not the process that trained.
 n_tensors = knee_lightning.export_from_checkpoint(
     checkpointer.best_model_path, CHECKPOINT)
 print(f"wrote {CHECKPOINT} ({n_tensors} tensors)")
+
+# Re-read the epoch table rather than trusting the forked ranks' stdout. The
+# logger's version is pinned, because the child resolves it during fit and a
+# parent asking afterwards would count the child's directory as taken and
+# point one version too far along an empty path.
+try:
+    history = pd.read_csv(os.path.join(csv_logger.log_dir, "metrics.csv"))
+    per_epoch_rows = (history.dropna(subset=["val_macro"])
+                      .groupby("epoch")[["val_macro", "gold_macro"]].last())
+    best_epoch = per_epoch_rows["val_macro"].idxmax()
+    print(f"\\n{'epoch':>5s} {'val macro':>9s} {'gold':>7s}")
+    for epoch_no, row in per_epoch_rows.iterrows():
+        marker = "  <- selected" if epoch_no == best_epoch else ""
+        print(f"{epoch_no + 1:5d} {row['val_macro']:9.3f} "
+              f"{row['gold_macro']:7.3f}{marker}")
+except Exception as exc:  # noqa: BLE001 - the checkpoint is already safe
+    print(f"\\ncould not read the epoch table ({exc}); "
+          f"look under {csv_logger.save_dir} for metrics.csv")
 
 per_epoch = elapsed / EPOCHS
 share = len(index) / 4349

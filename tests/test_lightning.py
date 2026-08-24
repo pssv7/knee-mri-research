@@ -227,6 +227,38 @@ class TestForkSafety:
         assert ".cuda()" not in before
 
 
+class TestCheckpointSurvivesReportingErrors:
+    """A run's output is the checkpoint; reporting is decoration.
+
+    The first two-GPU run trained for its full twelve epochs and then lost
+    the export to a FileNotFoundError in the metrics read, because the read
+    sat in front of it.
+    """
+
+    def _finetune_source(self):
+        source = (config.PROJECT_ROOT / "tools" / "make_notebook.py").read_text()
+        start = source.index("def build_finetune_notebook")
+        return source[start:source.index("def build_export_notebook")]
+
+    def test_export_precedes_the_metrics_read(self):
+        finetune = self._finetune_source()
+        assert (finetune.index("export_from_checkpoint(")
+                < finetune.index('"metrics.csv"'))
+
+    def test_metrics_read_cannot_abort_the_cell(self):
+        finetune = self._finetune_source()
+        read_at = finetune.index('"metrics.csv"')
+        # The read must sit inside a try block opened before it.
+        assert "try:" in finetune[:read_at]
+        assert "except Exception" in finetune[read_at:]
+
+    def test_logger_version_is_pinned(self):
+        # Unpinned, the child resolves version_0 during fit and the parent
+        # then reports version_1, an empty directory.
+        finetune = self._finetune_source()
+        assert 'version="metrics"' in finetune
+
+
 class TestGoldIsNeverMonitored:
     def test_notebook_monitors_val_macro_only(self):
         source = (config.PROJECT_ROOT / "tools" / "make_notebook.py").read_text()
