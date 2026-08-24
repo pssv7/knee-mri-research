@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-23.
+Last updated: 2026-08-23 (evening: dual-mode fusion built, leak fixed, 32B ladder).
 
 ---
 
@@ -139,6 +139,8 @@ src/
   labels/
     lexicon.py           multilingual rule extractor
     llm_extract.py       prompts + parsing, categorical AND probability modes
+    mode_fusion.py       combine the two LLM modes; four global strategies
+    eval_fusion.py       score strategies on gold (LOO, jackknife) locally
     fuse.py              blend extractors into soft targets
     calibrate.py         score an extractor against the gold 58
   model/
@@ -155,7 +157,7 @@ tools/
 docs/
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   234 tests
+tests/                   252 tests
 ```
 
 ---
@@ -206,6 +208,19 @@ support per-finding fitting.**
 
 ## The open lead: combine both extraction modes
 
+**Status: the machinery for this is built and tested; it is waiting on one
+Colab run.** `src/labels/mode_fusion.py` combines the two modes under four
+strategies, each with at most one global parameter (rank average, categorical
+with probability as tiebreaker, one global rank blend, confidence-weighted).
+`fuse.build()` consumes the probability dumps automatically when
+`data/meta/llm_probs{,_gold}.parquet` exist and reproduces the current labels
+bit-for-bit when they do not. `python -m src.labels.eval_fusion` scores every
+strategy against gold with leave-one-out and a delete-8 jackknife the moment
+the gold dump lands. Notebook 03 now also prefers Qwen2.5-32B-Instruct-AWQ on
+runtimes with >=22 GB (Colab Pro A100/L4), stepping down through AWQ variants;
+whether 32B beats the 14B numbers below is measured at the gold checkpoint
+before any corpus run.
+
 The categorical and probability extractors are complementary per finding:
 
 | finding | categorical | probability |
@@ -228,10 +243,14 @@ Medial Meniscus and MCL stay collapsed under probability extraction — 12 and 8
 distinct values, 45 and 51 tied — so those two should probably come from the
 categorical extractor.
 
-**Immediate next step:** run notebook 03 to the gold checkpoint and download
-`llm_probs_gold.parquet` (58 rows). Fusion strategies can then be tested locally
-in seconds instead of costing a Colab reload each time. Two successive prompt
-guesses both measured worse than what they replaced, so the cheap loop matters.
+**Immediate next step (user, Colab):** run notebook 03 to the gold checkpoint
+and download `llm_probs_gold.parquet` (58 rows) into `data/meta/`. Then
+`python -m src.labels.eval_fusion` compares strategies locally in seconds
+instead of costing a Colab reload each time. Two successive prompt guesses both
+measured worse than what they replaced, so the cheap loop matters. Only after a
+strategy is frozen does the ~1 h corpus run happen, followed by re-fusing the
+labels, uploading `train_labels.parquet` to the `knee-labels` dataset, and five
+fold-training sessions on Kaggle (~2 GPU-h each).
 
 **Beware the recurring trap:** per-finding selection on 58 studies is the same
 overfit that sank the fusion weights. A robust blend capturing most of the
@@ -267,10 +286,14 @@ a *target* was worse than zero on every variant tested.
 knee in one session.
 
 **The gold 58 never enter training.** `splits.assert_no_gold_leakage` is called
-by the entrypoint. **One leak exists and is known:** notebook 08's best-epoch
-checkpointing selects on gold macro, so gold is partly a model-selection set
-there, likely inflating that model's gold figure by 0.01–0.03. Future runs
-should select on the validation fold.
+by the entrypoint. The one known leak — notebook 08's best-epoch checkpointing
+selected on gold macro, likely inflating that model's gold figure by 0.01–0.03
+— **is fixed:** selection now happens on the validation fold's mined labels
+binarised at 0.5, gold is printed as monitoring only, and `FOLD` is a constant
+edited per session so five sessions produce `convnext_fold{0..4}.pt`. The
+historical 0.825 gold figure for the existing fold-0 checkpoint still carries
+that bias. Notebook 10 is now `BLEND = 1.0` (tuned-only, the leaderboard's
+verdict) and averages across every fold checkpoint it finds.
 
 ---
 
