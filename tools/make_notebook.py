@@ -44,6 +44,11 @@ MODEL_MODULES = KAGGLE_MODULES + [
     "src/labels/__init__.py",
 ]
 
+# Only notebook 08 trains, and only it needs Lightning. The module imports
+# lightning at import time, which the submission notebook has no reason to
+# require.
+FINETUNE_MODULES = MODEL_MODULES + ["src/model/lightning.py"]
+
 
 def read(path):
     return (ROOT / path).read_text()
@@ -122,6 +127,10 @@ if pathlib.Path("src/model/side_classifier.py").exists():
     from src.model import side_classifier
 if pathlib.Path("src/model/net.py").exists():
     from src.model import embed, dataset as knee_dataset, net, splits
+# Only the fine-tuning notebook materialises this one; it imports lightning at
+# module scope, which nothing else needs.
+if pathlib.Path("src/model/lightning.py").exists():
+    from src.model import lightning as knee_lightning
 
 print("modules ready:", len(FILES), "files")
 print("labels:", len(config.LABELS))
@@ -2089,8 +2098,15 @@ before launching five folds.
 
 Subsampling controls the cost, and both knobs are real trade-offs:
 
-    SLICES_PER_SERIES   8 of 24     a tear may fall in a dropped slice
+    SLICES_PER_SERIES  16 of 24     a tear may fall in a dropped slice
     MAX_SERIES          3 of ~5.5   a finding may live only in a dropped series
+
+The slice count was raised from 8 after four label configurations spanning
+0.854 to 0.891 on gold moved the leaderboard by 0.018 in total. Labels are
+not the binding constraint at 8 slices, and the findings the model handles
+worst are the focal ones. Expect roughly **13 min/epoch, ~2.6 h for twelve
+epochs** -- about twice the 8-slice run. If it OOMs, halve `BATCH_STUDIES`
+again and double `ACCUM_STEPS` to match.
 
 **Mirroring is used here**, unlike the frozen path: raw volumes can be
 reflected, so left knees are mapped onto the canonical side along the axis the
@@ -2107,13 +2123,33 @@ result.
 import os
 import torch
 
-print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NONE")
 if not torch.cuda.is_available():
     raise SystemExit("Settings -> Accelerator -> GPU T4 x2")
+
+DEVICES = torch.cuda.device_count()
+for i in range(DEVICES):
+    print(f"GPU {i}:", torch.cuda.get_device_name(i))
+print("devices:", DEVICES)
+if DEVICES < 2:
+    print("NOTE: one GPU visible. Settings -> Accelerator -> GPU T4 x2 "
+          "roughly halves wall-clock. The run is correct either way -- "
+          "ACCUM_STEPS below adapts to hold the effective batch constant.")
+
+# Lightning ships in the Kaggle image, but the package name moved between
+# major versions and a missing install should fail here rather than thirty
+# minutes into the cell that matters.
+try:
+    import lightning.pytorch as pl
+except ImportError:
+    try:
+        import pytorch_lightning as pl
+    except ImportError:
+        raise SystemExit("pip install lightning, then re-run this cell")
+print("lightning:", pl.__version__)
 """)
 
     nb.md("## 2. Repo modules")
-    nb.code(bootstrap_cell(MODEL_MODULES, require_raw_dicom=False))
+    nb.code(bootstrap_cell(FINETUNE_MODULES, require_raw_dicom=False))
 
     nb.md("""
 ## 3. Assemble
@@ -2200,52 +2236,47 @@ print(f"studies in this shard: {len(index)}  gold present: {len(gold_index)}")
     nb.md("""
 ## 4. Dataset
 
-Slices are subsampled evenly rather than at random, so a validation score is
-reproducible. Horizontal flips are **not** used as augmentation: after
-canonicalisation a flip re-mirrors the knee and swaps medial with lateral,
-silently corrupting four of the twelve labels.
+`StudyVolumeDataset` lives in `src/model/lightning.py` rather than in this
+cell. Lightning's notebook DDP strategy spawns a process per GPU and pickles
+the dataset into each one; a class defined in a notebook cell belongs to
+`__main__` and does not survive that. The same rule already sent the cache's
+process-pool worker into `src/data/cache.py`.
+
+The memory-mapped shards are deliberately **not** handed to the dataset. It
+takes paths and opens them lazily per process, and drops the handles in
+`__getstate__`, so ~29 GB of memmap never gets serialised into a worker.
 """)
 
     nb.code("""
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 
-SLICES_PER_SERIES = 8
-BATCH_STUDIES = 4
-ACCUM_STEPS = 2
+# Capacity ladder, step 1. Four label configurations spanning 0.854 to 0.891
+# on gold moved the leaderboard by 0.018 in total, so labels are not the
+# binding constraint at 8 slices. The focal findings are the weak ones
+# (Lateral Meniscus 0.652, PF OA 0.722) and a tear can occupy one or two
+# slices, so 8 of 24 evenly spaced can miss it outright.
+SLICES_PER_SERIES = 16
+BATCH_STUDIES = 2
 
+# Effective batch is BATCH_STUDIES x DEVICES x ACCUM_STEPS, and it must stay
+# at eight studies whether this runs on one GPU or two -- otherwise the two
+# configurations are not comparable and the OneCycleLR step count shifts
+# underneath the schedule.
+EFFECTIVE_STUDIES = 8
+ACCUM_STEPS = max(1, EFFECTIVE_STUDIES // (BATCH_STUDIES * DEVICES))
+print(f"{BATCH_STUDIES} studies x {DEVICES} devices x {ACCUM_STEPS} accum "
+      f"= {BATCH_STUDIES * DEVICES * ACCUM_STEPS} effective")
 
-class StudyVolumeDataset(Dataset):
-    def __init__(self, study_index, studies, augment=False):
-        self.index = study_index
-        self.studies = list(studies)
-        self.augment = augment
-        self.keep = np.linspace(0, config.CACHE_SLICES - 1,
-                                SLICES_PER_SERIES).round().astype(int)
-
-    def __len__(self):
-        return len(self.studies)
-
-    def __getitem__(self, i):
-        item = knee_dataset.load_study(self.index, self.studies[i], shards)
-        # A thinned cache is already at SLICES_PER_SERIES; only subsample a
-        # full one, or the second cut would drop slices twice.
-        if item["volumes"].shape[1] > SLICES_PER_SERIES:
-            item["volumes"] = item["volumes"][:, self.keep]
-
-        if self.augment:
-            # Intensity jitter only. A geometric flip would swap medial and
-            # lateral; rotation is safe but left out of this first measurement.
-            scale = np.random.uniform(0.9, 1.1)
-            item["volumes"] = np.clip(
-                item["volumes"].astype(np.float32) * scale, 0, 255).astype(np.uint8)
-        return item
+CACHE_PATHS = list(shards)
 
 
 def make_loader(study_index, studies, shuffle=False, augment=False):
     return DataLoader(
-        StudyVolumeDataset(study_index, studies, augment),
+        knee_lightning.StudyVolumeDataset(
+            study_index, studies, CACHE_PATHS, SLICES_PER_SERIES, augment),
         batch_size=BATCH_STUDIES, shuffle=shuffle, num_workers=2,
-        collate_fn=knee_dataset.collate_studies, pin_memory=True)
+        collate_fn=knee_dataset.collate_studies, pin_memory=True,
+        persistent_workers=True)
 """)
 
     nb.md("""
@@ -2260,40 +2291,18 @@ comparison is between backbones rather than between architectures.
 import timm
 
 BACKBONE = "convnext_tiny.fb_in22k_ft_in1k"
-backbone = timm.create_model(BACKBONE, pretrained=True, num_classes=0, in_chans=3)
-FEATURE_DIM = backbone.num_features
+
+# Built once here before the trainer spawns its workers. Each rank constructs
+# its own backbone, and two processes racing to download the same weights into
+# the same cache is a failure that only appears on multi-GPU runs -- warming
+# the cache first turns that race into two cache hits.
+_warm = timm.create_model(BACKBONE, pretrained=True, num_classes=0, in_chans=3)
+FEATURE_DIM = _warm.num_features
 print(f"{BACKBONE}: {FEATURE_DIM} features, "
-      f"{sum(p.numel() for p in backbone.parameters()) / 1e6:.1f}M params")
+      f"{sum(p.numel() for p in _warm.parameters()) / 1e6:.1f}M params")
+del _warm
 
-device = "cuda"
-model = net.KneeNet(backbone, FEATURE_DIM).to(device)
-print(f"total: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
-
-
-def auc(y_true, scores):
-    y_true = np.asarray(y_true); scores = np.asarray(scores, dtype=float)
-    pos = y_true == 1
-    n_pos, n_neg = int(pos.sum()), int((~pos).sum())
-    if n_pos == 0 or n_neg == 0:
-        return float("nan")
-    order = np.argsort(scores, kind="mergesort")
-    ranks = np.empty(len(scores), dtype=float); ranks[order] = np.arange(1, len(scores) + 1)
-    unique, inverse, counts = np.unique(scores, return_inverse=True, return_counts=True)
-    sums = np.zeros(len(unique)); np.add.at(sums, inverse, ranks)
-    ranks = (sums / counts)[inverse]
-    return (ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
-
-
-def predict(loader):
-    model.eval()
-    ids, probs = [], []
-    with torch.no_grad(), torch.amp.autocast("cuda"):
-        for batch in loader:
-            logits = model(batch["volumes"].to(device), batch["meta"].to(device),
-                           batch["mask"].to(device))
-            probs.append(torch.sigmoid(logits.float()).cpu().numpy())
-            ids += batch[config.ID_COL]
-    return ids, np.concatenate(probs)
+auc = knee_lightning.auc
 """)
 
     nb.md("""
@@ -2311,11 +2320,10 @@ an estimated 0.01-0.03.
     nb.code("""
 import time
 
-from tqdm.auto import tqdm
+import timm
 
 # The measurement run reached 0.729 at epoch 4 and was still rising
-# (0.584 -> 0.679 -> 0.708 -> 0.729), so four was undertrained. Twelve epochs
-# over three shards is ~7.5 h for five folds, which fits a 25 h weekly budget.
+# (0.584 -> 0.679 -> 0.708 -> 0.729), so four was undertrained.
 EPOCHS = 12
 LR = 1e-4
 
@@ -2327,80 +2335,65 @@ CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
 keyed = folded.set_index("StudyInstanceUID")
 train_studies = [s for s in index.studies if keyed.loc[s, "fold"] != FOLD]
 val_studies = [s for s in index.studies if keyed.loc[s, "fold"] == FOLD]
+
 train_loader = make_loader(index, train_studies, shuffle=True, augment=True)
+# Dataloader 0 is the validation fold, carrying mined soft targets -- the only
+# thing allowed to select. Dataloader 1 is gold, carrying real 0/1 labels,
+# logged for convergence and never monitored.
 val_loader = make_loader(index, val_studies)
 gold_loader = make_loader(gold_index, gold_index.studies)
 print(f"fold {FOLD}: train {len(train_studies)}  val {len(val_studies)}  "
       f"gold {len(gold_index)}")
 
-# Selection truth: the validation fold's mined labels, binarised at 0.5. They
-# are noisy, but there are ~870 of them against gold's 58, and unlike gold
-# they are not the number the whole project is judged by.
-mined = labels.set_index("StudyInstanceUID")
+TOTAL_STEPS = knee_lightning.optimiser_steps(
+    len(train_studies), BATCH_STUDIES, DEVICES, ACCUM_STEPS, EPOCHS)
+print("optimiser steps:", TOTAL_STEPS)
 
-optimiser = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
-scaler = torch.amp.GradScaler("cuda")
-scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    optimiser, max_lr=LR * 3,
-    total_steps=EPOCHS * (len(train_loader) // ACCUM_STEPS + 1))
+module = knee_lightning.KneeLitModule(
+    backbone=timm.create_model(BACKBONE, pretrained=True, num_classes=0,
+                               in_chans=3),
+    feature_dim=FEATURE_DIM, lr=LR, total_steps=TOTAL_STEPS)
 
-epoch_times = []
-best_macro = 0.0
-for epoch in range(EPOCHS):
-    model.train()
-    start = time.time()
-    optimiser.zero_grad()
+checkpointer = pl.callbacks.ModelCheckpoint(
+    dirpath="/kaggle/working", filename=f"lit_fold{FOLD}",
+    monitor="val_macro", mode="max", save_top_k=1)
+report = knee_lightning.EpochReport()
 
-    for step, batch in enumerate(tqdm(train_loader, desc=f"epoch {epoch + 1}/{EPOCHS}")):
-        with torch.amp.autocast("cuda"):
-            logits = model(batch["volumes"].to(device, non_blocking=True),
-                           batch["meta"].to(device), batch["mask"].to(device))
-            loss = net.weighted_bce(logits, batch["targets"].to(device),
-                                    batch["weights"].to(device)) / ACCUM_STEPS
-        scaler.scale(loss).backward()
+trainer = pl.Trainer(
+    max_epochs=EPOCHS,
+    accelerator="gpu",
+    devices=DEVICES,
+    # ddp_notebook spawns rather than re-executing the script, which is what
+    # makes DDP usable from a notebook at all. Plain "ddp" deadlocks here.
+    strategy="ddp_notebook" if DEVICES > 1 else "auto",
+    precision="16-mixed",
+    accumulate_grad_batches=ACCUM_STEPS,
+    callbacks=[checkpointer, report],
+    log_every_n_steps=50,
+    enable_model_summary=False,
+)
 
-        if (step + 1) % ACCUM_STEPS == 0:
-            scaler.step(optimiser)
-            scaler.update()
-            optimiser.zero_grad()
-            scheduler.step()
+start = time.time()
+trainer.fit(module, train_dataloaders=train_loader,
+            val_dataloaders=[val_loader, gold_loader])
+elapsed = time.time() - start
 
-    epoch_times.append(time.time() - start)
+print(f"\\nbest val macro: {checkpointer.best_model_score:.3f}")
+print("best checkpoint:", checkpointer.best_model_path)
 
-    # Selection happens on the validation fold. Gold is scored as well --
-    # 58 studies, nearly free -- but only to watch convergence; letting it
-    # pick the checkpoint is the leak described above the section.
-    val_ids, val_probs = predict(val_loader)
-    val_truth = mined.loc[val_ids]
-    val_macro = float(np.nanmean([
-        auc((val_truth[name].to_numpy() >= 0.5).astype(int), val_probs[:, i])
-        for i, name in enumerate(config.LABELS)]))
+# Convert Lightning's checkpoint into the bare KneeNet state dict notebook 10
+# loads. Read from the file, not from `module`: under the spawn strategy the
+# process that called fit is not the process that trained.
+n_tensors = knee_lightning.export_from_checkpoint(
+    checkpointer.best_model_path, CHECKPOINT)
+print(f"wrote {CHECKPOINT} ({n_tensors} tensors)")
 
-    gold_ids, gold_probs = predict(gold_loader)
-    truth = gold.set_index("StudyInstanceUID").loc[gold_ids]
-    gold_macro = float(np.nanmean([
-        auc(truth[name].to_numpy().astype(int), gold_probs[:, i])
-        for i, name in enumerate(config.LABELS)]))
-
-    marker = ""
-    if val_macro > best_macro:
-        best_macro, marker = val_macro, "  <- best"
-        torch.save(model.state_dict(), CHECKPOINT)
-
-    print(f"  epoch {epoch + 1}: {epoch_times[-1] / 60:.1f} min  "
-          f"val macro {val_macro:.3f}  gold {gold_macro:.3f} (monitor only){marker}")
-
-# The last epoch is not reliably the best one; restore the checkpoint the
-# validation fold picked.
-print(f"\\nbest val macro: {best_macro:.3f}")
-model.load_state_dict(torch.load(CHECKPOINT))
-
-per_epoch = float(np.mean(epoch_times))
+per_epoch = elapsed / EPOCHS
 share = len(index) / 4349
-full_epoch = per_epoch / share
 print(f"\\nthis shard is {share:.0%} of the training set")
-print(f"projected full epoch: {full_epoch / 60:.1f} min")
-print(f"projected 5 folds x {EPOCHS} epochs: {full_epoch * EPOCHS * 5 / 3600:.1f} h")
+print(f"per epoch: {per_epoch / 60:.1f} min on {DEVICES} GPU(s)")
+print(f"projected 5 folds x {EPOCHS} epochs: "
+      f"{per_epoch / share * EPOCHS * 5 / 3600:.1f} h")
 """)
 
     nb.md("""
@@ -2412,7 +2405,26 @@ number.
 """)
 
     nb.code("""
-gold_ids, gold_probs = predict(gold_loader)
+# Scored in this process from the exported checkpoint, which is the artefact
+# the submission will actually load -- not from a module left over in memory.
+# If these numbers disagree with the last epoch's logged gold, the export is
+# wrong, and that is worth knowing here rather than after a submission.
+device = "cuda"
+scoring_model = net.KneeNet(
+    timm.create_model(BACKBONE, pretrained=False, num_classes=0, in_chans=3),
+    FEATURE_DIM).to(device)
+scoring_model.load_state_dict(torch.load(CHECKPOINT, map_location=device))
+scoring_model.eval()
+
+gold_ids, rows = [], []
+with torch.no_grad(), torch.amp.autocast("cuda"):
+    for batch in gold_loader:
+        logits = scoring_model(batch["volumes"].to(device),
+                               batch["meta"].to(device),
+                               batch["mask"].to(device))
+        rows.append(torch.sigmoid(logits.float()).cpu().numpy())
+        gold_ids += batch[config.ID_COL]
+gold_probs = np.concatenate(rows)
 truth = gold.set_index("StudyInstanceUID").loc[gold_ids]
 
 FROZEN = dict(zip(config.LABELS,
@@ -2487,7 +2499,13 @@ import shutil
 
 import numpy as np
 
-SLICES_PER_SERIES = 8   # must match notebook 08
+# Deliberately decoupled from notebook 08, which now trains at 16. This
+# export exists to fit Colab's transfer budget: 8 slices is 3.2 GB, and a
+# full-size pull fails at ~5.5 GB with IncompleteRead. A 16-slice thin would
+# be ~6.4 GB and would not arrive. A cache thinned here is therefore only
+# usable by a training config set to this same number -- notebook 08 raises
+# rather than silently training on short volumes.
+SLICES_PER_SERIES = 8
 
 
 def find_inputs(pattern):
@@ -2650,8 +2668,11 @@ BLEND = 1.0
 USE_FROZEN = BLEND < 1.0
 USE_TUNED = BLEND > 0.0
 
-# Must match how the fine-tuned model was trained.
-TUNED_SLICES = 8
+# Must match how the fine-tuned model was trained. Nothing enforces this:
+# the aggregation masks over the slice axis, so a mismatch runs clean and
+# just scores worse than it should. Raised to 16 with notebook 08's capacity
+# step -- a checkpoint trained at 8 slices must be scored with 8 here.
+TUNED_SLICES = 16
 TUNED_MAX_SERIES = 3
 
 BATCH_SLICES = 256

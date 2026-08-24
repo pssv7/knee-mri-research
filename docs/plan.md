@@ -58,10 +58,14 @@ suggests the relevant anatomy is not reaching the network rather than that
 the network is too small — a meniscal tear can occupy one or two slices, and
 8 of 24 evenly-spaced slices can miss it outright.
 
-1. `SLICES_PER_SERIES` 8 → 16 (~2x epoch time → ~2.8 h for 12 epochs).
-   **Will likely OOM on a T4 at the current batch shape** (4 studies × 3
-   series × 16 slices = 192 images/step). Drop `BATCH_STUDIES` 4 → 2 and
-   raise `ACCUM_STEPS` 2 → 4 to hold the effective batch constant.
+1. **`SLICES_PER_SERIES` 8 → 16 — implemented, ready to run.** `BATCH_STUDIES`
+   drops to 2 so the per-step image count is unchanged (2 × 3 × 16 = 96), and
+   `ACCUM_STEPS` is now derived (`8 // (BATCH_STUDIES × DEVICES)`) so the
+   effective batch stays at eight studies on one GPU or two. Notebook 08 also
+   moved to Lightning with `ddp_notebook` to use Kaggle's T4 ×2; notebook 10's
+   `TUNED_SLICES` was raised to 16 to match, which is mandatory — the
+   aggregation masks over the slice axis, so a train/infer mismatch scores
+   worse in silence.
 2. `max_series` 3 → 5 (most studies have ~5.5). Cheaper than slices and the
    likelier fix for PF OA specifically, since the patella may simply be
    absent from the three series currently chosen.

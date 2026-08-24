@@ -5,6 +5,43 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-24 (c) — Phase B step 1: 16 slices, and Lightning for T4 x2
+
+**Outcome: notebook 08 trains at 16 slices under Lightning DDP across both
+Kaggle GPUs. Not yet run.**
+
+- `SLICES_PER_SERIES` 8 → 16. `BATCH_STUDIES` 4 → 2 keeps the per-step image
+  count at 96, and `ACCUM_STEPS` is now derived from
+  `8 // (BATCH_STUDIES * DEVICES)` so the effective batch is eight studies on
+  one GPU or two, which also keeps the OneCycleLR step count fixed.
+- **`TUNED_SLICES` in notebook 10 raised to 16 to match.** Nothing enforces
+  this: the attention pool masks over the slice axis, so a checkpoint trained
+  at 16 and scored at 8 runs clean and just scores worse. Notebook 09 stays
+  at 8 deliberately (its job is fitting Colab's ~5.5 GB transfer ceiling) and
+  the dataset now raises when the cache supplies fewer slices than configured,
+  rather than training quietly on short volumes.
+- New `src/model/lightning.py` holding the dataset, LightningModule, an
+  epoch reporter, and the checkpoint exporter. It lives in `src/` rather than
+  a notebook cell because `ddp_notebook` spawns and pickles: a class defined
+  in a cell belongs to `__main__` and does not survive, the same rule that
+  put the cache's pool worker in `src/data/cache.py`.
+- Three DDP hazards handled explicitly, each of which fails silently:
+  memmaps are opened lazily per process and dropped in `__getstate__` (so
+  ~29 GB never gets serialised into a worker); AUC is computed over
+  all-gathered predictions, since averaging per-rank AUCs is not the AUC of
+  the set; and the checkpoint is exported by reading the file rather than a
+  module in memory, because the process that calls `fit` under spawn is not
+  the process that trained.
+- **A test caught a real bug before it reached Kaggle**: the prediction buffer
+  was named `self._buffers`, which collides with `nn.Module`'s reserved
+  attribute and corrupts `state_dict`, `load_state_dict`, and `.to(device)`.
+  Renamed. Lightning was installed locally so these tests run rather than
+  skip; 16 new tests, suite at 278.
+- Gold remains monitor-only: the checkpoint callback monitors `val_macro`,
+  and a test asserts `monitor="gold_macro"` appears nowhere in the generator.
+
+---
+
 ## 2026-08-24 (b) — sharpened fold-0 LB 0.843; silence weighting found retired
 
 **Outcome: sharpening recovered +0.016 (0.827 → 0.843) but still ties the

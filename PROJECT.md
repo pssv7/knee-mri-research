@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-24 (sharpened fold-0 LB 0.843; silence weighting restored, clean fold-0 pending).
+Last updated: 2026-08-24 (16 slices + Lightning DDP ready to run; weight-fix fold-0 pending submission).
 
 ---
 
@@ -160,6 +160,7 @@ src/
     net.py               attention pool -> FiLM -> series transformer -> 12 logits
     splits.py            study-grouped folds, gold-leakage guard
     side_classifier.py   L/R prediction
+    lightning.py         DDP training wrapper, DDP-safe metrics and export
 tools/
   make_notebook.py           generates every notebook from src/
   check_notebook.py          executes the Colab notebook's cells locally
@@ -171,7 +172,7 @@ docs/
   worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   262 tests
+tests/                   278 tests
 ```
 
 ---
