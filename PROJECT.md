@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-23 (evening: dual-mode fusion built, leak fixed, 32B ladder).
+Last updated: 2026-08-23 (night: score_average frozen at gold 0.891; corpus run pending).
 
 ---
 
@@ -157,7 +157,7 @@ tools/
 docs/
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   252 tests
+tests/                   255 tests
 ```
 
 ---
@@ -208,18 +208,29 @@ support per-finding fitting.**
 
 ## The open lead: combine both extraction modes
 
-**Status: the machinery for this is built and tested; it is waiting on one
-Colab run.** `src/labels/mode_fusion.py` combines the two modes under four
-strategies, each with at most one global parameter (rank average, categorical
-with probability as tiebreaker, one global rank blend, confidence-weighted).
-`fuse.build()` consumes the probability dumps automatically when
-`data/meta/llm_probs{,_gold}.parquet` exist and reproduces the current labels
-bit-for-bit when they do not. `python -m src.labels.eval_fusion` scores every
-strategy against gold with leave-one-out and a delete-8 jackknife the moment
-the gold dump lands. Notebook 03 now also prefers Qwen2.5-32B-Instruct-AWQ on
-runtimes with >=22 GB (Colab Pro A100/L4), stepping down through AWQ variants;
-whether 32B beats the 14B numbers below is measured at the gold checkpoint
-before any corpus run.
+**Status: measured and frozen (2026-08-23).** The 32B gold checkpoint ran and
+`python -m src.labels.eval_fusion` settled it:
+
+| scores on gold | macro |
+|---|---|
+| categorical LLM alone (14B) | 0.838 |
+| probability LLM alone (**32B** — was 0.810 on 14B) | 0.860 |
+| per-finding oracle of the two | 0.885 |
+| **score_average of the two** | **0.889** |
+| with 0.10 lexicon blend (the training targets) | **0.891** |
+
+Averaging the two modes beats *choosing* between them per finding — the modes
+err in different places, so the mean outranks the oracle. `score_average` and
+`rank_average` tied (jackknife 0.54/0.47); the simpler, probability-scaled one
+was frozen as `mode_fusion.DEFAULT_STRATEGY`. `LEXICON_WEIGHT` moved
+0.30 → 0.10: with the stronger LLM the old weight cost ~0.010, and 0.00–0.15
+is a plateau. MCL holds 0.955 and Medial Meniscus 0.951 (the two findings
+probability mode used to collapse); nothing sits below Synovitis's 0.795.
+
+Labels went 0.854 → 0.891 against gold. The next artefact is the ~1 h 32B
+corpus run producing `llm_probs.parquet`; `fuse.build()` then emits the new
+`train_labels.parquet` automatically. The table below records the 14B
+per-finding numbers that motivated all this.
 
 The categorical and probability extractors are complementary per finding:
 
@@ -243,14 +254,14 @@ Medial Meniscus and MCL stay collapsed under probability extraction — 12 and 8
 distinct values, 45 and 51 tied — so those two should probably come from the
 categorical extractor.
 
-**Immediate next step (user, Colab):** run notebook 03 to the gold checkpoint
-and download `llm_probs_gold.parquet` (58 rows) into `data/meta/`. Then
-`python -m src.labels.eval_fusion` compares strategies locally in seconds
-instead of costing a Colab reload each time. Two successive prompt guesses both
-measured worse than what they replaced, so the cheap loop matters. Only after a
-strategy is frozen does the ~1 h corpus run happen, followed by re-fusing the
-labels, uploading `train_labels.parquet` to the `knee-labels` dataset, and five
-fold-training sessions on Kaggle (~2 GPU-h each).
+**Immediate next step (user, Colab):** run notebook 03 in full — the ~1 h
+corpus pass with the 32B — and download `llm_probs.parquet` (plus the
+refreshed `llm_probs_gold.parquet`) into `data/meta/`. Then locally:
+`python -m src.labels.fuse` writes the new `train_labels.parquet`; check the
+report shows macro ≈ 0.89 and every finding above the 0.70 kill threshold.
+Upload it as a new version of the `knee-labels` Kaggle dataset, then run five
+fold-training sessions of notebook 08 (~2 GPU-h each, editing `FOLD` per
+session), upload the checkpoints, and submit notebook 10.
 
 **Beware the recurring trap:** per-finding selection on 58 studies is the same
 overfit that sank the fusion weights. A robust blend capturing most of the

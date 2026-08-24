@@ -13,10 +13,12 @@ extractor alone at 0.838. The apparent gain was the fit, not the fusion.
 
 What replaced it is deliberately parameter-free:
 
-**A fixed blend.** Targets are 0.30 x lexicon + 0.70 x LLM for every finding.
-The ratio sits on a broad plateau -- 0.20 through 0.35 all score within 0.002 --
-so it is not a tuned edge. The LLM is better on eleven of twelve findings, but
-the lexicon wins on Fracture, and a blanket preference would discard that.
+**A fixed blend.** Targets are 0.10 x lexicon + 0.90 x LLM for every finding.
+The ratio sits on a plateau, not an argmax: with the dual-mode LLM scores,
+0.00 through 0.15 all land within 0.002 on gold (0.889-0.891) and the weight
+falls away steadily above that -- the 0.30 chosen for the categorical-only
+LLM cost ~0.010 against the stronger extractor. A small nonzero weight keeps
+the lexicon's independent evidence without letting it drag the ranking.
 
 **Silence scores zero, and is handled by the weight instead.** Measuring
 P(positive | both silent) on gold and using it as the target was worse than
@@ -39,7 +41,7 @@ from src import config
 from src.labels import calibrate, lexicon
 
 # Blend ratio. Chosen from a plateau, not an argmax -- see module docstring.
-LEXICON_WEIGHT = 0.30
+LEXICON_WEIGHT = 0.10
 LLM_WEIGHT = 1.0 - LEXICON_WEIGHT
 
 # Sample weights by how much the two extractors corroborate each other.

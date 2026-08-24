@@ -60,6 +60,18 @@ def tied_rank_order(values):
     return (sums / counts)[inverse]
 
 
+class TestScoreAverage:
+    def test_average_where_both_speak_categorical_alone_otherwise(self):
+        cat = cat_frame([1, 1, 0], [1.0, 1.0, None])
+        prob = prob_frame([0.5, np.nan, 0.4])
+        combined = mode_fusion.combine(cat, prob, "score_average")
+        assert combined["ACL"].to_numpy() == pytest.approx([0.75, 1.0, 0.2])
+
+    def test_is_the_frozen_default(self):
+        # Frozen from the gold-dump comparison; see the module docstring.
+        assert mode_fusion.DEFAULT_STRATEGY == "score_average"
+
+
 class TestTiebreak:
     def test_categorical_order_is_preserved(self):
         # Distinct categorical scores must stay in their order no matter what

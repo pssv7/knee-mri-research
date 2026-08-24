@@ -14,12 +14,15 @@ Every strategy here therefore applies one rule globally, with at most one
 global parameter, so in-sample and held-out are the same number. Per-finding
 selection is deliberately not offered.
 
-A calibration note: rank-based strategies replace the categorical score's
-rough probability scale with a rank-uniform one. Label AUC is unaffected, but
-the scores become BCE targets downstream, where scale has mattered before
-(imputing silence priors as targets measured worse than zero every time). At
-equal AUC prefer `cat_primary_tiebreak`, which keeps the categorical scale
-and spends the probability only inside tie blocks.
+Measured on the 32B gold dump (2026-08-23): categorical alone 0.838,
+probability alone 0.860, `score_average` and `rank_average` tied at 0.889 --
+above the 0.885 per-finding oracle, because averaging complementary errors
+beats choosing between them. The delete-8 jackknife split 0.54/0.47 between
+the two, which is a tie, and the tie-break rule is simplicity: freeze
+`score_average`. It also keeps a probability-like scale (mean target 0.33
+against gold prevalence 0.35, where rank scores are uniform at 0.5 by
+construction), which matters because these become BCE targets downstream --
+imputing silence priors as targets measured worse than zero every time.
 """
 
 from typing import Optional
@@ -30,10 +33,8 @@ import pandas as pd
 from src import config
 from src.labels import fuse
 
-# Provisional until the gold probability dump exists and the harness in
-# eval_fusion.py has compared strategies. Tiebreak is the conservative choice:
-# it cannot reorder anything the categorical extractor already separates.
-DEFAULT_STRATEGY = "cat_primary_tiebreak"
+# Frozen from the gold-dump comparison recorded in the module docstring.
+DEFAULT_STRATEGY = "score_average"
 
 # Tiebreak weight. Correctness only needs it below the smallest gap between
 # distinct categorical scores (severity x certainty products; adjacent values
@@ -45,6 +46,7 @@ TIEBREAK_EPSILON = 0.01
 GLOBAL_BLEND_ALPHA = 0.5
 
 STRATEGIES = (
+    "score_average",
     "rank_average",
     "cat_primary_tiebreak",
     "global_blend",
@@ -93,6 +95,14 @@ def _combine_finding(cat_score, cat_ok, prob, prob_conf, cat_conf,
                      strategy: str) -> np.ndarray:
     """Combine one finding's two score vectors. `prob` may contain NaN."""
     has_prob = ~np.isnan(prob)
+
+    if strategy == "score_average":
+        # Plain mean of the two scores. On the gold dump this matched rank
+        # averaging's AUC exactly while keeping a probability-like scale --
+        # its mean target sits at the gold prevalence, where rank scores are
+        # uniform by construction. Scale matters because these become BCE
+        # targets downstream.
+        return np.where(has_prob, 0.5 * (cat_score + prob), cat_score)
 
     if strategy == "cat_primary_tiebreak":
         tiebreak = np.where(has_prob, prob, 0.0)
