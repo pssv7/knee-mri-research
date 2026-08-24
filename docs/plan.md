@@ -4,25 +4,35 @@ State document: `PROJECT.md` (read it first; it holds what exists and what
 failed). This file holds only what happens next and the gates between steps.
 
 Position as of 2026-08-24: training labels score 0.891 on gold (was 0.854).
-Fold 0 of ConvNeXt-T retrained on them with honest validation-fold selection:
-gold 0.816. A fold-0-only submission is in flight; its public LB score against
-the old fold-0's 0.845 is the pending decision point.
+Fold 0 retrained on them scored **LB 0.827 against the old fold-0's 0.845** —
+the gate caught it before folds 1–4 were spent. Diagnosis: the dual-mode
+targets rank better but drained the confident mass out of the distribution
+(extreme targets 73% → 60% of slots; Medial Meniscus mid-zone 35% → 63%) while
+mean sample weight rose 0.63 → 0.78 — more mushy targets, counted harder,
+with weaker gradients. The fix is `fuse.sharpen_targets`: a strictly monotone
+quantile map back onto the categorical fusion's shape, which preserves the
+0.891 gold AUC exactly (verified) while restoring 75% extreme targets.
 
 ---
 
-## Phase A — five-fold cycle (in progress)
+## Phase A — five-fold cycle (restarted on sharpened labels)
 
-1. **Fold-0 submission result** (pending):
-   - **LB ≥ ~0.85** → labels validated end to end. Proceed to step 2.
-   - **LB ≤ 0.845** → stop. The model cannot express the finer labels at the
-     current capacity. Skip to Phase B and run the 16-slice experiment before
-     training any more folds of this config.
-2. Folds 1–4: four Kaggle sessions of notebook 08, editing only `FOLD`.
-   Same three cache shards, same new `knee-labels` version. ~1.5 h each.
-3. Upload all five `convnext_fold*.pt` to `knee-convnxt` (replace, don't
-   accumulate — notebook 10 globs the pattern and averages everything it
-   finds). Save & Run All on notebook 10, submit.
-4. Expected: five folds historically buy +0.005–0.010 over one.
+1. Upload the sharpened `train_labels.parquet` as a new `knee-labels`
+   version; rerun notebook 08 with `FOLD = 0` (~1.5 h).
+2. **Gate**: fold-0 submission LB must beat 0.845 (old labels) — 0.827
+   (soft labels) merely beaten is not enough to justify five folds.
+   - **LB > 0.845** → folds 1–4, five-fold submission.
+   - **LB ≈ 0.83–0.845** → the ordering gain isn't reaching the model;
+     inspect the epoch logs for a selection-signal problem (val binarised at
+     0.5 against sharp targets is cleaner truth, but check where gold peaked
+     vs where val selected) before touching capacity.
+   - **LB < 0.83** → something else regressed; diff the two runs' epoch logs
+     before any further training.
+3. Folds 1–4: four sessions, editing only `FOLD`; same shards, same labels
+   version. Upload all five `convnext_fold*.pt` to `knee-convnxt` (replace,
+   don't accumulate — notebook 10 globs and averages everything it finds).
+   Save & Run All on notebook 10, submit. Five folds historically buy
+   +0.005–0.010.
 
 ## Phase B — capacity ladder (only if the model trails its labels badly)
 

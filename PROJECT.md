@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-23 (late: corpus extracted, labels rebuilt at gold 0.891; Kaggle training next).
+Last updated: 2026-08-24 (fold-0 LB 0.827 diagnosed as target-shape dilution; sharpened labels ready).
 
 ---
 
@@ -160,7 +160,7 @@ docs/
   worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   255 tests
+tests/                   259 tests
 ```
 
 ---

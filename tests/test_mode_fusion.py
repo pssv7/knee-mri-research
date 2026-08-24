@@ -211,6 +211,62 @@ class TestFuseScoresEquivalence:
                                new[f"{name}_weight"]), name
 
 
+class TestSharpenTargets:
+    """Shape restoration must never touch the ordering -- AUC is the point."""
+
+    def _frames(self):
+        rng = np.random.default_rng(3)
+        n = 200
+        data = {config.ID_COL: [f"s{i}" for i in range(n)]}
+        ref_data = {config.ID_COL: [f"s{i}" for i in range(n)]}
+        for name in config.LABELS:
+            data[name] = rng.uniform(0.05, 0.95, n)
+            data[f"{name}_weight"] = np.full(n, 0.8)
+            # Bimodal reference: mostly zeros with a confident positive tail.
+            ref = np.where(rng.random(n) < 0.7, 0.0, rng.uniform(0.7, 1.0, n))
+            ref_data[name] = ref
+            ref_data[f"{name}_weight"] = np.full(n, 0.8)
+        return pd.DataFrame(data), pd.DataFrame(ref_data)
+
+    def test_ordering_is_preserved_exactly(self):
+        fused, reference = self._frames()
+        sharpened = fuse.sharpen_targets(fused, reference)
+        for name in config.LABELS:
+            before = np.argsort(fused[name].to_numpy(), kind="mergesort")
+            after = np.argsort(sharpened[name].to_numpy(), kind="mergesort")
+            assert list(before) == list(after), name
+
+    def test_shape_moves_to_the_reference(self):
+        fused, reference = self._frames()
+        sharpened = fuse.sharpen_targets(fused, reference)
+        for name in config.LABELS:
+            # The uniform targets should come back mostly-extreme, like the
+            # bimodal reference, rather than staying spread.
+            mid = ((sharpened[name] > 0.1) & (sharpened[name] < 0.7)).mean()
+            assert mid < 0.2, name
+
+    def test_weights_untouched(self):
+        fused, reference = self._frames()
+        sharpened = fuse.sharpen_targets(fused, reference)
+        for name in config.LABELS:
+            assert np.array_equal(sharpened[f"{name}_weight"],
+                                  fused[f"{name}_weight"])
+
+    def test_ties_stay_tied(self):
+        n = 6
+        data = {config.ID_COL: [f"s{i}" for i in range(n)]}
+        ref_data = {config.ID_COL: [f"s{i}" for i in range(n)]}
+        for name in config.LABELS:
+            data[name] = [0.2, 0.2, 0.2, 0.8, 0.8, 0.5]
+            ref_data[name] = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0]
+        sharpened = fuse.sharpen_targets(pd.DataFrame(data),
+                                         pd.DataFrame(ref_data))
+        values = sharpened["ACL"].to_numpy()
+        assert values[0] == values[1] == values[2]
+        assert values[3] == values[4]
+        assert values[2] < values[5] < values[3]
+
+
 class TestNoPerFindingFitting:
     def test_strategies_carry_at_most_one_global_parameter(self):
         # The guard against reintroducing the 58-study overfit: nothing in the

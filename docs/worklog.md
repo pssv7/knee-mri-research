@@ -5,6 +5,33 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-24 — fold-0 LB 0.827: soft targets diagnosed, sharpening added
+
+**Outcome: the fold-0 gate fired (LB 0.827 vs old 0.845); the regression was
+traced to target-shape dilution, and `fuse.sharpen_targets` now restores the
+crisp shape while keeping the 0.891 gold AUC bit-for-bit.**
+
+- Fold-0-only submission scored **0.827** — below the old-label fold-0's
+  0.845 despite labels improving 0.854 → 0.891. LB tracked honest gold in
+  both cycles (0.825→0.845, 0.816→0.827), so the result is real.
+- Local diff of old vs new targets found the mechanism: `score_average`
+  pulled confident calls toward the middle. Extreme targets (<0.1 or >0.9)
+  fell 73% → 60% of slots; Medial Meniscus mid-zone grew 35% → 63%,
+  Synovitis 12% → 36%. Probability mode is never silent, so the old
+  silence down-weighting vanished too: mean sample weight 0.63 → 0.78.
+  Net: more mid-range targets, counted harder, with weaker BCE gradients —
+  and the fine ordering that raised label AUC lives in differences too
+  small to learn at n=4,349.
+- Fix: `sharpen_targets` quantile-maps each finding's targets onto the
+  categorical fusion's marginal, plus an epsilon rank term keeping the map
+  strictly increasing. Ordering (and therefore gold AUC 0.891) is preserved
+  exactly — verified per finding — while the written labels return to 75%
+  extreme (old: 73%). Weights untouched (one change at a time). Four new
+  tests; suite at 259.
+- Capacity (Phase B) demoted as suspect: a capacity limit caps gains, it
+  does not regress 0.018.
+- Next: upload sharpened labels, rerun fold 0, gate at LB > 0.845.
+
 ## 2026-08-23 → 08-24 — dual-mode labels, leak fix, fold-0 retrain
 
 **Outcome: training labels 0.854 → 0.891 on gold; fold 0 retrained honestly

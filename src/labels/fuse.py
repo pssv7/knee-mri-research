@@ -166,6 +166,39 @@ def fuse_scores(lex: pd.DataFrame, llm_scores: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(output)
 
 
+# Order-keeper inside the reference distribution's tie blocks. Small enough
+# that the restored shape dominates the target value; the epsilon term only
+# arranges studies within a block.
+SHARPEN_EPSILON = 0.02
+
+
+def sharpen_targets(fused: pd.DataFrame, reference: pd.DataFrame) -> pd.DataFrame:
+    """Restore `reference`'s target distribution, keeping `fused`'s ordering.
+
+    The dual-mode targets rank studies better than the categorical fusion
+    (0.891 vs 0.854 on gold) but drained the confident mass out of the
+    distribution -- extreme targets fell from 73% to 60% of slots and the
+    model trained on them regressed on the leaderboard (0.845 -> 0.827).
+    AUC is invariant under strictly monotone maps, so the ordering gain and
+    the crisp shape are separable: each finding's targets are quantile-mapped
+    onto the reference marginal, plus an epsilon-scaled rank term that keeps
+    the map strictly increasing where the reference has ties. Sample weights
+    are not touched.
+    """
+    from src.labels import mode_fusion
+
+    out = fused.copy()
+    for name in config.LABELS:
+        targets = fused[name].to_numpy(dtype=float)
+        ref = np.sort(reference[name].to_numpy(dtype=float))
+        ranks = mode_fusion._tied_ranks_01(targets)
+        mapped = np.quantile(ref, np.clip(ranks, 0.0, 1.0))
+        out[name] = np.clip(
+            (mapped + SHARPEN_EPSILON * ranks) / (1.0 + SHARPEN_EPSILON),
+            0.0, 1.0)
+    return out
+
+
 def extractor_aucs(gold: pd.DataFrame, lex_gold: pd.DataFrame,
                    llm_gold: pd.DataFrame) -> pd.DataFrame:
     """Diagnostic only: how each extractor scores on gold.
@@ -235,6 +268,17 @@ def build(train_csv=None, llm_mined=None, llm_gold=None,
 
     fused = fuse_scores(lex_mined, scores_mined)
     fused_gold = fuse_scores(lex_gold, scores_gold)
+
+    if use_probs:
+        # The categorical-only fusion of the same inputs supplies the shape
+        # the dual-mode targets are sharpened back onto.
+        ref_mined = fuse_scores(
+            lex_mined, mode_fusion.from_categorical(mined_frame))
+        ref_gold = fuse_scores(
+            lex_gold, mode_fusion.from_categorical(gold_frame))
+        fused = sharpen_targets(fused, ref_mined)
+        fused_gold = sharpen_targets(fused_gold, ref_gold)
+
     aucs = extractor_aucs(gold, lex_gold, gold_frame)
 
     if out_path:
