@@ -192,9 +192,28 @@ class TestForkSafety:
     def test_no_lazy_init_call_before_fit(self):
         before = self._finetune_source_before_fit()
         # The trailing paren matters: the comment explaining the hazard names
-        # both functions, and must not trip this.
+        # these functions, and must not trip this.
         assert "torch.cuda.get_device_name(" not in before
         assert "torch.cuda.get_device_properties(" not in before
+
+    def test_is_available_is_not_used(self):
+        # torch's own docs: is_available() poisons fork unless
+        # PYTORCH_NVML_BASED_CUDA_CHECK=1, because it falls through to
+        # _cuda_getDeviceCount() and calls cuInit. This is what actually
+        # broke the first two-GPU run.
+        before = self._finetune_source_before_fit()
+        assert "torch.cuda.is_available(" not in before
+
+    def test_nvml_check_is_requested_before_torch_is_imported(self):
+        before = self._finetune_source_before_fit()
+        env_at = before.index("PYTORCH_NVML_BASED_CUDA_CHECK")
+        import_at = before.index("import torch")
+        assert env_at < import_at
+
+    def test_initialised_cuda_is_caught_before_fit(self):
+        before = self._finetune_source_before_fit()
+        assert "torch.cuda.is_initialized()" in before
+        assert "ddp_spawn" in before  # the documented escape hatch
 
     def test_device_count_is_how_gpus_are_counted(self):
         before = self._finetune_source_before_fit()

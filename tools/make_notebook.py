@@ -2121,24 +2121,34 @@ result.
 !pip install -q timm
 
 import os
+import os
 import subprocess
+
+# CUDA MUST NOT BE INITIALISED IN THIS PROCESS. Lightning's ddp_notebook
+# strategy forks, and a fork inheriting a live CUDA context dies in the child
+# with "Cannot re-initialize CUDA in forked subprocess".
+#
+# The trap is that the obvious check is the unsafe one. torch's own docs are
+# explicit: is_available() "will NOT poison fork if
+# PYTORCH_NVML_BASED_CUDA_CHECK=1" -- meaning by default it does, because it
+# falls through to _cuda_getDeviceCount(), which calls cuInit. device_count()
+# asks NVML first and stays clean. get_device_name and get_device_properties
+# reach _lazy_init and are also out. Device names come from nvidia-smi, which
+# is a separate process entirely.
+#
+# The env var is set as well, before torch is touched, so that any library
+# calling is_available() downstream takes the NVML path too.
+os.environ["PYTORCH_NVML_BASED_CUDA_CHECK"] = "1"
 
 import torch
 
-# CUDA MUST NOT BE INITIALISED IN THIS PROCESS. Lightning's ddp_notebook
-# strategy forks, and a fork inheriting a live CUDA context fails in the
-# child with "Cannot re-initialize CUDA in forked subprocess". That rules out
-# torch.cuda.get_device_name and get_device_properties, both of which call
-# _lazy_init underneath; device_count and is_available do not, so they are
-# safe. Device names come from nvidia-smi, which is a separate process.
-if not torch.cuda.is_available():
-    raise SystemExit("Settings -> Accelerator -> GPU T4 x2")
-
 DEVICES = torch.cuda.device_count()
+if DEVICES == 0:
+    raise SystemExit("Settings -> Accelerator -> GPU T4 x2")
 print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
                       "--format=csv,noheader"],
                      capture_output=True, text=True).stdout.strip())
-print("devices:", DEVICES)
+print("devices:", DEVICES, "| cuda initialised:", torch.cuda.is_initialized())
 if DEVICES < 2:
     print("NOTE: one GPU visible. Settings -> Accelerator -> GPU T4 x2 "
           "roughly halves wall-clock. The run is correct either way -- "
@@ -2374,13 +2384,29 @@ report = knee_lightning.EpochReport()
 # in this process, where they are guaranteed to be visible.
 csv_logger = pl.loggers.CSVLogger("/kaggle/working", name=f"lit_fold{FOLD}")
 
+# ddp_notebook forks rather than re-executing the script, which is what makes
+# DDP usable from a notebook at all -- plain "ddp" deadlocks here. If the fork
+# route ever proves unworkable, "ddp_spawn" is a drop-in: everything the child
+# needs is picklable by design, since the dataset and module live in
+# src/model/lightning.py and the memmaps are dropped in __getstate__.
+STRATEGY = "ddp_notebook" if DEVICES > 1 else "auto"
+
+# The fork cannot survive a CUDA context that already exists here. Catch it
+# now, with an instruction, rather than as a sixty-line traceback out of a
+# child process after the model and loaders are built.
+if STRATEGY == "ddp_notebook" and torch.cuda.is_initialized():
+    raise SystemExit(
+        "CUDA is already initialised in this process, so the forked workers "
+        "cannot start.\\n"
+        "Run -> Restart Session, then run the cells in order. If it recurs, "
+        "set STRATEGY = 'ddp_spawn' in this cell."
+    )
+
 trainer = pl.Trainer(
     max_epochs=EPOCHS,
     accelerator="gpu",
     devices=DEVICES,
-    # ddp_notebook forks rather than re-executing the script, which is what
-    # makes DDP usable from a notebook at all. Plain "ddp" deadlocks here.
-    strategy="ddp_notebook" if DEVICES > 1 else "auto",
+    strategy=STRATEGY,
     precision="16-mixed",
     accumulate_grad_batches=ACCUM_STEPS,
     callbacks=[checkpointer, report],

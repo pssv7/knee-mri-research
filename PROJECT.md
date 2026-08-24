@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-24 (16 slices + Lightning DDP ready; fork-safe CUDA init fixed).
+Last updated: 2026-08-24 (two-GPU run blocked on fork poisoning by torch.cuda.is_available; fixed, ready to rerun).
 
 ---
 
@@ -172,7 +172,7 @@ docs/
   worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   281 tests
+tests/                   284 tests
 ```
 
 ---
@@ -359,6 +359,15 @@ All guarded by tests now.
 - **P100 (sm_60) is unsupported** by Kaggle's PyTorch build. Use T4.
 - **A process-pool worker defined in a notebook cell cannot be pickled.** It
   lives in `src/data/cache.py` as `build_series_record`.
+- **`torch.cuda.is_available()` poisons a fork.** Lightning's `ddp_notebook`
+  forks, and a child inheriting a CUDA context dies with "Cannot
+  re-initialize CUDA in forked subprocess" — raised from inside Lightning's
+  own matmul-precision probe, so the traceback points away from the cause.
+  torch's docstring says it plainly: `is_available()` avoids poisoning
+  *only* when `PYTORCH_NVML_BASED_CUDA_CHECK=1`, otherwise it calls
+  `cuInit`. Use `device_count()` (NVML first), never `get_device_name` or
+  `get_device_properties` (both reach `_lazy_init`), and keep any `.to(cuda)`
+  after `Trainer.fit`. Guarded by `tests/test_lightning.py::TestForkSafety`.
 - **`Sag` in these series descriptions means sagittal**, not Turkish `sağ`
   ("right"). Adding that token to the side patterns would mislabel a large
   fraction of the dataset.
