@@ -94,11 +94,13 @@ def build_fake_checkpoints(target: pathlib.Path):
                    target / f"knee_fold{fold}.pt")
 
     # The fine-tuned arm: a real timm backbone so the state dict has the
-    # shape the ensemble notebook will load.
-    backbone = timm.create_model("convnext_tiny.fb_in22k_ft_in1k",
-                                 pretrained=False, num_classes=0, in_chans=3)
-    torch.save(net.KneeNet(backbone, backbone.num_features).state_dict(),
-               target / "convnext_fold0.pt")
+    # shape the ensemble notebook will load. Two folds, so the check exercises
+    # the same multi-checkpoint averaging a five-fold upload goes through.
+    for fold in range(2):
+        backbone = timm.create_model("convnext_tiny.fb_in22k_ft_in1k",
+                                     pretrained=False, num_classes=0, in_chans=3)
+        torch.save(net.KneeNet(backbone, backbone.num_features).state_dict(),
+                   target / f"convnext_fold{fold}.pt")
 
     import pandas as pd
     from src import config

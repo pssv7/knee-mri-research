@@ -606,11 +606,14 @@ if not torch.cuda.is_available():
 VRAM_GB = torch.cuda.get_device_properties(0).total_memory / 1e9
 print(f"VRAM: {VRAM_GB:.0f} GB")
 
-# 14B needs ~28 GB in bf16; anything smaller gets the 7B.
-if VRAM_GB >= 38:
-    MODEL = "Qwen/Qwen2.5-14B-Instruct"
-elif VRAM_GB >= 20:
-    MODEL = "Qwen/Qwen2.5-7B-Instruct"
+# AWQ 4-bit puts the 32B at ~19 GB of weights, so it fits an A100 40GB or an
+# L4 24GB and replaces the 14B-bf16 that used to top this ladder. The gold
+# checkpoint is the arbiter: compare its per-finding AUCs against the 14B run
+# before spending an hour of corpus extraction on a bigger model.
+if VRAM_GB >= 22:
+    MODEL = "Qwen/Qwen2.5-32B-Instruct-AWQ"
+elif VRAM_GB >= 15:
+    MODEL = "Qwen/Qwen2.5-14B-Instruct-AWQ"
 else:
     MODEL = "Qwen/Qwen2.5-7B-Instruct-AWQ"
 
@@ -723,15 +726,25 @@ except Exception as exc:  # noqa: BLE001
     USE_VLLM = False
 
 if USE_VLLM:
-    llm = LLM(model=MODEL, dtype="bfloat16", gpu_memory_utilization=0.90,
+    # dtype="auto" reads the checkpoint config: AWQ models declare float16,
+    # which their kernels require; full-precision Qwen declares bfloat16.
+    llm = LLM(model=MODEL, dtype="auto", gpu_memory_utilization=0.90,
               max_model_len=6144, trust_remote_code=True)
     sampling = SamplingParams(temperature=0.7, top_p=0.9,
                               max_tokens=MAX_NEW_TOKENS, n=N_SAMPLES)
 else:
     import torch
     from transformers import AutoModelForCausalLM
+    if "AWQ" in MODEL:
+        # transformers needs the autoawq kernels for AWQ checkpoints; vLLM
+        # ships its own, so this only matters on the fallback path.
+        import importlib.util, subprocess, sys
+        if importlib.util.find_spec("awq") is None:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                            "autoawq"], check=False)
+    dtype = torch.float16 if "AWQ" in MODEL else torch.bfloat16
     hf_model = AutoModelForCausalLM.from_pretrained(
-        MODEL, torch_dtype=torch.bfloat16, device_map="auto")
+        MODEL, torch_dtype=dtype, device_map="auto")
     hf_model.eval()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -2284,10 +2297,15 @@ def predict(loader):
 """)
 
     nb.md("""
-## 6. Train one fold, and measure
+## 6. Train one fold
 
-The projection printed at the end is the point of this run. Do not launch five
-folds before reading it.
+`FOLD` below decides which of the five folds this session trains and validates
+on; five sessions with `FOLD = 0` through `4` produce the checkpoints notebook
+10 ensembles. The best epoch is chosen on the **validation fold** against the
+mined labels. Gold is printed every epoch but never selects anything -- an
+earlier version checkpointed on gold macro, which quietly turned the only
+honest measuring stick into a model-selection set and inflated its reading by
+an estimated 0.01-0.03.
 """)
 
     nb.code("""
@@ -2301,12 +2319,24 @@ from tqdm.auto import tqdm
 EPOCHS = 12
 LR = 1e-4
 
+# Which fold this session trains. Edit this one line per session so five
+# sessions produce convnext_fold0.pt through convnext_fold4.pt.
+FOLD = 0
+CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
+
 keyed = folded.set_index("StudyInstanceUID")
-train_studies = [s for s in index.studies if keyed.loc[s, "fold"] != 0]
-val_studies = [s for s in index.studies if keyed.loc[s, "fold"] == 0]
+train_studies = [s for s in index.studies if keyed.loc[s, "fold"] != FOLD]
+val_studies = [s for s in index.studies if keyed.loc[s, "fold"] == FOLD]
 train_loader = make_loader(index, train_studies, shuffle=True, augment=True)
+val_loader = make_loader(index, val_studies)
 gold_loader = make_loader(gold_index, gold_index.studies)
-print(f"train {len(train_studies)}  val {len(val_studies)}  gold {len(gold_index)}")
+print(f"fold {FOLD}: train {len(train_studies)}  val {len(val_studies)}  "
+      f"gold {len(gold_index)}")
+
+# Selection truth: the validation fold's mined labels, binarised at 0.5. They
+# are noisy, but there are ~870 of them against gold's 58, and unlike gold
+# they are not the number the whole project is judged by.
+mined = labels.set_index("StudyInstanceUID")
 
 optimiser = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
 scaler = torch.amp.GradScaler("cuda")
@@ -2337,27 +2367,33 @@ for epoch in range(EPOCHS):
 
     epoch_times.append(time.time() - start)
 
-    # Gold is 58 studies, so scoring every epoch is nearly free and shows
-    # whether the run is converging or has already peaked -- which decides
-    # whether more epochs are worth buying.
+    # Selection happens on the validation fold. Gold is scored as well --
+    # 58 studies, nearly free -- but only to watch convergence; letting it
+    # pick the checkpoint is the leak described above the section.
+    val_ids, val_probs = predict(val_loader)
+    val_truth = mined.loc[val_ids]
+    val_macro = float(np.nanmean([
+        auc((val_truth[name].to_numpy() >= 0.5).astype(int), val_probs[:, i])
+        for i, name in enumerate(config.LABELS)]))
+
     gold_ids, gold_probs = predict(gold_loader)
     truth = gold.set_index("StudyInstanceUID").loc[gold_ids]
-    macro = float(np.nanmean([
+    gold_macro = float(np.nanmean([
         auc(truth[name].to_numpy().astype(int), gold_probs[:, i])
         for i, name in enumerate(config.LABELS)]))
+
     marker = ""
-    if macro > best_macro:
-        best_macro, marker = macro, "  <- best"
-        torch.save(model.state_dict(), "/kaggle/working/convnext_fold0.pt")
+    if val_macro > best_macro:
+        best_macro, marker = val_macro, "  <- best"
+        torch.save(model.state_dict(), CHECKPOINT)
 
     print(f"  epoch {epoch + 1}: {epoch_times[-1] / 60:.1f} min  "
-          f"gold macro {macro:.3f}  (frozen grid-1 baseline 0.770){marker}")
+          f"val macro {val_macro:.3f}  gold {gold_macro:.3f} (monitor only){marker}")
 
-# The last epoch is not reliably the best one, and with 58 gold studies the
-# per-epoch estimate is noisy enough that the final weights can be meaningfully
-# worse than an earlier checkpoint.
-print(f"\\nbest gold macro: {best_macro:.3f}")
-model.load_state_dict(torch.load("/kaggle/working/convnext_fold0.pt"))
+# The last epoch is not reliably the best one; restore the checkpoint the
+# validation fold picked.
+print(f"\\nbest val macro: {best_macro:.3f}")
+model.load_state_dict(torch.load(CHECKPOINT))
 
 per_epoch = float(np.mean(epoch_times))
 share = len(index) / 4349
@@ -2605,7 +2641,12 @@ START = time.time()
 # discarded. That matters because the Efficiency Prize scores runtime: a
 # single-path run must be timed as a single-path run, or the comparison
 # measures nothing useful.
-BLEND = 0.5
+#
+# The leaderboard settled this at 1.0: frozen 0.787, 50/50 blend 0.839, tuned
+# alone 0.845. Averaging a weak ranker into a strong one landed between them.
+# The tuned path averages probabilities across every convnext_fold*.pt it
+# finds, so a five-fold upload becomes a five-model ensemble with no edit here.
+BLEND = 1.0
 USE_FROZEN = BLEND < 1.0
 USE_TUNED = BLEND > 0.0
 

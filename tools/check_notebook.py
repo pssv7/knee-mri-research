@@ -23,10 +23,10 @@ NOTEBOOK = os.path.join(ROOT, "notebooks", "03_extract_labels.ipynb")
 
 GPU_TIERS = [("A100-80GB", 80), ("A100-40GB", 42), ("L4", 24), ("T4", 15)]
 
-STUB_RESPONSE = (
-    '{"ACL": {"present": "yes", "severity": "severe", '
-    '"certainty": "definite", "evidence": "x"}}'
-)
+# The notebook extracts probabilities now, so the stub answers in that shape.
+# MCL is present but low and Fracture is omitted, so the assertions can tell
+# "parsed a low value" apart from "failed to parse".
+STUB_RESPONSE = '{"ACL": 92, "MCL": 8}'
 
 
 def load_code_cells():
@@ -123,19 +123,22 @@ def check_logic_cells(cells):
     print("cell 8 -- extractor module")
     exec(cells[8], namespace)  # noqa: S102
 
-    # Stand in for the model by driving the notebook's own parsing path with
-    # lexicon output, so cells 12 and 16 handle real objects.
+    # Stand in for the model by driving the notebook's own aggregation path
+    # with lexicon output mapped to probabilities, so cells 12 and 16 handle
+    # objects of the real shape.
     def fake_run(reports, desc=""):
         results = []
         for report in reports:
             extracted = lexicon.extract_report(str(report))
-            sample = {
-                name: {"present": value["present"],
-                       "severity": value["severity"],
-                       "evidence": value["span"]}
-                for name, value in extracted.items()
-            }
-            results.append(namespace["aggregate_samples"]([sample] * 3))
+            sample = {}
+            for name, value in extracted.items():
+                if value["present"] == 1:
+                    sample[name] = 0.9
+                elif value["present"] == 0:
+                    sample[name] = 0.1
+                else:
+                    sample[name] = None
+            results.append(namespace["aggregate_probabilities"]([sample] * 3))
         return results
 
     namespace["run_extraction"] = fake_run
@@ -158,7 +161,10 @@ def check_model_cell(cells):
     exec(cells[8], namespace)  # noqa: S102
     exec(cells[10], namespace)  # noqa: S102
     results = namespace["run_extraction"](["Rotura del menisco interno."], "(stub)")
-    assert results[0]["ACL"]["present"] == 1
+    assert results[0]["ACL"]["probability"] > 0.5
+    assert results[0]["MCL"]["probability"] < 0.5
+    # An omitted finding must stay None, not default to anything.
+    assert results[0]["Fracture"]["probability"] is None
     print(f"      n_samples={namespace['N_SAMPLES']} "
           f"max_model_len={namespace['llm'].kwargs.get('max_model_len')}")
 
