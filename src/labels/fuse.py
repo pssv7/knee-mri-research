@@ -29,6 +29,7 @@ the extractors conflict is genuinely ambiguous and should not pull as hard as
 one where they concur.
 """
 
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -120,6 +121,49 @@ def fuse(lex: pd.DataFrame, llm: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(output)
 
 
+def fuse_scores(lex: pd.DataFrame, llm_scores: pd.DataFrame) -> pd.DataFrame:
+    """Blend the lexicon frame with an already-combined LLM score frame.
+
+    `llm_scores` is the output of `mode_fusion.combine` (or
+    `mode_fusion.from_categorical`): per finding a score in [0, 1], an
+    `_informative` flag, and a `_call` boolean. The weight semantics mirror
+    `fuse`: agreement compares the lexicon's call with the LLM's call.
+    """
+    merged = lex.merge(llm_scores, on=config.ID_COL, suffixes=("_lex", ""))
+    if len(merged) != len(lex):
+        raise ValueError(f"merge lost rows: {len(lex)} -> {len(merged)}")
+
+    output = {config.ID_COL: merged[config.ID_COL].to_numpy()}
+
+    for name in config.LABELS:
+        lex_present = merged[f"{name}_lex"].to_numpy(dtype=object)
+        lex_sev = merged[f"{name}_severity"].to_numpy()
+        llm_score = merged[name].to_numpy(dtype=float)
+        llm_ok = merged[f"{name}_informative"].to_numpy(dtype=bool)
+        llm_call = merged[f"{name}_call"].to_numpy(dtype=bool)
+
+        targets = np.empty(len(merged))
+        sample_weights = np.empty(len(merged))
+
+        for i in range(len(merged)):
+            lex_score = _score(lex_present[i], lex_sev[i])
+            targets[i] = LEXICON_WEIGHT * lex_score + LLM_WEIGHT * llm_score[i]
+
+            lex_ok = _informative(lex_present[i])
+            if lex_ok and llm_ok[i]:
+                agree = (lex_score > 0) == llm_call[i]
+                sample_weights[i] = WEIGHT_AGREE if agree else WEIGHT_DISAGREE
+            elif lex_ok or llm_ok[i]:
+                sample_weights[i] = WEIGHT_SINGLE
+            else:
+                sample_weights[i] = WEIGHT_SILENT
+
+        output[name] = np.clip(targets, 0.0, 1.0)
+        output[f"{name}_weight"] = sample_weights
+
+    return pd.DataFrame(output)
+
+
 def extractor_aucs(gold: pd.DataFrame, lex_gold: pd.DataFrame,
                    llm_gold: pd.DataFrame) -> pd.DataFrame:
     """Diagnostic only: how each extractor scores on gold.
@@ -145,8 +189,17 @@ def extractor_aucs(gold: pd.DataFrame, lex_gold: pd.DataFrame,
 
 
 def build(train_csv=None, llm_mined=None, llm_gold=None,
+          probs_mined=None, probs_gold=None,
           out_path: Optional[str] = None):
-    """Full pipeline: extract, fuse, and score against gold."""
+    """Full pipeline: extract, fuse, and score against gold.
+
+    When the probability-mode parquets exist alongside the categorical ones,
+    the two modes are combined by `mode_fusion` before the lexicon blend.
+    Otherwise this is the original categorical-only fusion, so the pipeline
+    still runs on a machine that never downloaded the probability dumps.
+    """
+    from src.labels import mode_fusion
+
     gold = calibrate.load_gold(train_csv)
     unlabelled = calibrate.load_unlabelled(train_csv)
 
@@ -161,11 +214,25 @@ def build(train_csv=None, llm_mined=None, llm_gold=None,
     mined_frame = (mined_frame.set_index(config.ID_COL)
                    .loc[unlabelled[config.ID_COL]].reset_index())
 
+    probs_mined_path = probs_mined or (config.META_DIR / "llm_probs.parquet")
+    probs_gold_path = probs_gold or (config.META_DIR / "llm_probs_gold.parquet")
+    use_probs = (Path(probs_mined_path).exists()
+                 and Path(probs_gold_path).exists())
+
+    if use_probs:
+        probs_mined_frame = pd.read_parquet(probs_mined_path)
+        probs_gold_frame = pd.read_parquet(probs_gold_path)
+        scores_mined = mode_fusion.combine(mined_frame, probs_mined_frame)
+        scores_gold = mode_fusion.combine(gold_frame, probs_gold_frame)
+    else:
+        scores_mined = mode_fusion.from_categorical(mined_frame)
+        scores_gold = mode_fusion.from_categorical(gold_frame)
+
     lex_gold = lexicon_frame(gold["Report"], gold[config.ID_COL])
     lex_mined = lexicon_frame(unlabelled["Report"], unlabelled[config.ID_COL])
 
-    fused = fuse(lex_mined, mined_frame)
-    fused_gold = fuse(lex_gold, gold_frame)
+    fused = fuse_scores(lex_mined, scores_mined)
+    fused_gold = fuse_scores(lex_gold, scores_gold)
     aucs = extractor_aucs(gold, lex_gold, gold_frame)
 
     if out_path:
