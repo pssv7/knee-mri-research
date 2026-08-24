@@ -719,7 +719,8 @@ sampling = SamplingParams(temperature=0.7, top_p=0.9, max_tokens=1400,
 def to_chat(report):
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": build_prompt(str(report)[:MAX_REPORT_CHARS])},
+        {"role": "user",
+         "content": build_probability_prompt(str(report)[:MAX_REPORT_CHARS])},
     ]
     return tokenizer.apply_chat_template(messages, tokenize=False,
                                          add_generation_prompt=True)
@@ -732,8 +733,8 @@ def run_extraction(reports, desc=""):
 
     results = []
     for output in outputs:
-        samples = [parse_response(o.text) for o in output.outputs]
-        results.append(aggregate_samples(samples))
+        samples = [parse_probabilities(o.text) for o in output.outputs]
+        results.append(aggregate_probabilities(samples))
     return results
 """)
 
@@ -778,26 +779,26 @@ def auc(y_true, scores):
     return (ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
 
 
-print(f"\\n{'finding':18s} {'n+':>3s} {'ment':>5s} {'prec':>5s} {'rec':>5s} {'AUC':>6s}")
-print("-" * 48)
+# Distinct values matter as much as AUC here. The categorical extractor tied
+# 369 of 696 label slots on one value, and AUC cannot rank inside a tie block.
+PREVIOUS = dict(zip(LABELS, [0.855, 0.812, 0.678, 0.735, 0.814, 0.680,
+                             0.646, 0.713, 0.619, 0.818, 0.662, 0.794]))
+
+print(f"\\n{'finding':18s} {'n+':>3s} {'AUC':>6s} {'prev':>6s} {'distinct':>9s} {'maxtie':>7s}")
+print("-" * 58)
 aucs = []
 for name in LABELS:
     truth = gold[name].astype(int).to_numpy()
-    present = np.array([r[name]["present"] if r[name]["present"] is not None else -1
-                        for r in gold_results])
-    severity = np.array([r[name]["severity"] if r[name]["severity"] is not None else 0.0
-                         for r in gold_results])
-    pred = (present == 1).astype(int)
-    tp = int(((pred == 1) & (truth == 1)).sum())
-    fp = int(((pred == 1) & (truth == 0)).sum())
-    fn = int(((pred == 0) & (truth == 1)).sum())
-    prec = tp / (tp + fp) if tp + fp else float("nan")
-    rec = tp / (tp + fn) if tp + fn else float("nan")
-    a = auc(truth, severity); aucs.append(a)
-    print(f"{name:18s} {truth.sum():3d} {(present != -1).mean():5.0%} "
-          f"{prec:5.2f} {rec:5.2f} {a:6.3f}")
-print("-" * 48)
-print(f"macro AUC: {np.nanmean(aucs):.3f}   (lexicon baseline: 0.735)")
+    scores = np.array([r[name]["probability"] if r[name]["probability"] is not None
+                       else 0.0 for r in gold_results])
+    a = auc(truth, scores); aucs.append(a)
+    values, counts = np.unique(scores, return_counts=True)
+    print(f"{name:18s} {truth.sum():3d} {a:6.3f} {PREVIOUS[name]:6.3f} "
+          f"{len(values):9d} {counts.max():7d}")
+print("-" * 58)
+print(f"macro AUC: {np.nanmean(aucs):.3f}")
+print(f"  previous categorical LLM: 0.838   fused with lexicon: 0.854")
+print(f"  leaderboard cluster sits at 0.94, so the target is >0.92 here")
 """)
 
     nb.md("""
@@ -830,10 +831,8 @@ def to_frame(results, ids):
         row = {}
         for name in LABELS:
             entry = result[name]
-            row[name] = entry["present"]
-            row[f"{name}_severity"] = entry["severity"]
+            row[name] = entry["probability"]
             row[f"{name}_confidence"] = entry.get("confidence")
-            row[f"{name}_evidence"] = entry.get("evidence")
         rows.append(row)
     frame = pd.DataFrame(rows)
     frame.insert(0, "StudyInstanceUID", list(ids))
@@ -843,19 +842,19 @@ def to_frame(results, ids):
 mined_frame = to_frame(mined, unlabelled["StudyInstanceUID"])
 gold_frame = to_frame(gold_results, gold["StudyInstanceUID"])
 
-mined_frame.to_parquet("llm_labels.parquet", index=False)
-gold_frame.to_parquet("llm_labels_gold.parquet", index=False)
+mined_frame.to_parquet("llm_probs.parquet", index=False)
+gold_frame.to_parquet("llm_probs_gold.parquet", index=False)
 
 print(mined_frame.shape)
-print("\\npositive rate per finding (mined):")
+print("\\nprobability distribution per finding (mined):")
 for name in LABELS:
-    values = mined_frame[name]
-    print(f"  {name:18s} pos {(values == 1).mean():5.1%}  "
-          f"neg {(values == 0).mean():5.1%}  unclear {values.isna().mean():5.1%}")
+    values = mined_frame[name].dropna()
+    print(f"  {name:18s} mean {values.mean():5.2f}  "
+          f"distinct {values.nunique():5d}  missing {mined_frame[name].isna().mean():5.1%}")
 
 from google.colab import files
-files.download("llm_labels.parquet")
-files.download("llm_labels_gold.parquet")
+files.download("llm_probs.parquet")
+files.download("llm_probs_gold.parquet")
 """)
 
     nb.md("""

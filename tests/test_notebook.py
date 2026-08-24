@@ -114,9 +114,19 @@ class TestEmbeddedModule:
         # Cells after the module cell call these; a rename would break the
         # notebook without breaking any test in test_llm_extract.py.
         joined = "\n".join(cell_source(c) for c in code_cells())
-        for name in ("build_prompt", "parse_response", "aggregate_samples",
-                     "SYSTEM_PROMPT"):
+        for name in ("build_probability_prompt", "parse_probabilities",
+                     "aggregate_probabilities", "SYSTEM_PROMPT"):
             assert joined.count(name) >= 2, f"{name} defined but never used"
+
+    def test_the_categorical_path_is_not_silently_still_wired(self):
+        # The notebook was switched to probabilities because the categorical
+        # contract tied 53% of label slots onto one value. If a later edit
+        # reinstates parse_response in the run loop, the tie problem returns
+        # with no visible symptom.
+        joined = "\n".join(cell_source(c) for c in code_cells())
+        run_loop = joined[joined.index("def run_extraction"):]
+        assert "parse_probabilities" in run_loop
+        assert "parse_response(" not in run_loop
 
 
 class TestBootstrapReloads:
