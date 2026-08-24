@@ -3,6 +3,7 @@
 /cache/
 *.npy
 *.parquet
+*.pt
 *.dcm
 /weights/
 /outputs/
