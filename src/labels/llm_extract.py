@@ -19,25 +19,14 @@ from typing import Dict, List, Optional
 FINDING_DEFINITIONS = {
     "ACL": "Anterior cruciate ligament tear, rupture, or significant injury. "
            "Not intact/normal ACL, not a mention of the PCL.",
-    "MCL": "Medial collateral ligament injury: a tear, rupture, or sprain, "
-           "including partial-thickness and low-grade sprain. A normal or "
-           "intact MCL, or oedema of surrounding soft tissue without ligament "
-           "involvement, does not count.",
-    "Medial Meniscus": "TEAR of the medial (internal) meniscus, meaning signal "
-                       "that reaches an articular surface, or a described "
-                       "tear/rupture/rotura/scheur/yirtik, or a displaced or "
-                       "truncated fragment. Intrasubstance degeneration, "
-                       "mucoid degeneration, grade 1 or grade 2 signal that "
-                       "does not reach a surface, and simple 'degenerative "
-                       "change' are NOT tears -- score those low. Most reports "
-                       "mention the meniscus whether or not it is torn, so a "
-                       "mention alone is not evidence.",
-    "Lateral Meniscus": "TEAR of the lateral (external) meniscus, under the "
-                        "same criterion: signal reaching an articular surface, "
-                        "an explicitly described tear, or a displaced fragment. "
-                        "Intrasubstance or grade 1-2 signal that does not reach "
-                        "a surface is not a tear. A discoid meniscus without a "
-                        "tear does not count.",
+    # Reverted to the wording that measured better. The sharper radiological
+    # phrasing -- surface-reaching signal, explicit exclusions -- was reasoned
+    # rather than tested, and cost 0.02 macro and 0.15 on MCL alone.
+    "MCL": "Medial collateral ligament tear, rupture, or sprain.",
+    "Medial Meniscus": "Tear of the medial (internal) meniscus. Degeneration "
+                       "without a tear does not count.",
+    "Lateral Meniscus": "Tear of the lateral (external) meniscus. Degeneration "
+                        "without a tear does not count.",
     "Medial OA": "Osteoarthritis, cartilage loss, or chondral thinning in the "
                  "MEDIAL femorotibial compartment.",
     "Lateral OA": "Osteoarthritis, cartilage loss, or chondral thinning in the "
@@ -300,10 +289,6 @@ How to think about it:
 
 Do not round to 0, 50, or 100. Distinguishing two studies that both fail to
 mention a finding is exactly what this is for.
-
-Spread your numbers. If you give the same value to most reports for a finding,
-that finding becomes unrankable and the estimate is worthless -- so even when
-two reports look similar, prefer a small difference over an identical value.
 
 REPORT:
 \"\"\"
