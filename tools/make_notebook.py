@@ -846,6 +846,22 @@ print("-" * 58)
 print(f"macro AUC: {np.nanmean(aucs):.3f}")
 print(f"  previous categorical LLM: 0.838   fused with lexicon: 0.854")
 print(f"  leaderboard cluster sits at 0.94, so the target is >0.92 here")
+
+# Dump the gold output so fusion strategies can be tried locally in seconds
+# rather than by re-running the model. 58 rows -- the download is instant.
+gold_dump = pd.DataFrame(
+    [{name: r[name]["probability"] for name in LABELS} for r in gold_results])
+gold_dump.insert(0, "StudyInstanceUID", gold["StudyInstanceUID"].values)
+for name in LABELS:
+    gold_dump[f"{name}_confidence"] = [r[name]["confidence"] for r in gold_results]
+gold_dump.to_parquet("llm_probs_gold.parquet", index=False)
+print("\\nwrote llm_probs_gold.parquet -- download this before running the corpus")
+
+try:
+    from google.colab import files
+    files.download("llm_probs_gold.parquet")
+except Exception:
+    pass
 """)
 
     nb.md("""
