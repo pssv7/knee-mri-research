@@ -157,6 +157,7 @@ tools/
 docs/
   plan.md                the forward plan, with the gate at every step
   agent_playbook.md      how decisions get made here -- read before acting
+  worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
 tests/                   255 tests
