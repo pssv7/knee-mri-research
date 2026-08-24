@@ -174,6 +174,40 @@ class TestCheckpointExport:
                 path, str(tmp_path / "out.pt"))
 
 
+class TestForkSafety:
+    """ddp_notebook forks, and a fork inheriting a CUDA context dies.
+
+    `get_device_name` and `get_device_properties` both call `_lazy_init`;
+    `device_count` and `is_available` do not. Nothing in the notebook may
+    touch the first pair before `Trainer.fit`.
+    """
+
+    def _finetune_source_before_fit(self):
+        source = (config.PROJECT_ROOT / "tools" / "make_notebook.py").read_text()
+        start = source.index("def build_finetune_notebook")
+        end = source.index("def build_export_notebook")
+        finetune = source[start:end]
+        return finetune[:finetune.index("trainer.fit")]
+
+    def test_no_lazy_init_call_before_fit(self):
+        before = self._finetune_source_before_fit()
+        # The trailing paren matters: the comment explaining the hazard names
+        # both functions, and must not trip this.
+        assert "torch.cuda.get_device_name(" not in before
+        assert "torch.cuda.get_device_properties(" not in before
+
+    def test_device_count_is_how_gpus_are_counted(self):
+        before = self._finetune_source_before_fit()
+        assert "torch.cuda.device_count()" in before
+
+    def test_model_is_not_moved_to_gpu_before_fit(self):
+        # Lightning moves the module; doing it by hand would initialise CUDA
+        # in the parent and break the fork.
+        before = self._finetune_source_before_fit()
+        assert ".to(device)" not in before
+        assert ".cuda()" not in before
+
+
 class TestGoldIsNeverMonitored:
     def test_notebook_monitors_val_macro_only(self):
         source = (config.PROJECT_ROOT / "tools" / "make_notebook.py").read_text()

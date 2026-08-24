@@ -2121,14 +2121,23 @@ result.
 !pip install -q timm
 
 import os
+import subprocess
+
 import torch
 
+# CUDA MUST NOT BE INITIALISED IN THIS PROCESS. Lightning's ddp_notebook
+# strategy forks, and a fork inheriting a live CUDA context fails in the
+# child with "Cannot re-initialize CUDA in forked subprocess". That rules out
+# torch.cuda.get_device_name and get_device_properties, both of which call
+# _lazy_init underneath; device_count and is_available do not, so they are
+# safe. Device names come from nvidia-smi, which is a separate process.
 if not torch.cuda.is_available():
     raise SystemExit("Settings -> Accelerator -> GPU T4 x2")
 
 DEVICES = torch.cuda.device_count()
-for i in range(DEVICES):
-    print(f"GPU {i}:", torch.cuda.get_device_name(i))
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"],
+                     capture_output=True, text=True).stdout.strip())
 print("devices:", DEVICES)
 if DEVICES < 2:
     print("NOTE: one GPU visible. Settings -> Accelerator -> GPU T4 x2 "
@@ -2359,16 +2368,23 @@ checkpointer = pl.callbacks.ModelCheckpoint(
     monitor="val_macro", mode="max", save_top_k=1)
 report = knee_lightning.EpochReport()
 
+# Metrics go to a CSV as well as to stdout. Under ddp_notebook every rank is
+# a forked child, and a child's prints do not always find their way back to
+# the cell output -- so the per-epoch numbers are read back from disk below,
+# in this process, where they are guaranteed to be visible.
+csv_logger = pl.loggers.CSVLogger("/kaggle/working", name=f"lit_fold{FOLD}")
+
 trainer = pl.Trainer(
     max_epochs=EPOCHS,
     accelerator="gpu",
     devices=DEVICES,
-    # ddp_notebook spawns rather than re-executing the script, which is what
+    # ddp_notebook forks rather than re-executing the script, which is what
     # makes DDP usable from a notebook at all. Plain "ddp" deadlocks here.
     strategy="ddp_notebook" if DEVICES > 1 else "auto",
     precision="16-mixed",
     accumulate_grad_batches=ACCUM_STEPS,
     callbacks=[checkpointer, report],
+    logger=csv_logger,
     log_every_n_steps=50,
     enable_model_summary=False,
 )
@@ -2377,6 +2393,17 @@ start = time.time()
 trainer.fit(module, train_dataloaders=train_loader,
             val_dataloaders=[val_loader, gold_loader])
 elapsed = time.time() - start
+
+# Re-read the epoch table here rather than trusting the forked ranks' stdout.
+history = pd.read_csv(os.path.join(csv_logger.log_dir, "metrics.csv"))
+per_epoch_rows = (history.dropna(subset=["val_macro"])
+                  .groupby("epoch")[["val_macro", "gold_macro"]].last())
+best_epoch = per_epoch_rows["val_macro"].idxmax()
+print(f"\\n{'epoch':>5s} {'val macro':>9s} {'gold':>7s}")
+for epoch_no, row in per_epoch_rows.iterrows():
+    marker = "  <- selected" if epoch_no == best_epoch else ""
+    print(f"{epoch_no + 1:5d} {row['val_macro']:9.3f} "
+          f"{row['gold_macro']:7.3f}{marker}")
 
 print(f"\\nbest val macro: {checkpointer.best_model_score:.3f}")
 print("best checkpoint:", checkpointer.best_model_path)

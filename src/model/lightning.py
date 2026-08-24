@@ -7,20 +7,29 @@ abstraction: the semantics below are a faithful port of the hand-written loop
 in notebook 08, and any difference in the resulting score is a bug rather
 than a design choice.
 
-**Everything in this module lives here rather than in a notebook cell for one
-reason.** Lightning's notebook-safe DDP strategy spawns worker processes and
-pickles the dataset and module into them. A class defined in a notebook cell
-belongs to `__main__` and does not survive that trip -- this project has
-already paid for that lesson once, which is why the cache's process-pool
-worker lives in `src/data/cache.py`. The bootstrap writes these files to disk
-and imports them as `src.model.lightning`, so the spawn finds them by name.
+**Everything in this module lives here rather than in a notebook cell.**
+Lightning's `ddp_notebook` strategy forks, so children inherit memory and the
+module is not pickled on that path -- but dataloader workers and the spawn
+start method both do pickle, and a class defined in a notebook cell belongs to
+`__main__` and does not survive that. Keeping these definitions importable as
+`src.model.lightning` makes the module correct under either start method; the
+bootstrap writes the files to disk before importing them. The same rule put
+the cache's process-pool worker in `src/data/cache.py`.
+
+A related consequence of fork, and the reason the notebook is careful about
+it: **CUDA must not be initialised before `Trainer.fit`**. A fork inheriting a
+live CUDA context fails in the child. `torch.cuda.get_device_name` and
+`get_device_properties` both call `_lazy_init`; `device_count` and
+`is_available` do not.
 
 Three DDP hazards are handled explicitly, because each one runs clean and
 silently scores worse:
 
-**Memory-mapped shards are never pickled.** The cache is ~29 GB across three
-memmaps. Holding them as attributes would serialise them into every spawned
-process. They are opened lazily per process and dropped from `__getstate__`.
+**Memory-mapped shards are never serialised.** The cache is ~29 GB across
+three memmaps. Holding them as attributes would carry the array bytes into any
+process the dataset is pickled into. They are opened lazily per process and
+dropped from `__getstate__`, which also means each dataloader worker maps the
+files itself rather than sharing a handle across a fork.
 
 **AUC is computed over gathered predictions.** It is a ranking metric, so
 averaging two per-rank AUCs is not the AUC of the whole set. Predictions and

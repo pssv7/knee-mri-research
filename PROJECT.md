@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-24 (16 slices + Lightning DDP ready to run; weight-fix fold-0 pending submission).
+Last updated: 2026-08-24 (16 slices + Lightning DDP ready; fork-safe CUDA init fixed).
 
 ---
 
@@ -172,7 +172,7 @@ docs/
   worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   278 tests
+tests/                   281 tests
 ```
 
 ---
