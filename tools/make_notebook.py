@@ -702,18 +702,40 @@ with itself about should carry less weight.
 """)
 
     nb.code("""
-from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
 MAX_REPORT_CHARS = 6000   # longest report in the corpus is ~4,750
 N_SAMPLES = 3
+MAX_NEW_TOKENS = 400      # a probability JSON is short
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL)
-llm = LLM(model=MODEL, dtype="bfloat16", gpu_memory_utilization=0.90,
-          max_model_len=6144, trust_remote_code=True)
 
-sampling = SamplingParams(temperature=0.7, top_p=0.9, max_tokens=1400,
-                          n=N_SAMPLES)
+# vLLM is worth it for 4,349 reports and overkill for the 58-report gold
+# checkpoint -- which is the loop we want to run repeatedly while iterating the
+# prompt. Its compiled extension is also tied to a specific CUDA runtime and
+# breaks whenever Colab's torch shifts under it, so a transformers fallback
+# keeps the fast loop available even when vLLM will not import.
+USE_VLLM = True
+try:
+    from vllm import LLM, SamplingParams
+except Exception as exc:  # noqa: BLE001
+    print("vLLM unavailable, falling back to transformers:", str(exc)[:120])
+    USE_VLLM = False
+
+if USE_VLLM:
+    llm = LLM(model=MODEL, dtype="bfloat16", gpu_memory_utilization=0.90,
+              max_model_len=6144, trust_remote_code=True)
+    sampling = SamplingParams(temperature=0.7, top_p=0.9,
+                              max_tokens=MAX_NEW_TOKENS, n=N_SAMPLES)
+else:
+    import torch
+    from transformers import AutoModelForCausalLM
+    hf_model = AutoModelForCausalLM.from_pretrained(
+        MODEL, torch_dtype=torch.bfloat16, device_map="auto")
+    hf_model.eval()
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
 
 
 def to_chat(report):
@@ -726,16 +748,41 @@ def to_chat(report):
                                          add_generation_prompt=True)
 
 
+def _generate_hf(prompts, batch_size=8):
+    import torch
+    from tqdm.auto import tqdm
+
+    texts = []
+    for start in tqdm(range(0, len(prompts), batch_size), desc="generating"):
+        chunk = prompts[start:start + batch_size]
+        encoded = tokenizer(chunk, return_tensors="pt", padding=True,
+                            truncation=True, max_length=6144).to(hf_model.device)
+        with torch.no_grad():
+            out = hf_model.generate(
+                **encoded, max_new_tokens=MAX_NEW_TOKENS, do_sample=True,
+                temperature=0.7, top_p=0.9, num_return_sequences=N_SAMPLES,
+                pad_token_id=tokenizer.pad_token_id)
+        # Strip the prompt so only the completion is parsed.
+        generated = out[:, encoded["input_ids"].shape[1]:]
+        decoded = tokenizer.batch_decode(generated, skip_special_tokens=True)
+        for i in range(len(chunk)):
+            texts.append(decoded[i * N_SAMPLES:(i + 1) * N_SAMPLES])
+    return texts
+
+
 def run_extraction(reports, desc=""):
     prompts = [to_chat(r) for r in reports]
-    print(f"generating {len(prompts)} x {N_SAMPLES} samples {desc}...")
-    outputs = llm.generate(prompts, sampling)
+    print(f"generating {len(prompts)} x {N_SAMPLES} samples {desc} "
+          f"({'vLLM' if USE_VLLM else 'transformers'})...")
 
-    results = []
-    for output in outputs:
-        samples = [parse_probabilities(o.text) for o in output.outputs]
-        results.append(aggregate_probabilities(samples))
-    return results
+    if USE_VLLM:
+        outputs = llm.generate(prompts, sampling)
+        per_report = [[o.text for o in output.outputs] for output in outputs]
+    else:
+        per_report = _generate_hf(prompts)
+
+    return [aggregate_probabilities([parse_probabilities(t) for t in texts])
+            for texts in per_report]
 """)
 
     nb.md("""
