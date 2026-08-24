@@ -155,6 +155,8 @@ tools/
   check_kaggle_notebooks.py  runs 01/02 against a fake mini-dataset
   check_submission.py        runs 07 or 10 end to end on a fake test set
 docs/
+  plan.md                the forward plan, with the gate at every step
+  agent_playbook.md      how decisions get made here -- read before acting
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
 tests/                   255 tests
