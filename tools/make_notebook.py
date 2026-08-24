@@ -2811,15 +2811,26 @@ if widths:
         round(((input_dim / embed.TOKEN_DIM) - 1) ** 0.5))
 
 # --- fine-tuned path -----------------------------------------------------
+# Both shapes the training path produces are accepted: the bare state dict
+# notebook 08 exports, and Lightning's own checkpoint, which nests the same
+# tensors under `state_dict` behind a `model.` prefix. Requiring the export
+# first would be requiring a step that can be skipped -- one already was, when
+# a crash in the reporting cell landed between training and the conversion.
+TUNED_PATTERNS = ("convnext_fold*.pt", "lit_fold*.ckpt")
+
+tuned_paths = []
+for pattern in TUNED_PATTERNS:
+    tuned_paths += find_inputs(pattern)
+
 tuned_models = []
-for path in find_inputs("convnext_fold*.pt"):
-    state = torch.load(path, map_location="cpu")
+for path in tuned_paths:
     backbone = timm.create_model("convnext_tiny.fb_in22k_ft_in1k",
                                  pretrained=False, num_classes=0, in_chans=3)
     model = net.KneeNet(backbone, backbone.num_features).to(device)
-    model.load_state_dict(state)
+    model.load_state_dict(net.load_knee_state(path, map_location="cpu"))
     model.eval()
     tuned_models.append(model)
+    print("  tuned:", os.path.basename(path))
 
 side_model = side_classifier.SideNet().to(device)
 side_model.load_state_dict(torch.load(find_one("side_model.pt"), map_location=device))
@@ -2836,8 +2847,9 @@ print(f"tuned folds : {len(tuned_models)}"
 # and a submission of NaN, several cells later and far from the cause.
 if USE_TUNED and not tuned_models:
     raise SystemExit(
-        f"BLEND={BLEND} needs the tuned path, but no convnext_fold*.pt was "
-        "found. Attach the dataset holding the fine-tuned checkpoints.")
+        f"BLEND={BLEND} needs the tuned path, but nothing matching "
+        f"{' or '.join(TUNED_PATTERNS)} was found. Attach the dataset "
+        "holding the fine-tuned checkpoints.")
 if USE_FROZEN and not frozen_models:
     raise SystemExit(
         f"BLEND={BLEND} needs the frozen path, but no knee_fold*.pt was "

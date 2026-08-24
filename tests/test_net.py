@@ -279,3 +279,51 @@ class TestInputProjection:
             trimmed = model.forward_features(
                 features[:, :2], meta[:, :2], torch.ones(1, 2, dtype=torch.bool))
         assert torch.allclose(padded, trimmed, atol=1e-5)
+
+
+class TestLoadKneeState:
+    """The submission must read either checkpoint format.
+
+    Notebook 08 exports a bare state dict; Lightning writes the same tensors
+    nested under `state_dict` behind a `model.` prefix. Requiring the export
+    first is requiring a step that can be skipped, and one already was.
+    """
+
+    def _state(self):
+        import torch
+        backbone = torch.nn.Linear(4, 16)
+        return net.KneeNet(backbone, 16).state_dict()
+
+    def test_reads_a_bare_state_dict(self, tmp_path):
+        import torch
+        state = self._state()
+        path = tmp_path / "convnext_fold0.pt"
+        torch.save(state, path)
+        assert set(net.load_knee_state(str(path))) == set(state)
+
+    def test_reads_a_lightning_checkpoint(self, tmp_path):
+        import datetime
+        import torch
+        state = self._state()
+        path = tmp_path / "lit_fold0.ckpt"
+        torch.save({"state_dict": {f"model.{k}": v for k, v in state.items()},
+                    "saved_at": datetime.datetime(2026, 8, 24)}, path)
+        assert set(net.load_knee_state(str(path))) == set(state)
+
+    def test_both_formats_load_into_the_same_network(self, tmp_path):
+        import torch
+        state = self._state()
+        bare, lit = tmp_path / "a.pt", tmp_path / "b.ckpt"
+        torch.save(state, bare)
+        torch.save({"state_dict": {f"model.{k}": v for k, v in state.items()}},
+                   lit)
+        for path in (bare, lit):
+            fresh = net.KneeNet(torch.nn.Linear(4, 16), 16)
+            fresh.load_state_dict(net.load_knee_state(str(path)))
+
+    def test_an_empty_checkpoint_raises(self, tmp_path):
+        import torch
+        path = tmp_path / "empty.ckpt"
+        torch.save({"state_dict": {}}, path)
+        with pytest.raises(ValueError, match="no weights found"):
+            net.load_knee_state(str(path))

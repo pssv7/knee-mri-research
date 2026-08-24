@@ -104,12 +104,26 @@ def build_fake_checkpoints(target: pathlib.Path):
     if os.environ.get("CHECK_OMIT_TUNED") == "1":
         print("  (omitting the tuned checkpoints on purpose)")
     else:
+        # One of each format the training path can hand over: fold 0 as the
+        # bare state dict notebook 08 exports, fold 1 as a raw Lightning
+        # checkpoint. The submission has to read both, and the multi-fold
+        # averaging is exercised at the same time.
         for fold in range(2):
             backbone = timm.create_model("convnext_tiny.fb_in22k_ft_in1k",
                                          pretrained=False, num_classes=0,
                                          in_chans=3)
-            torch.save(net.KneeNet(backbone, backbone.num_features).state_dict(),
-                       target / f"convnext_fold{fold}.pt")
+            state = net.KneeNet(backbone, backbone.num_features).state_dict()
+            if fold == 0:
+                torch.save(state, target / "convnext_fold0.pt")
+            else:
+                import datetime
+                torch.save(
+                    {"state_dict": {f"model.{k}": v for k, v in state.items()},
+                     # A non-tensor payload, as a real Lightning checkpoint
+                     # carries: it makes weights_only refuse, exercising the
+                     # loader's fallback rather than only the happy path.
+                     "saved_at": datetime.datetime(2026, 8, 24)},
+                    target / "lit_fold1.ckpt")
 
     import pandas as pd
     from src import config

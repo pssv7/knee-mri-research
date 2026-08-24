@@ -199,3 +199,33 @@ def weighted_bce(logits: torch.Tensor, targets: torch.Tensor,
     if total <= 0:
         return loss.mean() * 0.0
     return (loss * weights).sum() / total
+
+
+def load_knee_state(path, map_location="cpu") -> dict:
+    """Read a `KneeNet` state dict from either checkpoint format.
+
+    The end-to-end path writes two things over its life: a bare state dict
+    from `torch.save(model.state_dict(), ...)`, and a Lightning checkpoint,
+    which nests the same tensors under `state_dict` and prefixes every key
+    with `model.` because `KneeNet` is an attribute of the wrapper. The
+    submission must not care which it was handed -- requiring a manual
+    conversion step is requiring a step that can be forgotten, and it was.
+
+    Lightning checkpoints also carry optimiser state and callback objects,
+    which `weights_only=True` refuses, so that is attempted first and relaxed
+    only on failure. These are files this project wrote.
+    """
+    try:
+        obj = torch.load(path, map_location=map_location, weights_only=True)
+    except TypeError:       # torch too old to know the argument
+        obj = torch.load(path, map_location=map_location)
+    except Exception:       # noqa: BLE001 - a Lightning checkpoint
+        obj = torch.load(path, map_location=map_location, weights_only=False)
+
+    state = obj.get("state_dict", obj) if isinstance(obj, dict) else obj
+    if any(key.startswith("model.") for key in state):
+        state = {key[len("model."):]: value for key, value in state.items()
+                 if key.startswith("model.")}
+    if not state:
+        raise ValueError(f"no weights found in {path}")
+    return state

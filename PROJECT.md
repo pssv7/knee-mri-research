@@ -135,7 +135,7 @@ raw DICOM (570 GB, Kaggle only)
           ├─ 05 embeddings      → embeddings_*.npy (frozen path)
           │   └─ 06 train       → knee_fold*.pt
           │       └─ 07 submit  → submission.csv
-          └─ 08 finetune        → convnext_fold0.pt (end-to-end path)
+          └─ 08 finetune        → convnext_fold0.pt / lit_fold0.ckpt
               └─ 10 submit_ensemble → submission.csv  (BLEND=1.0 for tuned only)
 
 train.csv reports
@@ -186,7 +186,7 @@ docs/
   worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   287 tests
+tests/                   294 tests
 ```
 
 ---
