@@ -319,3 +319,68 @@ class TestEpochReportSeesTheMetrics:
         # from silently reintroducing the nan log.
         assert hasattr(knee_lightning.EpochReport, "on_validation_end")
         assert "on_validation_epoch_end" not in vars(knee_lightning.EpochReport)
+
+
+class TestCheckpointIsTheBestNotTheLast:
+    """Every result in this project rests on this being true.
+
+    `save_top_k=1` with a monitor writes only when the metric improves, so a
+    static filename holds the best epoch rather than the most recent one --
+    but that is Lightning's behaviour to define, not ours, so it is measured
+    here rather than assumed. The metric peaks in the middle so that "best"
+    and "last" are different weights, and the epoch is stamped into the
+    parameters so the file identifies which one it holds.
+    """
+
+    SCORES = [0.10, 0.90, 0.50]   # peak at epoch 1 of 0, 1, 2
+
+    def _run(self, tmp_path):
+        from torch.utils.data import DataLoader, TensorDataset
+        scores = self.SCORES
+
+        class Stamped(pl.LightningModule):
+            def __init__(self):
+                super().__init__()
+                self.model = torch.nn.Linear(2, 1)
+
+            def training_step(self, batch, _):
+                return self.model(batch[0]).mean() * 0.0
+
+            def validation_step(self, batch, _, dataloader_idx=0):
+                pass
+
+            def on_validation_epoch_end(self):
+                with torch.no_grad():
+                    self.model.bias.fill_(float(self.current_epoch))
+                self.log("val_macro", scores[self.current_epoch])
+
+            def configure_optimizers(self):
+                return torch.optim.SGD(self.parameters(), lr=0.0)
+
+        checkpointer = pl.callbacks.ModelCheckpoint(
+            dirpath=str(tmp_path), filename="lit_fold0",
+            monitor="val_macro", mode="max", save_top_k=1)
+        data = DataLoader(TensorDataset(torch.randn(4, 2)), batch_size=2)
+        pl.Trainer(max_epochs=len(scores), accelerator="cpu", devices=1,
+                   logger=False, enable_progress_bar=False,
+                   enable_model_summary=False, num_sanity_val_steps=0,
+                   callbacks=[checkpointer]).fit(Stamped(), data, data)
+        return checkpointer
+
+    def test_saved_weights_are_from_the_peak_epoch(self, tmp_path):
+        checkpointer = self._run(tmp_path)
+        saved = torch.load(checkpointer.best_model_path, map_location="cpu",
+                           weights_only=False)
+        stamped = float(saved["state_dict"]["model.bias"].item())
+        best_epoch = int(np.argmax(self.SCORES))
+        assert stamped == best_epoch, (
+            f"checkpoint holds epoch {stamped:.0f}, wanted {best_epoch} "
+            f"(last was {len(self.SCORES) - 1})")
+        assert float(checkpointer.best_model_score) == pytest.approx(
+            max(self.SCORES))
+
+    def test_only_one_checkpoint_is_left_behind(self, tmp_path):
+        # The recovery path globs *.ckpt and takes the first hit, which is
+        # only safe while exactly one file exists.
+        self._run(tmp_path)
+        assert len(list(tmp_path.glob("*.ckpt"))) == 1

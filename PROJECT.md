@@ -186,7 +186,7 @@ docs/
   worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   296 tests
+tests/                   298 tests
 ```
 
 ---
