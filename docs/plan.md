@@ -3,50 +3,33 @@
 State document: `PROJECT.md` (read it first; it holds what exists and what
 failed). This file holds only what happens next and the gates between steps.
 
-Position as of 2026-08-24. Three fold-0 submissions now exist:
+Position as of 2026-08-24. **Best public LB 0.869** (ConvNeXt-T, 16 slices,
+dual-mode sharpened labels), up from 0.845.
 
-| labels | gold (labels) | gold (model) | LB |
-|---|---|---|---|
-| categorical, leaked selection | 0.854 | 0.825 | 0.845 |
-| dual-mode soft | 0.891 | 0.816 | 0.827 |
-| dual-mode sharpened | 0.891 | 0.827 | 0.843 |
+| configuration | honest gold | LB |
+|---|---|---|
+| 8 slices, categorical labels | 0.825* | 0.845 |
+| 8 slices, dual-mode soft | 0.816 | 0.827 |
+| 8 slices, dual-mode sharpened | 0.827 | 0.843 |
+| 8 slices, + silence weights | 0.817 | not submitted |
+| **16 slices, same labels** | **0.840** | **0.869** |
 
-**Labels improved 0.037 on gold; the leaderboard moved −0.002.** Sharpening
-recovered most of the soft-label regression. Selection is exonerated (val
-peaked epoch 10, gold's own peak was epoch 7, a 0.002 difference). The
-remaining cause was found in the *weights*, not the targets: the probability
-extractor answers for every finding, so `WEIGHT_SILENT` never fired and 34.5%
-of slots — the both-silent third of the corpus — carried 2.8x their intended
-training mass. Fixed; weights are now bit-for-bit identical to the old
-pipeline while targets keep the dual-mode ordering and sharpened shape.
+\* inflated by the gold-selection leak, since fixed.
+
+**Phase A is closed.** Four label configurations spanning 0.854 to 0.891 on
+gold moved the leaderboard 0.018 between them; one capacity change moved it
+0.024 on its own. Labels are not the binding constraint at this scale. The
+label work still underpins the current best — the 16-slice run trains on the
+dual-mode sharpened targets — but it is no longer the first lever.
 
 ---
 
-## Phase A — one clean fold-0 (the capacity hypothesis needs a fair test)
-
-The model has never trained on the new labels with correct weighting, so
-Phase B's trigger cannot be evaluated yet. This run is a single-variable
-change from the 0.843 run: **only the sample weights differ.**
-
-1. Upload the rebuilt `train_labels.parquet` as a new `knee-labels` version;
-   rerun notebook 08 with `FOLD = 0` (~1.5 h); submit fold-0 alone.
-2. **Gate**:
-   - **LB > 0.845** → the label gain is finally reaching the model. Run
-     folds 1–4 and submit the five-fold ensemble (+0.005–0.010 historically).
-   - **LB ≈ 0.843–0.845** → labels are not the binding constraint at this
-     capacity. The capacity hypothesis is then cleanly convicted → Phase B.
-   - **LB < 0.83** → the weight change hurt; that would mean silence carries
-     more signal than assumed, which is itself informative. Revert and go to
-     Phase B.
-3. Do **not** run folds 1–4 on a config that merely ties 0.845. Five folds
-   multiply a config; they do not rescue one. Bank the current checkpoint as
-   the fallback and spend quota on finding a better config first.
-
 ## Phase B — capacity ladder
 
-Trigger: the Phase A clean fold-0 fails to beat 0.845. One change at a time,
-each measured as a fold-0 run against the 0.843 baseline before buying five
-folds of it.
+Active. One change at a time, each measured as a fold-0 run against the
+current best before buying five folds of it. Five folds multiply a config;
+they do not rescue one, so the ladder is climbed first and the ~7 GPU-h
+five-fold run is spent once on whatever config stops improving.
 
 **The per-finding evidence points at coverage, not raw capacity.** From the
 sharpened run, the tuned model beats frozen DINOv2 enormously on some
@@ -60,11 +43,10 @@ the network is too small — a meniscal tear can occupy one or two slices, and
 
 1. **`SLICES_PER_SERIES` 8 → 16 — DONE. Gold 0.840, LB 0.869 (was 0.845).**
    The largest gain on the project, and confirmation that capacity rather
-   than labels was the binding constraint. `BATCH_STUDIES`
-   drops to 2 so the per-step image count is unchanged (2 × 3 × 16 = 96), and
-   `ACCUM_STEPS` is now derived (`8 // (BATCH_STUDIES × DEVICES)`) so the
-   effective batch stays at eight studies on one GPU or two. Notebook 08 also
-   moved to Lightning with `ddp_notebook` to use Kaggle's T4 ×2; notebook 10's
+   than labels was the binding constraint. `ACCUM_STEPS` is derived
+   (`8 // (BATCH_STUDIES × DEVICES)`) so the effective batch stays at eight
+   studies however many GPUs are visible. Notebook 08 moved to Lightning with
+   `ddp_notebook` for Kaggle's T4 ×2 at the same time; notebook 10's
    `TUNED_SLICES` was raised to 16 to match, which is mandatory — the
    aggregation masks over the slice axis, so a train/infer mismatch scores
    worse in silence.
@@ -76,7 +58,9 @@ the network is too small — a meniscal tear can occupy one or two slices, and
    failure if it drifts. Expect ~10-11 min/epoch, ~2.2 h.
    **Gate: LB must beat 0.869.**
 3. Backbone ConvNeXt-T → ConvNeXt-S.
-4. Resolution last — 224 → 384 requires rebuilding the 29 GB cache;
+4. **Five folds** on whatever config the ladder settles at: four more sessions
+   editing only `FOLD`, ~7 GPU-h, historically +0.005–0.010.
+5. Resolution last — 224 → 384 requires rebuilding the 29 GB cache;
    expensive, only if everything else plateaus.
 
 ## Phase C — extraction v3 (the lever that reaches toward 0.94)
@@ -106,8 +90,10 @@ more than ~0.005 with no finding dropping below 0.75.
 
 - Deadlines: entry/team merger 2026-10-15, final submission 2026-10-22.
 - Keep two final submissions distinct: best-LB and best-honest-gold configs.
-- Efficiency Prize (separate $18k track): current tuned-only run projects
-  ~2.2 h → penalty 0.240. If pursued, the cost to attack is per-study DICOM
+- Efficiency Prize (separate $18k track): the 16-slice run projected 1.29 h →
+  penalty 0.144, but that extrapolates from three public studies and is noise
+  dominated. What it does suggest is that the loop is bound by per-study DICOM
+  decode rather than GPU work, since doubling slices barely moved it. If pursued, the cost to attack is per-study DICOM
   decode; a cached/parallel reader could halve it. Only worth effort after
   the main-track score settles.
 
