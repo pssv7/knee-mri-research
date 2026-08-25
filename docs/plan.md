@@ -58,9 +58,9 @@ suggests the relevant anatomy is not reaching the network rather than that
 the network is too small — a meniscal tear can occupy one or two slices, and
 8 of 24 evenly-spaced slices can miss it outright.
 
-1. **`SLICES_PER_SERIES` 8 → 16 — DONE, honest gold 0.817 → 0.840.** The
-   largest single gain on the project; submission pending. Everything below
-   this line is now the live ladder. `BATCH_STUDIES`
+1. **`SLICES_PER_SERIES` 8 → 16 — DONE. Gold 0.840, LB 0.869 (was 0.845).**
+   The largest gain on the project, and confirmation that capacity rather
+   than labels was the binding constraint. `BATCH_STUDIES`
    drops to 2 so the per-step image count is unchanged (2 × 3 × 16 = 96), and
    `ACCUM_STEPS` is now derived (`8 // (BATCH_STUDIES × DEVICES)`) so the
    effective batch stays at eight studies on one GPU or two. Notebook 08 also
@@ -68,9 +68,13 @@ the network is too small — a meniscal tear can occupy one or two slices, and
    `TUNED_SLICES` was raised to 16 to match, which is mandatory — the
    aggregation masks over the slice axis, so a train/infer mismatch scores
    worse in silence.
-2. `max_series` 3 → 5 (most studies have ~5.5). Cheaper than slices and the
-   likelier fix for PF OA specifically, since the patella may simply be
-   absent from the three series currently chosen.
+2. **`max_series` 3 → 5 — implemented, ready to run.** `BATCH_STUDIES` drops
+   to 1 so the per-step image count falls to 80 (1 x 5 x 16), under the 96 the
+   16-slice run held; `ACCUM_STEPS` derives to 4 on two GPUs, keeping the
+   effective batch at eight studies. Notebook 10's `TUNED_MAX_SERIES` follows
+   to 5 — the same mandatory coupling as `TUNED_SLICES`, and the same silent
+   failure if it drifts. Expect ~10-11 min/epoch, ~2.2 h.
+   **Gate: LB must beat 0.869.**
 3. Backbone ConvNeXt-T → ConvNeXt-S.
 4. Resolution last — 224 → 384 requires rebuilding the 29 GB cache;
    expensive, only if everything else plateaus.

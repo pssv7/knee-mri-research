@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-24 (16 slices lifted honest gold 0.817 -> 0.840, the largest gain yet; submission pending).
+Last updated: 2026-08-24 (16 slices -> LB 0.869, new best; next rung is series count).
 
 ---
 
@@ -27,14 +27,14 @@ in train but **not** in test, so text is a training-time signal only.
 |---|---|
 | Frozen DINOv2-S + aggregation | 0.787 |
 | Frozen + fine-tuned, 50/50 blend | 0.839 |
-| **Fine-tuned ConvNeXt-T, categorical labels** | **0.845 ← best** |
+| Fine-tuned ConvNeXt-T, categorical labels | 0.845 |
 | Fine-tuned ConvNeXt-T, dual-mode soft labels | 0.827 |
 | Fine-tuned ConvNeXt-T, dual-mode sharpened | 0.843 |
-| **ConvNeXt-T, 16 slices, gold 0.840** | **pending submission** |
+| **ConvNeXt-T, 16 slices, dual-mode labels** | **0.869 ← best** |
 | Leaderboard top | 0.952 |
 | Leaderboard 20th | 0.941 |
 
-**We are ~0.10 behind a very tight cluster.** Twenty teams sit within 0.011 of
+**We are ~0.07 behind a very tight cluster.** Twenty teams sit within 0.011 of
 each other at 0.94+, which means a known recipe exists and the gap is structural
 rather than a matter of tuning.
 

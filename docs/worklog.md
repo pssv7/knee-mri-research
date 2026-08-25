@@ -29,6 +29,36 @@ prediction was None.
 
 ---
 
+## 2026-08-24 (f) — sixteen slices: **LB 0.869**, new best
+
+**+0.024 over the previous best of 0.845, and the largest move the project
+has made.** Gold 0.840 -> LB 0.869, an offset of +0.029 against the +0.011 to
++0.020 seen previously.
+
+Every submission to date:
+
+| configuration | honest gold | LB |
+|---|---|---|
+| frozen DINOv2-S | 0.770 | 0.787 |
+| frozen + tuned, 50/50 | - | 0.839 |
+| 8 slices, categorical labels | 0.825* | 0.845 |
+| 8 slices, dual-mode soft | 0.816 | 0.827 |
+| 8 slices, dual-mode sharpened | 0.827 | 0.843 |
+| **16 slices, dual-mode sharpened** | **0.840** | **0.869** |
+
+\* inflated by the gold-selection leak, since fixed.
+
+The label work was not wasted -- the 16-slice run trains on the dual-mode
+sharpened labels -- but on its own it moved nothing, and capacity moved
+everything. Slices were the binding constraint, exactly as the elimination
+argument predicted once the two delivery bugs were ruled out.
+
+Two bugs paid for reaching this number, both now guarded: a missing input
+became a submission of NaN, and the checkpoint export sat behind a reporting
+cell that crashed.
+
+---
+
 ## 2026-08-24 (d) — 16 slices: honest gold 0.817 -> 0.840
 
 **Outcome: the capacity change is the largest single gain measured on this

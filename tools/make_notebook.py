@@ -2099,7 +2099,7 @@ before launching five folds.
 Subsampling controls the cost, and both knobs are real trade-offs:
 
     SLICES_PER_SERIES  16 of 24     a tear may fall in a dropped slice
-    MAX_SERIES          3 of ~5.5   a finding may live only in a dropped series
+    MAX_SERIES          5 of ~5.5   a finding may live only in a dropped series
 
 The slice count was raised from 8 after four label configurations spanning
 0.854 to 0.891 on gold moved the leaderboard by 0.018 in total. Labels are
@@ -2243,12 +2243,20 @@ manifest = pd.concat(frames, ignore_index=True)
 folded = splits.make_folds(labels)
 splits.assert_no_gold_leakage(folded["StudyInstanceUID"], set(gold["StudyInstanceUID"]))
 
-index = knee_dataset.StudyIndex(manifest, series_meta, folded, sides, max_series=3)
+# Capacity ladder, step 2. Doubling slices was worth +0.024 on the
+# leaderboard, so the other axis the study is subsampled on is the next thing
+# to test. Most studies hold ~5.5 series and three were being kept; PF OA is
+# one of only two findings where this model still loses to frozen DINOv2
+# features, and the patella may simply not be in the three that survive.
+MAX_SERIES = 5
+
+index = knee_dataset.StudyIndex(manifest, series_meta, folded, sides,
+                                max_series=MAX_SERIES)
 gold_labels = gold[["StudyInstanceUID"] + config.LABELS].copy()
 for name in config.LABELS:
     gold_labels[f"{name}_weight"] = 1.0
 gold_index = knee_dataset.StudyIndex(manifest, series_meta, gold_labels, sides,
-                                     max_series=3)
+                                     max_series=MAX_SERIES)
 print(f"studies in this shard: {len(index)}  gold present: {len(gold_index)}")
 """)
 
@@ -2269,13 +2277,16 @@ takes paths and opens them lazily per process, and drops the handles in
     nb.code("""
 from torch.utils.data import DataLoader
 
-# Capacity ladder, step 1. Four label configurations spanning 0.854 to 0.891
-# on gold moved the leaderboard by 0.018 in total, so labels are not the
-# binding constraint at 8 slices. The focal findings are the weak ones
-# (Lateral Meniscus 0.652, PF OA 0.722) and a tear can occupy one or two
-# slices, so 8 of 24 evenly spaced can miss it outright.
+# Capacity ladder, step 1, confirmed: 8 slices -> 16 took the leaderboard from
+# 0.845 to 0.869, after four label configurations spanning 0.854 to 0.891 on
+# gold had moved it 0.018 between them. A tear can occupy one or two slices,
+# and 8 of 24 evenly spaced could miss it outright.
 SLICES_PER_SERIES = 16
-BATCH_STUDIES = 2
+
+# One study per rank, because step 2 raised MAX_SERIES to 5: at 1 x 5 x 16
+# that is 80 images per step, under the 96 the previous run held comfortably.
+# Raise this only alongside a drop in MAX_SERIES or SLICES_PER_SERIES.
+BATCH_STUDIES = 1
 
 # Effective batch is BATCH_STUDIES x DEVICES x ACCUM_STEPS, and it must stay
 # at eight studies whether this runs on one GPU or two -- otherwise the two
@@ -2733,12 +2744,13 @@ BLEND = 1.0
 USE_FROZEN = BLEND < 1.0
 USE_TUNED = BLEND > 0.0
 
-# Must match how the fine-tuned model was trained. Nothing enforces this:
-# the aggregation masks over the slice axis, so a mismatch runs clean and
-# just scores worse than it should. Raised to 16 with notebook 08's capacity
-# step -- a checkpoint trained at 8 slices must be scored with 8 here.
+# Must match how the fine-tuned model was trained, on BOTH axes. Nothing
+# enforces it: the aggregation masks over the slice axis and pads the series
+# axis, so a mismatch runs clean and simply scores worse than it should. These
+# track notebook 08's SLICES_PER_SERIES and MAX_SERIES -- a checkpoint trained
+# at 8 slices and 3 series must be scored with 8 and 3 here.
 TUNED_SLICES = 16
-TUNED_MAX_SERIES = 3
+TUNED_MAX_SERIES = 5
 
 BATCH_SLICES = 256
 device = "cuda" if torch.cuda.is_available() else "cpu"
