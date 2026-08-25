@@ -3,8 +3,8 @@
 State document: `PROJECT.md` (read it first; it holds what exists and what
 failed). This file holds only what happens next and the gates between steps.
 
-Position as of 2026-08-25. **Best public LB 0.889** (ConvNeXt-T, 16 slices, 5 series,
-dual-mode sharpened labels), up from 0.845 at the start of the ladder.
+Position as of 2026-08-25. **Best public LB 0.891** (ConvNeXt-T, 24 slices,
+5 series), up from 0.845 at the start of the ladder — which is now finished.
 
 | configuration | honest gold | LB |
 |---|---|---|
@@ -13,7 +13,8 @@ dual-mode sharpened labels), up from 0.845 at the start of the ladder.
 | 8 slices, dual-mode sharpened | 0.827 | 0.843 |
 | 8 slices, + silence weights | 0.817 | not submitted |
 | 16 slices, 3 series | 0.840 | 0.869 |
-| **16 slices, 5 series** (fold 1) | **0.861** | **0.889** |
+| 16 slices, 5 series (fold 1) | 0.861 | 0.889 |
+| **24 slices, 5 series** (fold 1) | **0.865** | **0.891** |
 
 \* inflated by the gold-selection leak, since fixed.
 
@@ -97,16 +98,57 @@ Candidate levers, in order of expected value per hour:
 Gate for a corpus re-run: gold macro of the fused labels must beat 0.891 by
 more than ~0.005 with no finding dropping below 0.75.
 
+## Phase C2 — auxiliary objectives (implemented 2026-08-25, ready to run)
+
+Two training-time-only losses in notebook 08, attacking what the pipeline
+structurally ignored. Both are dropped at export — the submission state dict
+and notebook 10 are untouched — and both run at the reference geometry
+(fold 1, 16 slices, 5 series) against gold 0.861.
+
+1. **Report-embedding regression** (`LAMBDA_REPORT`, default 0.2). The
+   pipeline distils each report to 12 numbers and discards the text; this
+   keeps a multilingual sentence embedding per report
+   (`src/labels/report_embed.py` → `report_embeddings.parquet`, uploaded
+   with `knee-labels`) and regresses it from the pooled study embedding
+   (cosine distance). Rationale: hands the network the report's full summary
+   as extra supervision, and the target is far harder to memorise than 12
+   soft labels — also a regulariser against the overfitting the 24-slice run
+   showed. This is the CheXzero-family recipe and the best guess at what the
+   0.94 cluster does.
+2. **Pairwise ranking loss** (`LAMBDA_RANK`, default 0.2). The metric is
+   macro AUC — a ranking statistic — while BCE optimises calibration.
+   RankNet term against a cross-batch queue of detached recent predictions
+   (one study per rank leaves no in-batch pairs); pairs only count when soft
+   targets differ by ≥ 0.25, so extraction noise is not what gets ranked.
+
+**Sequencing: the first run is a screen with both on.** If gold improves,
+ablate one at a time (set a lambda to 0.0) to attribute it; if it lands
+within noise, the two single-lambda runs are still cheap (~1.8 h each). Gate
+for adopting a config: gold must beat 0.861 meaningfully (≥ ~0.01) at the
+selected epoch, on the same fold-1 split. Watch `report_loss` and
+`rank_loss` in the epoch table's CSV alongside the macros.
+
 ## Phase D — endgame (October)
 
 - Deadlines: entry/team merger 2026-10-15, final submission 2026-10-22.
-- Keep two final submissions distinct: best-LB and best-honest-gold configs.
-- Efficiency Prize (separate $18k track): the 16-slice run projected 1.29 h →
-  penalty 0.144, but that extrapolates from three public studies and is noise
-  dominated. What it does suggest is that the loop is bound by per-study DICOM
-  decode rather than GPU work, since doubling slices barely moved it. If pursued, the cost to attack is per-study DICOM
-  decode; a cached/parallel reader could halve it. Only worth effort after
-  the main-track score settles.
+- Keep two final submissions distinct, and use the second slot for the
+  Efficiency Prize rather than for a second AUC config: 16 slices scored 0.889
+  at penalty 0.240, 24 slices scored 0.891 at 0.321. The tracks pull opposite
+  ways and two slots mean no compromise config is needed.
+- Efficiency Prize (separate $18k track). Measured, superseding the earlier
+  DICOM-bound guess: three submission runtimes (16x3 1.29 h, 16x5 1.95 h,
+  24x5 2.89 h) fit ~0.30 h of shared setup plus ~0.0206 h per slice-series
+  unit. **The loop is bound by GPU forward passes, not per-study decode** --
+  a faster reader would recover ~18 min at most. The cost to attack is slices
+  x series x folds.
+- **Break-even on that track: an extra hour of runtime (penalty 0.111) needs
+  +0.050 AUC**, since `Benchmark - maxAUC` ~= -0.45 makes an AUC point worth
+  ~2.22. No capacity change this project has made clears that bar, so the
+  efficiency entry should be the leanest config that still beats the
+  benchmark comfortably.
+- Fold ensembling is capped by the 9 h limit, not by quota: five folds at 24
+  slices is ~13.3 h (killed), at 16 slices ~8.6 h (24 min slack). Two folds at
+  24 slices (~5.5 h) is the practical ceiling.
 
 ## Standing budget
 

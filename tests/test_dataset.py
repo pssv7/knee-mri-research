@@ -186,6 +186,48 @@ class TestLoadAndCollate:
         assert "targets" not in out
 
 
+def make_reports(study="study1", dim=4):
+    row = {config.ID_COL: [study]}
+    row.update({f"e{i}": [float(i + 1)] for i in range(dim)})
+    return pd.DataFrame(row)
+
+
+class TestReportEmbeddings:
+    """Report embeddings travel with the batch for the auxiliary loss."""
+
+    def shards(self, n=3):
+        rng = np.random.default_rng(0)
+        return {"shard0": rng.integers(0, 255, (n, DEPTH, SIZE, SIZE),
+                                       dtype=np.uint8)}
+
+    def test_report_for_returns_the_row(self):
+        index = ds.StudyIndex(make_manifest(), make_series_meta(),
+                              make_labels(), reports=make_reports())
+        report = index.report_for("study1")
+        assert report.dtype == np.float32
+        assert report.tolist() == [1.0, 2.0, 3.0, 4.0]
+        assert index.report_dim == 4
+
+    def test_without_reports_everything_is_none(self):
+        index = ds.StudyIndex(make_manifest(), make_series_meta(), make_labels())
+        assert index.report_for("study1") is None
+        assert index.report_dim is None
+        out = ds.collate_studies([ds.load_study(index, "study1", self.shards())])
+        assert "report" not in out and "report_mask" not in out
+
+    def test_collate_masks_the_study_without_a_report(self):
+        with_report = ds.StudyIndex(make_manifest(), make_series_meta(),
+                                    make_labels(), reports=make_reports())
+        without = ds.StudyIndex(make_manifest(3, "study2"),
+                                make_series_meta(), make_labels("study2"))
+        out = ds.collate_studies([
+            ds.load_study(with_report, "study1", self.shards()),
+            ds.load_study(without, "study2", self.shards())])
+        assert out["report"].shape == (2, 4)
+        assert out["report_mask"].tolist() == [True, False]
+        assert out["report"][1].abs().sum() == 0
+
+
 class TestSideAsCovariate:
     """Laterality is handed to the model rather than normalised away.
 

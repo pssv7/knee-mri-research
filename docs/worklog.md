@@ -5,6 +5,119 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-25 (d) — two auxiliary objectives implemented, ready for a fold-1 run
+
+**With capacity spent, two training-time losses now attack what the pipeline
+structurally ignored: the report text beyond the 12 extracted numbers, and
+the fact that the metric ranks while BCE calibrates.** Both are auxiliary
+only — the exported state dict keeps just the `model.`-prefixed keys, so
+notebook 10 and the submission are untouched.
+
+- **Report-embedding regression.** `src/labels/report_embed.py` embeds every
+  report with a local multilingual encoder (`intfloat/multilingual-e5-small`,
+  384 dims, 512-token window — the reports are Spanish/Dutch/German and
+  long). Output `data/meta/report_embeddings.parquet`. In training, a head on
+  the *Lightning wrapper* (deliberately not on `KneeNet`) regresses the
+  pooled study embedding onto the report embedding by cosine distance,
+  weight `LAMBDA_REPORT = 0.2`. `KneeNet.pool_study`/`forward_pooled` expose
+  the representation; the head vanishes at export by construction.
+- **Pairwise ranking loss.** `net.pairwise_rank_loss`, RankNet-style, weight
+  `LAMBDA_RANK = 0.2`. One study per rank means no in-batch pairs, so the
+  module keeps a cross-batch queue (256 studies, per rank, reset each epoch)
+  of detached recent scores and ranks the current study against it. Pairs
+  count only when soft targets differ by ≥ 0.25, weighted by the gap and both
+  label weights — ordering studies the extractor barely distinguishes would
+  train on extraction noise.
+- Plumbing: `StudyIndex(..., reports=...)` → `collate_studies` emits
+  `report`/`report_mask`; notebook 08 loads the parquet if attached and
+  prints a notice (and disables the loss) if not. The head always joins the
+  graph — DDP errors on a parameter that misses a backward pass.
+- Notebook 08 returned to **16 slices** (the iteration geometry; 24 remains
+  a one-line change for a final AUC-slot run). Constants at the top of the
+  train cell; either loss ablates by setting its lambda to 0.0.
+- Tests 302 → 320: rank-loss ordering/gap/graph properties, report plumbing
+  and masking, export dropping the head, DDP-safety of a reportless batch,
+  the artefact contract of `report_embeddings.parquet`.
+
+Next (user, Kaggle): upload `report_embeddings.parquet` into `knee-labels`,
+re-upload notebook 08, run fold 1 (~1.8 h). Gate in `docs/plan.md` Phase C2:
+gold must beat 0.861 meaningfully at the selected epoch.
+
+## 2026-08-25 (c) — twenty-four slices: **LB 0.891**, and the ladder ends
+
+**+0.002. The third capacity rung is the last one: gold predicted it, the cost
+does not justify it, and on the efficiency metric it is a regression.**
+
+    epoch    1     2     3     4     5     6     7     8     9    10    11    12
+    val    0.773 0.817 0.835 0.863 0.862 0.873 0.880 0.874 0.879 0.875 0.873 0.871
+    gold   0.737 0.807 0.819 0.856 0.860 0.868 0.865 0.856 0.862 0.857 0.845 0.842
+
+Same fold (1), same labels, only `SLICES_PER_SERIES` 16 -> 24, so this is a
+clean head-to-head against the 0.889 run:
+
+| | val peak | gold at selected |
+|---|---|---|
+| 16 slices, 5 series | 0.872 | 0.861 |
+| **24 slices, 5 series** | **0.880** | **0.865** |
+
+- Selected epoch 7 on val 0.880; gold there 0.865. The move is **+0.008 val,
+  +0.004 gold**, against +0.023 and +0.021 gold on the two rungs before it,
+  which returned +0.024 and +0.020 on the LB. The slice axis is flattening.
+- **Gold cannot settle this.** +0.004 is well inside the ~±0.02 noise floor of
+  58 studies. Val's +0.008 on ~870 mined labels is the better signal and is
+  still small. Only the leaderboard decides; gate stays **LB > 0.889**.
+- **The curve shape changed, and that is the more interesting result.** At 16
+  slices val was flat within 0.002 from epoch 7 through 12 and gold was still
+  climbing at epoch 8. Here val peaks at 7 and falls to 0.871 by 12 while gold
+  falls 0.865 -> 0.842. That is overfitting onset: more capacity per study
+  against the same 4,349 studies. Twelve epochs is now past useful rather than
+  merely flat, though val still selects the peak on its own, so nothing needs
+  changing before the LB reports.
+- 17.3 min/epoch against 11 at 16 slices — a ratio of 1.57 against the 1.50 the
+  geometry implies. Same independent check that validated the series change:
+  the extra slices are being read, not silently dropped.
+- **Five folds here would cost 17.3 h of training plus a submission run**, call
+  it ~20 h against a 25 GPU-h/week quota — one week, one attempt, no room for a
+  mistake. The earlier ~7 GPU-h estimate predates two capacity rungs. If the LB
+  confirms the flattening, that hour budget belongs to ConvNeXt-S rather than to
+  five folds of a rung worth +0.008 val.
+
+### The LB reported 0.891
+
+- **Gold tracked the LB a third time.** gold +0.023 -> LB +0.024; gold +0.021
+  -> LB +0.020; now gold +0.004 -> **LB +0.002**. The small local signal was
+  not noise hiding a real gain -- it was an accurate forecast of a small one.
+- Capacity ladder, complete: 0.845 -> 0.869 -> 0.889 -> **0.891**. Two rungs
+  paid +0.044; the next two paid +0.002 between the last pair. **The slice
+  axis is exhausted.**
+- **The rung is net-negative on the Efficiency Prize.** With
+  `Benchmark - maxAUC` ~= -0.45, an AUC point is worth ~2.22 on the efficiency
+  score and an hour of runtime costs 0.111. So +0.002 AUC bought -0.004 while
+  +0.94 h of runtime cost +0.081: **the efficiency score got 0.077 worse.**
+  General rule, worth keeping: **an extra hour of submission runtime needs
+  +0.050 AUC to break even.** No capacity change this project has ever made
+  clears that bar. The two tracks pull in opposite directions and the answer is
+  the two distinct final submissions already planned, not a compromise config.
+- **Experiments should run at 16 slices from here.** 24 costs +57% training and
+  +48% inference for +0.002; it is not the geometry to iterate in.
+
+### Two corrections to what was written before this run
+
+- **`docs/plan.md` said the submission loop is bound by per-study DICOM decode
+  "since doubling slices barely moved it". That is falsified.** Fitting the
+  three measured runtimes (16x3 1.29 h, 16x5 1.95 h, 24x5 2.89 h) gives ~0.30 h
+  of shared setup and ~0.0206 h per slice-series unit -- the loop is bound by
+  GPU forward passes, not decode. The fit predicts 2.78 h for the point it was
+  not given, against 2.89 h measured. Efficiency work should attack forward
+  cost.
+- **Fold ensembling no longer fits the 9 h cap.** `tuned_predict` builds
+  volumes once and multiplies only the forward pass, so five folds at 24 slices
+  is ~13.3 h and gets killed; at 16 slices it is ~8.6 h, 24 minutes of slack.
+  Two folds at 24 slices (~5.5 h) is the practical ceiling. The "five folds,
+  +0.005-0.010" plan was written for a cheaper geometry and no longer holds.
+
+---
+
 ## 2026-08-24 (e) — a missing input became a submission of NaN
 
 The sixteen-slice submission failed its own validator with "missing

@@ -26,3 +26,4 @@ docs/competition_pages.md
 # credentials -- never commit
 kaggle.json
 access_token
+/checkpoints/

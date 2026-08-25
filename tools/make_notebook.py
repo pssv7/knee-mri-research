@@ -2089,7 +2089,10 @@ Kaggle the cache is already mounted and nothing transfers. A T4 is slower than
 an A100, but not slower than a download that never finishes.
 
 **Attach:** one cache dataset, `knee-labels`, `knee_side_classifier`, and the
-competition data. GPU on.
+competition data. GPU on. The auxiliary report loss additionally wants
+`report_embeddings.parquet` (built locally by `src/labels/report_embed.py`)
+in the `knee-labels` dataset; without it that loss silently disables, which
+the assemble cell prints.
 
 **This run measures before it commits.** One study is ~5.5 series x 24 slices
 = ~130 slice-forwards, so a full epoch over 4,349 studies is ~570,000. The
@@ -2098,15 +2101,12 @@ before launching five folds.
 
 Subsampling controls the cost, and both knobs are real trade-offs:
 
-    SLICES_PER_SERIES  24 of 24     the whole cache; 2.5D context is adjacent
+    SLICES_PER_SERIES  16 of 24     the reference geometry; 24 overfit for +0.002
     MAX_SERIES          5 of ~5.5   a finding may live only in a dropped series
 
-The slice count was raised from 8 after four label configurations spanning
-0.854 to 0.891 on gold moved the leaderboard by 0.018 in total. Labels are
-not the binding constraint at 8 slices, and the findings the model handles
-worst are the focal ones. Expect roughly **13 min/epoch, ~2.6 h for twelve
-epochs** -- about twice the 8-slice run. If it OOMs, halve `BATCH_STUDIES`
-again and double `ACCUM_STEPS` to match.
+The capacity ladder is finished (0.845 -> 0.869 -> 0.889 -> 0.891) and 16
+slices x 5 series is where experiments iterate. Expect roughly **9 min/epoch,
+~1.8 h for twelve epochs**. If it OOMs, drop `MAX_SERIES` to 4.
 
 **Mirroring is used here**, unlike the frozen path: raw volumes can be
 reflected, so left knees are mapped onto the canonical side along the axis the
@@ -2209,6 +2209,14 @@ def find_competition_file(name):
 
 labels = pd.read_parquet(find_inputs("train_labels.parquet")[0])
 sides = pd.read_parquet(find_inputs("side_predictions.parquet")[0])
+
+# Report sentence embeddings, built locally by src/labels/report_embed.py and
+# uploaded alongside the labels. Optional: without the file the auxiliary
+# report loss is disabled and training proceeds as before.
+report_hits = find_inputs("report_embeddings.parquet")
+reports = pd.read_parquet(report_hits[0]) if report_hits else None
+if reports is None:
+    print("report_embeddings.parquet not attached -- report loss disabled")
 series_meta = pd.read_csv(find_competition_file("train_series.csv"))
 train_csv = pd.read_csv(find_competition_file("train.csv"))
 gold = train_csv[train_csv["ACL"].notna()].reset_index(drop=True)
@@ -2251,7 +2259,7 @@ splits.assert_no_gold_leakage(folded["StudyInstanceUID"], set(gold["StudyInstanc
 MAX_SERIES = 5
 
 index = knee_dataset.StudyIndex(manifest, series_meta, folded, sides,
-                                max_series=MAX_SERIES)
+                                max_series=MAX_SERIES, reports=reports)
 gold_labels = gold[["StudyInstanceUID"] + config.LABELS].copy()
 for name in config.LABELS:
     gold_labels[f"{name}_weight"] = 1.0
@@ -2277,22 +2285,19 @@ takes paths and opens them lazily per process, and drops the handles in
     nb.code("""
 from torch.utils.data import DataLoader
 
-# Capacity ladder. 8 slices -> 16 took the leaderboard 0.845 -> 0.869, and
-# 3 series -> 5 took it 0.869 -> 0.889, with the labels unchanged throughout.
+# The capacity ladder is finished: 8 -> 16 slices paid +0.024 on the
+# leaderboard, 3 -> 5 series +0.020, and 16 -> 24 slices +0.002 while the
+# gold curve began falling after epoch 7 -- overfitting, not headroom.
 #
-# 24 is the whole cache, and it changes something the intermediate values
-# could not. stack_2p5d hands each slice its neighbours *in the subsampled
-# stack*: at 16 of 24 those neighbours sit one or two real slices away, so the
-# three-channel context is stitched from non-adjacent anatomy. At 24 the gaps
-# are all 1 and the context is genuinely adjacent. This is the last rung on
-# this axis -- there is nothing beyond the cache short of rebuilding it.
-SLICES_PER_SERIES = 24
+# Experiments therefore iterate at 16 slices, the reference geometry behind
+# LB 0.889 / gold 0.861 on fold 1. The current experiment is the pair of
+# auxiliary losses above; 24 remains a one-line change reserved for a final
+# AUC-slot run, where its +0.002 may still be worth the runtime.
+SLICES_PER_SERIES = 16
 
-# One study per rank. At 1 x 5 x 24 that is 120 images per step, against the
-# 80 the five-series run held -- the most this shape has asked of a T4.
-# BATCH_STUDIES is already 1, so there is no batch left to halve if it runs
-# out of memory; the fallback is MAX_SERIES 5 -> 4, not a lower slice count,
-# because slices are the axis that has paid twice.
+# One study per rank, held over from the five-series rung (1 x 5 x 16 = 80
+# images per step). If it OOMs the fallback is MAX_SERIES 5 -> 4, not a
+# lower slice count, because slices are the axis that has paid twice.
 BATCH_STUDIES = 1
 
 # Effective batch is BATCH_STUDIES x DEVICES x ACCUM_STEPS, and it must stay
@@ -2364,6 +2369,25 @@ import timm
 EPOCHS = 12
 LR = 1e-4
 
+# Two auxiliary objectives, both training-time only and both dropped at
+# export, so notebook 10 is untouched. Either is disabled by setting its
+# weight to 0.0, which is how a single-variable ablation is run.
+#
+# LAMBDA_REPORT: the pooled study embedding regresses the report's sentence
+# embedding (cosine distance). The report describes more than twelve numbers,
+# and this hands that richer summary to the network as extra supervision --
+# also a lever against the overfitting the 24-slice run showed, since the
+# regression target is far harder to memorise than twelve soft labels.
+#
+# LAMBDA_RANK: the metric is macro AUC, a ranking statistic, but BCE
+# optimises calibration. This RankNet term orders the current study against
+# a queue of recent (detached) predictions, pairing only studies whose soft
+# targets differ by >= 0.25 so extraction noise is not what gets ranked.
+LAMBDA_REPORT = 0.2 if reports is not None else 0.0
+LAMBDA_RANK = 0.2
+REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
+              if reports is not None else None)
+
 # Which fold this session trains.
 #
 # 1, not 0, and deliberately: the 0.889 result was fold 1, so every capacity
@@ -2396,7 +2420,11 @@ print("optimiser steps:", TOTAL_STEPS)
 module = knee_lightning.KneeLitModule(
     backbone=timm.create_model(BACKBONE, pretrained=True, num_classes=0,
                                in_chans=3),
-    feature_dim=FEATURE_DIM, lr=LR, total_steps=TOTAL_STEPS)
+    feature_dim=FEATURE_DIM, lr=LR, total_steps=TOTAL_STEPS,
+    report_dim=REPORT_DIM, lambda_report=LAMBDA_REPORT,
+    lambda_rank=LAMBDA_RANK)
+print(f"aux losses: report {LAMBDA_REPORT} (dim {REPORT_DIM})  "
+      f"rank {LAMBDA_RANK}")
 
 checkpointer = pl.callbacks.ModelCheckpoint(
     dirpath="/kaggle/working", filename=f"lit_fold{FOLD}",
@@ -2794,8 +2822,10 @@ USE_TUNED = BLEND > 0.0
 # enforces it: the aggregation masks over the slice axis and pads the series
 # axis, so a mismatch runs clean and simply scores worse than it should. These
 # track notebook 08's SLICES_PER_SERIES and MAX_SERIES -- a checkpoint trained
-# at 8 slices and 3 series must be scored with 8 and 3 here.
-TUNED_SLICES = 24
+# at 8 slices and 3 series must be scored with 8 and 3 here. Notebook 08 is
+# back at 16 for the auxiliary-loss experiments; a submission of the 24-slice
+# 0.891 checkpoint needs 24 here instead.
+TUNED_SLICES = 16
 TUNED_MAX_SERIES = 5
 
 BATCH_SLICES = 256

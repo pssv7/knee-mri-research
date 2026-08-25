@@ -144,12 +144,14 @@ class KneeNet(nn.Module):
         features = features.reshape(count, depth, self.feature_dim)
         return self.slice_pool(features)
 
-    def aggregate(self, series: torch.Tensor, meta: torch.Tensor,
-                  mask: torch.Tensor) -> torch.Tensor:
-        """(B, S, F) series embeddings -> (B, n_labels).
+    def pool_study(self, series: torch.Tensor, meta: torch.Tensor,
+                   mask: torch.Tensor) -> torch.Tensor:
+        """(B, S, F) series embeddings -> (B, F) one embedding per study.
 
-        Everything above the backbone. Shared by the end-to-end path and the
-        frozen path so the two cannot drift into different architectures.
+        The study representation the head reads. Exposed separately so
+        auxiliary objectives (report-embedding regression) can supervise the
+        representation without their parameters entering this module -- the
+        exported state dict must stay loadable by a bare `KneeNet`.
         """
         series = self.film(series, meta)
 
@@ -160,8 +162,16 @@ class KneeNet(nn.Module):
         # pooling so one short study cannot poison the batch.
         encoded = torch.nan_to_num(encoded)
 
-        pooled = self.study_pool(encoded, mask=mask)
-        return self.head(pooled)
+        return self.study_pool(encoded, mask=mask)
+
+    def aggregate(self, series: torch.Tensor, meta: torch.Tensor,
+                  mask: torch.Tensor) -> torch.Tensor:
+        """(B, S, F) series embeddings -> (B, n_labels).
+
+        Everything above the backbone. Shared by the end-to-end path and the
+        frozen path so the two cannot drift into different architectures.
+        """
+        return self.head(self.pool_study(series, meta, mask))
 
     def forward_features(self, features: torch.Tensor, meta: torch.Tensor,
                          mask: torch.Tensor) -> torch.Tensor:
@@ -175,14 +185,25 @@ class KneeNet(nn.Module):
         return self.aggregate(pooled.reshape(batch, series, self.feature_dim),
                               meta, mask)
 
+    def forward_pooled(self, volumes: torch.Tensor, meta: torch.Tensor,
+                       mask: torch.Tensor):
+        """End-to-end path returning (logits, pooled study embedding).
+
+        The training loop wants both: logits for the label losses, the pooled
+        representation for auxiliary supervision. Computing them together
+        avoids a second pass through the backbone.
+        """
+        batch, series = volumes.shape[0], volumes.shape[1]
+        flat = volumes.reshape(batch * series, *volumes.shape[2:])
+        embeddings = self.encode_series(flat).reshape(batch, series, self.feature_dim)
+        pooled = self.pool_study(embeddings, meta, mask)
+        return self.head(pooled), pooled
+
     def forward(self, volumes: torch.Tensor, meta: torch.Tensor,
                 mask: torch.Tensor) -> torch.Tensor:
         # volumes: (B, S, D, H, W), meta: (B, S, M), mask: (B, S)
-        batch, series = volumes.shape[0], volumes.shape[1]
-
-        flat = volumes.reshape(batch * series, *volumes.shape[2:])
-        embeddings = self.encode_series(flat).reshape(batch, series, self.feature_dim)
-        return self.aggregate(embeddings, meta, mask)
+        logits, _ = self.forward_pooled(volumes, meta, mask)
+        return logits
 
 
 def weighted_bce(logits: torch.Tensor, targets: torch.Tensor,
@@ -199,6 +220,47 @@ def weighted_bce(logits: torch.Tensor, targets: torch.Tensor,
     if total <= 0:
         return loss.mean() * 0.0
     return (loss * weights).sum() / total
+
+
+def pairwise_rank_loss(scores: torch.Tensor, targets: torch.Tensor,
+                       ref_scores: torch.Tensor, ref_targets: torch.Tensor,
+                       weights: Optional[torch.Tensor] = None,
+                       ref_weights: Optional[torch.Tensor] = None,
+                       min_gap: float = 0.25) -> torch.Tensor:
+    """Per-finding RankNet loss between a batch and a reference set.
+
+    The metric is macro AUC -- a ranking statistic -- while BCE optimises
+    calibration; this term optimises the ordering directly. Pairs are formed
+    per finding between the current batch (`scores`/`targets`, (B, L), with
+    gradient) and a reference set ((Q, L), typically detached scores from
+    recent steps), because at one study per rank there are no pairs *within*
+    a batch to rank.
+
+    Only pairs whose soft targets differ by at least `min_gap` count: the
+    targets are extractor probabilities, and ordering two studies the
+    extractor itself barely distinguishes would train the model to reproduce
+    extraction noise. Surviving pairs are weighted by the target gap and by
+    both studies' label weights, so a confident 0.9-vs-0.1 pair outweighs a
+    marginal one. Returns a zero that still touches `scores` when no pair
+    qualifies, so the graph is identical either way.
+    """
+    zero = scores.sum() * 0.0
+    if ref_scores.numel() == 0:
+        return zero
+
+    gap = targets.unsqueeze(1) - ref_targets.unsqueeze(0)      # (B, Q, L)
+    pair_weight = gap.abs() * (gap.abs() >= min_gap)
+    if weights is not None and ref_weights is not None:
+        pair_weight = (pair_weight * weights.unsqueeze(1)
+                       * ref_weights.unsqueeze(0))
+
+    total = pair_weight.sum()
+    if total <= 0:
+        return zero
+
+    margin = scores.unsqueeze(1) - ref_scores.unsqueeze(0)     # (B, Q, L)
+    loss = F.softplus(-torch.sign(gap) * margin)
+    return (loss * pair_weight).sum() / total
 
 
 def load_knee_state(path, map_location="cpu") -> dict:

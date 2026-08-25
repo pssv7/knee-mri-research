@@ -173,7 +173,10 @@ class KneeLitModule(pl.LightningModule):
 
     def __init__(self, backbone: torch.nn.Module, feature_dim: int,
                  lr: float = 1e-4, weight_decay: float = 1e-4,
-                 total_steps: int = 1000, max_lr_multiplier: float = 3.0):
+                 total_steps: int = 1000, max_lr_multiplier: float = 3.0,
+                 report_dim: Optional[int] = None,
+                 lambda_report: float = 0.0, lambda_rank: float = 0.0,
+                 rank_queue_size: int = 256, rank_min_gap: float = 0.25):
         super().__init__()
         self.save_hyperparameters(ignore=["backbone"])
         self.model = net.KneeNet(backbone, feature_dim)
@@ -181,6 +184,29 @@ class KneeLitModule(pl.LightningModule):
         self.weight_decay = weight_decay
         self.total_steps = total_steps
         self.max_lr_multiplier = max_lr_multiplier
+        self.lambda_report = lambda_report
+        self.lambda_rank = lambda_rank
+        self.rank_queue_size = rank_queue_size
+        self.rank_min_gap = rank_min_gap
+
+        # The report head is an attribute of the *wrapper*, deliberately: the
+        # exported state dict keeps only `model.`-prefixed keys, so auxiliary
+        # parameters vanish at export and notebook 10 keeps loading a bare
+        # KneeNet. Created only when actually trained against -- under DDP a
+        # parameter that never receives gradient is an error, not a no-op.
+        if report_dim is not None and lambda_report > 0:
+            self.report_head = torch.nn.Sequential(
+                torch.nn.LayerNorm(feature_dim),
+                torch.nn.Linear(feature_dim, report_dim))
+        else:
+            self.report_head = None
+
+        # Cross-batch queue for the ranking loss. At one study per rank there
+        # are no pairs inside a batch, so current logits are ranked against
+        # detached logits from recent steps (XBM-style). Slightly stale scores
+        # are the price; per-rank and reset each epoch.
+        self._rank_queue: List[Dict[str, torch.Tensor]] = []
+
         # Not `_buffers`: nn.Module reserves that name for registered
         # buffers, and shadowing it corrupts state_dict and .to(device).
         self._val_outputs: Dict[int, List[Dict[str, torch.Tensor]]] = {0: [], 1: []}
@@ -188,9 +214,67 @@ class KneeLitModule(pl.LightningModule):
     def forward(self, volumes, meta, mask):
         return self.model(volumes, meta, mask)
 
+    def on_train_epoch_start(self):
+        self._rank_queue = []
+
+    def _report_loss(self, pooled: torch.Tensor, batch) -> torch.Tensor:
+        """Cosine distance between the projected study embedding and the
+        report's sentence embedding, over studies that have one.
+
+        The head must run even when the whole batch lacks reports: DDP
+        requires every parameter to join every backward pass.
+        """
+        predicted = self.report_head(pooled.float())
+        if "report" not in batch:
+            return predicted.sum() * 0.0
+        predicted = torch.nn.functional.normalize(predicted, dim=-1)
+        target = torch.nn.functional.normalize(batch["report"].float(), dim=-1)
+        distance = 1.0 - (predicted * target).sum(dim=-1)
+        mask = batch["report_mask"].float()
+        return (distance * mask).sum() / mask.sum().clamp(min=1.0)
+
+    def _rank_loss(self, logits: torch.Tensor, batch) -> torch.Tensor:
+        scores = logits.float()
+        targets = batch["targets"].float()
+        weights = batch["weights"].float()
+
+        if self._rank_queue:
+            loss = net.pairwise_rank_loss(
+                scores, targets,
+                torch.cat([q["scores"] for q in self._rank_queue]),
+                torch.cat([q["targets"] for q in self._rank_queue]),
+                weights,
+                torch.cat([q["weights"] for q in self._rank_queue]),
+                min_gap=self.rank_min_gap)
+        else:
+            loss = scores.sum() * 0.0
+
+        self._rank_queue.append({"scores": scores.detach(),
+                                 "targets": targets.detach(),
+                                 "weights": weights.detach()})
+        while sum(len(q["scores"]) for q in self._rank_queue) > self.rank_queue_size:
+            self._rank_queue.pop(0)
+        return loss
+
     def training_step(self, batch, batch_idx):
-        logits = self(batch["volumes"], batch["meta"], batch["mask"])
+        logits, pooled = self.model.forward_pooled(
+            batch["volumes"], batch["meta"], batch["mask"])
         loss = net.weighted_bce(logits, batch["targets"], batch["weights"])
+        self.log("bce_loss", loss, on_step=False, on_epoch=True,
+                 sync_dist=True, batch_size=len(logits))
+
+        if self.report_head is not None:
+            report_loss = self._report_loss(pooled, batch)
+            loss = loss + self.lambda_report * report_loss
+            self.log("report_loss", report_loss, on_step=False, on_epoch=True,
+                     sync_dist=True, batch_size=len(logits))
+
+        if self.lambda_rank > 0:
+            rank_loss = self._rank_loss(logits, batch)
+            loss = loss + self.lambda_rank * rank_loss
+            self.log("rank_loss", rank_loss, on_step=False, on_epoch=True,
+                     sync_dist=True, batch_size=len(logits))
+
         self.log("train_loss", loss, prog_bar=True, on_step=True,
                  on_epoch=True, sync_dist=True, batch_size=len(logits))
         return loss

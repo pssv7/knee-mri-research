@@ -426,3 +426,98 @@ class TestParentProcessKnowsNothing:
         finetune = self._finetune_source()
         assert (finetune.index("export_from_checkpoint(")
                 < finetune.index('"metrics.csv"'))
+
+
+class TestAuxiliaryLosses:
+    """Report regression and ranking are training-time only, and the export
+    the submission loads must not know they existed."""
+
+    FEATURE_DIM = 16
+    REPORT_DIM = 8
+
+    class ConvBackbone(torch.nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.conv = torch.nn.Conv2d(3, dim, 3, padding=1)
+
+        def forward(self, x):
+            return self.conv(x).mean(dim=(2, 3))
+
+    def _module(self, **kwargs):
+        torch.manual_seed(0)
+        module = knee_lightning.KneeLitModule(
+            backbone=self.ConvBackbone(self.FEATURE_DIM),
+            feature_dim=self.FEATURE_DIM, total_steps=10, **kwargs)
+        # Unit tests run outside a Trainer, where self.log only warns; drop
+        # it so the assertions are about the losses, not the logger.
+        module.log = lambda *args, **kw: None
+        return module
+
+    def _batch(self, batch=2, with_report=True, seed=1):
+        torch.manual_seed(seed)
+        out = {
+            "volumes": torch.randint(0, 255, (batch, 2, 4, 8, 8),
+                                     dtype=torch.uint8),
+            "meta": torch.rand(batch, 2, 7),
+            "mask": torch.ones(batch, 2, dtype=torch.bool),
+            "targets": torch.rand(batch, 12),
+            "weights": torch.ones(batch, 12),
+        }
+        if with_report:
+            out["report"] = torch.randn(batch, self.REPORT_DIM)
+            out["report_mask"] = torch.ones(batch, dtype=torch.bool)
+        return out
+
+    def test_both_losses_train_and_reach_their_parameters(self):
+        module = self._module(report_dim=self.REPORT_DIM,
+                              lambda_report=0.2, lambda_rank=0.2)
+        module.training_step(self._batch(seed=1), 0)   # fills the rank queue
+        loss = module.training_step(self._batch(seed=2), 1)
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert module.report_head[1].weight.grad is not None
+        assert module.model.head[2].weight.grad is not None
+
+    def test_batch_without_reports_still_uses_the_head(self):
+        # DDP errors on any parameter that misses a backward pass, so the
+        # head must join the graph even when no study has a report.
+        module = self._module(report_dim=self.REPORT_DIM, lambda_report=0.2)
+        loss = module.training_step(self._batch(with_report=False), 0)
+        loss.backward()
+        assert module.report_head[1].weight.grad is not None
+
+    def test_rank_queue_caps_and_resets(self):
+        module = self._module(lambda_rank=0.2, rank_queue_size=4)
+        for step in range(5):
+            module.training_step(self._batch(seed=step), step)
+        held = sum(len(q["scores"]) for q in module._rank_queue)
+        assert held <= 4
+        module.on_train_epoch_start()
+        assert module._rank_queue == []
+
+    def test_defaults_leave_the_loss_untouched(self):
+        plain = self._module()
+        assert plain.report_head is None
+        plain.eval()  # dropout off, so the two passes below are identical
+        batch = self._batch(with_report=False)
+        loss = plain.training_step(batch, 0)
+        with torch.no_grad():
+            logits = plain(batch["volumes"], batch["meta"], batch["mask"])
+        from src.model import net
+        expected = net.weighted_bce(logits, batch["targets"], batch["weights"])
+        assert torch.allclose(loss.detach(), expected)
+
+    def test_export_drops_the_auxiliary_head(self, tmp_path):
+        module = self._module(report_dim=self.REPORT_DIM,
+                              lambda_report=0.2, lambda_rank=0.2)
+        ckpt = str(tmp_path / "lit.ckpt")
+        torch.save({"state_dict": module.state_dict()}, ckpt)
+        out = str(tmp_path / "convnext_fold0.pt")
+        knee_lightning.export_from_checkpoint(ckpt, out)
+
+        from src.model import net
+        exported = torch.load(out, map_location="cpu")
+        assert not any("report_head" in key for key in exported)
+        fresh = net.KneeNet(self.ConvBackbone(self.FEATURE_DIM),
+                            self.FEATURE_DIM)
+        fresh.load_state_dict(exported)

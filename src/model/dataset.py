@@ -102,7 +102,8 @@ class StudyIndex:
     def __init__(self, manifest: pd.DataFrame, series_meta: pd.DataFrame,
                  labels: Optional[pd.DataFrame] = None,
                  sides: Optional[pd.DataFrame] = None,
-                 max_series: Optional[int] = None):
+                 max_series: Optional[int] = None,
+                 reports: Optional[pd.DataFrame] = None):
         frame = manifest.merge(
             series_meta[["SeriesInstanceUID", "Fluid_Sensitive",
                          "Fat_Suppression", "Anatomical_Plane"]],
@@ -137,6 +138,21 @@ class StudyIndex:
         else:
             self._labels = None
 
+        # Report sentence embeddings, a training-time-only signal: reports
+        # exist for train studies and never for test, so these feed an
+        # auxiliary loss rather than the model input. Stored as one float32
+        # matrix rather than a DataFrame so __getitem__ is an array row.
+        if reports is not None:
+            keyed_reports = reports.set_index(config.ID_COL)
+            self._report_rows = {study: i for i, study
+                                 in enumerate(keyed_reports.index)}
+            self._report_matrix = keyed_reports.to_numpy(dtype=np.float32)
+            self.report_dim = self._report_matrix.shape[1]
+        else:
+            self._report_rows = None
+            self._report_matrix = None
+            self.report_dim = None
+
     def __len__(self) -> int:
         return len(self.studies)
 
@@ -166,6 +182,12 @@ class StudyIndex:
             dtype=np.float32)
         return targets, weights
 
+    def report_for(self, study: str) -> Optional[np.ndarray]:
+        """The study's report embedding, or None when unavailable."""
+        if self._report_rows is None or study not in self._report_rows:
+            return None
+        return self._report_matrix[self._report_rows[study]]
+
 
 def load_study(index: StudyIndex, study: str, shards: Dict[str, np.ndarray]) -> Dict:
     """Assemble one study: mirrored volumes, conditioning, targets, weights."""
@@ -190,6 +212,7 @@ def load_study(index: StudyIndex, study: str, shards: Dict[str, np.ndarray]) -> 
                                                      dtype=np.float32),
         "targets": targets,
         "weights": weights,
+        "report": index.report_for(study),
     }
 
 
@@ -218,6 +241,7 @@ def load_study_features(index: StudyIndex, study: str,
                                                      dtype=np.float32),
         "targets": targets,
         "weights": weights,
+        "report": index.report_for(study),
     }
 
 
@@ -264,4 +288,19 @@ def collate_studies(batch: Sequence[Dict]) -> Dict:
             np.stack([item["targets"] for item in batch]))
         out["weights"] = torch.from_numpy(
             np.stack([item["weights"] for item in batch]))
+
+    # Report embeddings, present only where the index carries them. Studies
+    # without one get a zero row and a False mask so the auxiliary loss can
+    # exclude them without a ragged batch.
+    reports = [item.get("report") for item in batch]
+    dims = [r.shape[0] for r in reports if r is not None]
+    if dims:
+        report = np.zeros((len(batch), dims[0]), dtype=np.float32)
+        report_mask = np.zeros(len(batch), dtype=bool)
+        for i, row in enumerate(reports):
+            if row is not None:
+                report[i] = row
+                report_mask[i] = True
+        out["report"] = torch.from_numpy(report)
+        out["report_mask"] = torch.from_numpy(report_mask)
     return out

@@ -4,7 +4,11 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-25 (capacity ladder: 0.845 -> 0.869 -> 0.889; next rung is 24 slices).
+Last updated: 2026-08-25 (capacity ladder complete at 0.845 -> 0.869 -> 0.889 ->
+0.891; the slice axis is exhausted. Next levers: Phase C extraction, and the
+newly implemented Phase C2 auxiliary objectives — report-embedding regression
+and a pairwise ranking loss, both training-time only — awaiting a fold-1 run.
+See `docs/plan.md`).
 
 ---
 
@@ -31,7 +35,8 @@ in train but **not** in test, so text is a training-time signal only.
 | Fine-tuned ConvNeXt-T, dual-mode soft labels | 0.827 |
 | Fine-tuned ConvNeXt-T, dual-mode sharpened | 0.843 |
 | ConvNeXt-T, 16 slices, 3 series | 0.869 |
-| **ConvNeXt-T, 16 slices, 5 series** | **0.889 ← best** |
+| ConvNeXt-T, 16 slices, 5 series | 0.889 |
+| **ConvNeXt-T, 24 slices, 5 series** | **0.891 ← best** |
 | Leaderboard top | 0.952 |
 | Leaderboard 20th | 0.941 |
 

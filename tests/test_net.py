@@ -185,6 +185,78 @@ class TestWeightedBCE:
         assert wrong > right
 
 
+class TestForwardPooled:
+    def test_logits_match_forward(self):
+        model = make_model()
+        volumes, meta, mask = make_batch()
+        with torch.no_grad():
+            logits, pooled = model.forward_pooled(volumes, meta, mask)
+            plain = model(volumes, meta, mask)
+        assert torch.allclose(logits, plain)
+        assert pooled.shape == (2, FEATURES)
+
+    def test_pooled_feeds_the_head(self):
+        # The pooled embedding must be exactly what the head reads, or the
+        # auxiliary loss supervises a different representation than the one
+        # producing the logits.
+        model = make_model()
+        volumes, meta, mask = make_batch()
+        with torch.no_grad():
+            logits, pooled = model.forward_pooled(volumes, meta, mask)
+        assert torch.allclose(model.head(pooled), logits)
+
+
+class TestPairwiseRankLoss:
+    def _pair(self, score_current, score_ref, target_current=1.0,
+              target_ref=0.0, **kwargs):
+        return net.pairwise_rank_loss(
+            torch.full((1, 12), score_current), torch.full((1, 12), target_current),
+            torch.full((1, 12), score_ref), torch.full((1, 12), target_ref),
+            **kwargs)
+
+    def test_correct_order_scores_lower_than_reversed(self):
+        good = self._pair(2.0, -2.0)   # higher target scored higher
+        bad = self._pair(-2.0, 2.0)
+        assert good < bad
+
+    def test_pairs_below_the_gap_do_not_count(self):
+        # Targets 0.55 vs 0.45 are extraction noise, not an ordering.
+        loss = self._pair(-5.0, 5.0, target_current=0.55, target_ref=0.45)
+        assert loss == 0.0
+
+    def test_empty_reference_is_zero_with_grad(self):
+        scores = torch.zeros(2, 12, requires_grad=True)
+        loss = net.pairwise_rank_loss(
+            scores, torch.ones(2, 12),
+            torch.zeros(0, 12), torch.zeros(0, 12))
+        assert loss == 0.0
+        loss.backward()  # the zero must still be attached to the graph
+        assert scores.grad is not None
+
+    def test_zero_weights_silence_a_pair(self):
+        loss = self._pair(-5.0, 5.0,
+                          weights=torch.zeros(1, 12),
+                          ref_weights=torch.ones(1, 12))
+        assert loss == 0.0
+
+    def test_bigger_target_gap_weighs_more(self):
+        # Two reference studies: a large-gap pair ranked correctly and a
+        # small-gap pair ranked wrongly. Gap weighting must pull the mean
+        # toward the large-gap (low-loss) pair, below the unweighted mean.
+        scores = torch.zeros(1, 1)
+        targets = torch.zeros(1, 1)
+        ref_scores = torch.tensor([[2.0], [-2.0]])
+        ref_targets = torch.tensor([[0.9], [0.4]])
+
+        combined = net.pairwise_rank_loss(scores, targets,
+                                          ref_scores, ref_targets)
+        each = [net.pairwise_rank_loss(scores, targets,
+                                       ref_scores[i:i + 1],
+                                       ref_targets[i:i + 1])
+                for i in range(2)]
+        assert combined < (each[0] + each[1]) / 2
+
+
 class TestFrozenPath:
     """The frozen path must produce the same architecture as the end-to-end one.
 
