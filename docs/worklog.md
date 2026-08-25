@@ -5,6 +5,39 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-25 (e) — aux-loss screen: gold 0.854, below the 0.861 reference
+
+**The C2 screen (fold 1, 16 × 5, both lambdas 0.2) selected at gold 0.854 —
+−0.007 against the reference.** Not submitted. Full training set confirmed
+(three shards, 4,349 studies); `hparams.yaml` and the printed
+`aux losses: report 0.2 (dim 384)  rank 0.2` line confirm both losses live.
+
+- Both losses **trained**: `report_loss` 0.170 → 0.044, `rank_loss`
+  0.652 → 0.026 over 12 epochs. Not the broken branch.
+- But `rank_loss` collapsing to 0.026 means the model near-perfectly ranks
+  its own detached queue — memorisation, and the prime suspect for the
+  deficit. `report_loss` plateauing at 0.044 cosine distance says the
+  embedding target is easier than hoped.
+- The regularisation signature is visible: late-epoch gold decays
+  0.854 → 0.849 (epochs 9 → 12), far milder than the 24-slice run's
+  0.865 → 0.842. Val holds flat at 0.867–0.868 through epoch 12.
+- Epoch time 11.4 min (vs ~9 min without the losses); the run cost ~2.3 h.
+
+**Branch taken (plan's "flat but trained", adjusted):** one escalation run
+with `LAMBDA_REPORT = 0.5` and `LAMBDA_RANK = 0.0` — report alone and
+stronger, rank dropped as the likely negative. Generator and notebook 08
+updated. If it clears 0.861 with the reduced-decay signature, the follow-up
+is 24 slices + report loss; if flat, C2 closes and Phase C is the lever.
+
+Tooling, same day: `BatchProgress` callback (plain-text tqdm over training
+batches, rank zero, 15 s refresh) replaces Lightning's widget bar, which
+never reached the Kaggle log — the Trainer now sets
+`enable_progress_bar=False` and epochs show batch-level progress. Tests
+321. An external defect-inspection project doc was screened for
+transferable ideas; verdict recorded in `docs/plan.md` (fp16 already in
+place, serving stack inapplicable, OHEM and `torch.compile` parked as
+unmeasured candidates).
+
 ## 2026-08-25 (d) — two auxiliary objectives implemented, ready for a fold-1 run
 
 **With capacity spent, two training-time losses now attack what the pipeline

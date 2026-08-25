@@ -314,6 +314,33 @@ class TestEpochReportSeesTheMetrics:
         assert row["gold_macro"] == pytest.approx(0.37)
         assert "nan" not in capsys.readouterr().out.lower()
 
+    def test_batch_progress_renders_and_closes(self, capsys):
+        # BatchProgress exists because Lightning's own bar is a notebook
+        # widget that never reaches a Save & Run All log. Run a real
+        # one-epoch fit and assert plain-text tqdm output actually landed on
+        # stdout and the bar was released at epoch end.
+        from torch.utils.data import DataLoader, TensorDataset
+
+        class Tiny(pl.LightningModule):
+            def __init__(self):
+                super().__init__()
+                self.layer = torch.nn.Linear(2, 1)
+
+            def training_step(self, batch, _):
+                return self.layer(batch[0]).mean()
+
+            def configure_optimizers(self):
+                return torch.optim.SGD(self.parameters(), lr=0.1)
+
+        progress = knee_lightning.BatchProgress(refresh_seconds=0.0)
+        data = DataLoader(TensorDataset(torch.randn(8, 2)), batch_size=4)
+        pl.Trainer(max_epochs=1, accelerator="cpu", devices=1, logger=False,
+                   enable_progress_bar=False, enable_model_summary=False,
+                   limit_val_batches=0, callbacks=[progress]).fit(Tiny(), data)
+
+        assert "epoch 1/1" in capsys.readouterr().out
+        assert progress._bar is None, "bar not closed at epoch end"
+
     def test_reads_on_validation_end_not_epoch_end(self):
         # The specific hook matters; asserting it keeps a well-meaning rename
         # from silently reintroducing the nan log.

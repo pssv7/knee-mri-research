@@ -377,6 +377,43 @@ class EpochReport(pl.Callback):
               f"gold {gold:.3f} (monitor only){marker}")
 
 
+class BatchProgress(pl.Callback):
+    """Plain-text tqdm over training batches, rank zero only.
+
+    Lightning's own progress bar resolves to the notebook-widget flavour of
+    tqdm inside Kaggle, and the widget never reaches the log of a
+    Save & Run All -- eleven minutes pass per epoch with no sign of life.
+    Plain tqdm writes carriage-returned text to stdout, which survives both
+    the interactive view and the batch log, so the Trainer disables its own
+    bar and takes this instead. `mininterval` keeps the batch log from
+    bloating: one refresh per interval, not one per batch.
+    """
+
+    def __init__(self, refresh_seconds: float = 15.0):
+        self.refresh_seconds = refresh_seconds
+        self._bar = None
+
+    def on_train_epoch_start(self, trainer, module):
+        if not trainer.is_global_zero:
+            return
+        import sys
+        from tqdm import tqdm
+        self._bar = tqdm(
+            total=int(trainer.num_training_batches),
+            desc=f"epoch {trainer.current_epoch + 1}/{trainer.max_epochs}",
+            unit="batch", file=sys.stdout,
+            mininterval=self.refresh_seconds, leave=False)
+
+    def on_train_batch_end(self, trainer, module, outputs, batch, batch_idx):
+        if self._bar is not None:
+            self._bar.update(1)
+
+    def on_train_epoch_end(self, trainer, module):
+        if self._bar is not None:
+            self._bar.close()
+            self._bar = None
+
+
 def export_from_checkpoint(ckpt_path: str, out_path: str) -> int:
     """Convert a Lightning checkpoint into the plain state dict for scoring.
 

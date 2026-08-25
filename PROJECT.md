@@ -5,10 +5,11 @@ the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
 Last updated: 2026-08-25 (capacity ladder complete at 0.845 -> 0.869 -> 0.889 ->
-0.891; the slice axis is exhausted. Next levers: Phase C extraction, and the
-newly implemented Phase C2 auxiliary objectives — report-embedding regression
-and a pairwise ranking loss, both training-time only — awaiting a fold-1 run.
-See `docs/plan.md`).
+0.891; the slice axis is exhausted. The Phase C2 aux-loss screen ran: gold
+0.854 vs the 0.861 reference — both losses trained, rank memorised its queue.
+One escalation run remains (`LAMBDA_REPORT = 0.5`, `LAMBDA_RANK = 0.0`,
+shipped in notebook 08); if flat, C2 closes and Phase C extraction is the
+lever. See `docs/plan.md` and worklog 2026-08-25 (e)).
 
 ---
 

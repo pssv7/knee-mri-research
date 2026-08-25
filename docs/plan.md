@@ -150,6 +150,27 @@ the C2-winning config retrains on them (fold 1 first, same gate discipline).
   16 slices (~8.6 h, 24 min slack); at 24 slices the ceiling is two folds
   (~5.5 h).
 
+## Screened external ideas (2026-08-25)
+
+A manufacturing defect-inspection pipeline (DDRNet/EfficientViT/EfficientAD
+on Triton) was mined for transferable techniques. Verdict, so nobody mines
+it twice:
+
+- **Already in place here:** fp16 — training is `16-mixed`, and notebook 10
+  infers under `torch.amp.autocast`. Nothing to adopt.
+- **Not applicable:** the serving stack (Triton, TensorRT engines, Kafka,
+  early-exit cascade) — Kaggle scores a notebook, internet off, and every
+  study must be scored anyway.
+- **Candidates, unmeasured — park behind C2/C:**
+  - *OHEM / hard-example emphasis* (their OHEM 0.9 threshold, hard-loss
+    quantile 0.999). Caution: our labels are LLM-extracted and noisy;
+    hard-example mining preferentially trains on label errors. Only worth
+    trying per-finding (e.g. upweighting Synovitis) after Phase C improves
+    label quality, gated on gold like everything else.
+  - *`torch.compile` for the efficiency entry* — their TensorRT theme's
+    only notebook-shaped analogue. Could shave the 0.0206 h/unit inference
+    cost; measure compile overhead against the 9 h cap before trusting it.
+
 ## Standing budget
 
 Kaggle: 25 GPU-h/week, one session at a time. A fold is ~1.8 h at 16 × 5, a

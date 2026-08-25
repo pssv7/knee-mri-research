@@ -2383,8 +2383,12 @@ LR = 1e-4
 # optimises calibration. This RankNet term orders the current study against
 # a queue of recent (detached) predictions, pairing only studies whose soft
 # targets differ by >= 0.25 so extraction noise is not what gets ranked.
-LAMBDA_REPORT = 0.2 if reports is not None else 0.0
-LAMBDA_RANK = 0.2
+# Screen result (fold 1, both at 0.2): gold 0.854 vs the 0.861 reference.
+# Both losses trained (report 0.17->0.044, rank 0.65->0.026), but rank
+# collapsed to near-zero -- memorised its own queue -- and is the suspect
+# for the deficit. This run escalates report alone.
+LAMBDA_REPORT = 0.5 if reports is not None else 0.0
+LAMBDA_RANK = 0.0
 REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
               if reports is not None else None)
 
@@ -2463,10 +2467,11 @@ trainer = pl.Trainer(
     strategy=STRATEGY,
     precision="16-mixed",
     accumulate_grad_batches=ACCUM_STEPS,
-    callbacks=[checkpointer, report],
+    callbacks=[checkpointer, report, knee_lightning.BatchProgress()],
     logger=csv_logger,
     log_every_n_steps=50,
     enable_model_summary=False,
+    enable_progress_bar=False,
 )
 
 start = time.time()
