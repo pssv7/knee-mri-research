@@ -59,7 +59,8 @@ floor of the gold 58. Honest gold by configuration:
 |---|---|
 | 8 slices, sharpened labels | 0.827 |
 | 8 slices, + silence weights | 0.817 |
-| **16 slices, same labels** | **0.840** |
+| 16 slices, 3 series | 0.840 |
+| **16 slices, 5 series** (fold 1) | **0.861** |
 
 The reading now: at 8 of 24 slices the model could not see enough of the knee
 to use the label quality it already had. Label work is not exhausted, but it

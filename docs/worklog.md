@@ -29,6 +29,33 @@ prediction was None.
 
 ---
 
+## 2026-08-25 — five series: gold 0.840 -> 0.861
+
+**Second capacity rung lands about as hard as the first. Submission pending.**
+
+    epoch    1     3     5     7     8    10    12
+    val    0.769 0.831 0.865 0.870 0.871 0.872 0.870
+    gold   0.740 0.823 0.850 0.856 0.864 0.861 0.858
+
+- Selected epoch 10 on val 0.872; **gold there 0.861**, against 0.840 for the
+  three-series run. Capacity has now moved gold 0.817 -> 0.840 -> 0.861 while
+  labels held constant.
+- **Confounded by fold.** This was `FOLD = 1`, not 0. Gold is measured on the
+  same 58 studies regardless of fold so the comparison is meaningful, but the
+  delta carries fold-to-fold variance, which has never been measured here.
+  +0.021 is large enough that variance is unlikely to explain it.
+- Selection cost more than usual: gold peaked at epoch 7 (0.873) while val
+  selected epoch 10 (gold 0.861), a 0.012 gap against the 0.002 seen before.
+  Val is flat within 0.002 from epoch 7 onward, so the choice among those
+  epochs is arbitrary from val's side and gold's bounce is 58-study noise.
+  Not a selection fault -- selecting on gold remains off the table.
+- Val and gold now sit ~0.011 apart, against ~0.02 in the eight-slice runs.
+- Converged: val plateaus from epoch 7, so twelve epochs remains right and
+  more would not obviously help.
+- Cost 2.2 h on two T4s at ~11 min/epoch.
+
+---
+
 ## 2026-08-24 (f) — sixteen slices: **LB 0.869**, new best
 
 **+0.024 over the previous best of 0.845, and the largest move the project
