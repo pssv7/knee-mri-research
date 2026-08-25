@@ -2502,10 +2502,26 @@ number.
 # If these numbers disagree with the last epoch's logged gold, the export is
 # wrong, and that is worth knowing here rather than after a submission.
 device = "cuda"
+
+# Prefer the exported state dict, but fall back to the Lightning checkpoint
+# it came from. A recovered run -- one where the training cell died after fit
+# and the export was re-run by hand -- can easily have the .ckpt and not the
+# .pt, and this cell is the verification step, so it must not be the thing
+# that refuses to run.
+scoring_path = CHECKPOINT
+if not os.path.exists(scoring_path):
+    found = sorted(glob.glob(f"/kaggle/working/lit_fold{FOLD}*.ckpt"))
+    if not found:
+        raise SystemExit(f"neither {CHECKPOINT} nor a lit_fold{FOLD} "
+                         "checkpoint is present")
+    scoring_path = found[0]
+    print(f"{CHECKPOINT} missing; scoring from {scoring_path}")
+
 scoring_model = net.KneeNet(
     timm.create_model(BACKBONE, pretrained=False, num_classes=0, in_chans=3),
     FEATURE_DIM).to(device)
-scoring_model.load_state_dict(torch.load(CHECKPOINT, map_location=device))
+scoring_model.load_state_dict(net.load_knee_state(scoring_path,
+                                                  map_location=device))
 scoring_model.eval()
 
 gold_ids, rows = [], []
