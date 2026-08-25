@@ -2874,34 +2874,44 @@ so `pretrained=False` is correct here -- timm cannot reach the network anyway.
 import timm
 
 # --- frozen path ---------------------------------------------------------
-encoder = embed.build_encoder(pretrained=False,
-                              checkpoint_path=find_one("dinov2_s_reg4.pt")).to(device)
-
+# Loaded only when the blend actually uses it. At BLEND = 1.0 the frozen
+# predictions are discarded further down, so demanding dinov2_s_reg4.pt and
+# knee_fold*.pt here would fail a tuned-only submission on inputs it never
+# reads -- which is exactly what it did.
+encoder = None
 frozen_models = []
-widths = set()
-for path in find_inputs("knee_fold*.pt"):
-    state = torch.load(path, map_location="cpu")
-    input_dim = (state["project.weight"].shape[1]
-                 if "project.weight" in state else embed.EMBED_DIM)
-    feature_dim = state["head.2.weight"].shape[1]
-    widths.add(input_dim)
-    model = net.KneeNet(None, feature_dim, input_dim=input_dim).to(device)
-    model.load_state_dict(state)
-    model.eval()
-    frozen_models.append(model)
 
-if len(widths) > 1:
-    # Checkpoints from two pooling grids are attached. Test slices are embedded
-    # once, at one grid, so half these models would silently receive features
-    # they were never trained on -- and produce plausible-looking noise.
-    raise SystemExit(
-        f"frozen checkpoints expect different input widths: {sorted(widths)}.\\n"
-        "Attach one training run's output, not both.")
+if USE_FROZEN:
+    encoder = embed.build_encoder(
+        pretrained=False,
+        checkpoint_path=find_one("dinov2_s_reg4.pt")).to(device)
 
-if widths:
-    input_dim = widths.pop()
-    embed.POOL_GRID = 1 if input_dim == embed.TOKEN_DIM * 2 else int(
-        round(((input_dim / embed.TOKEN_DIM) - 1) ** 0.5))
+    widths = set()
+    for path in find_inputs("knee_fold*.pt"):
+        state = torch.load(path, map_location="cpu")
+        input_dim = (state["project.weight"].shape[1]
+                     if "project.weight" in state else embed.EMBED_DIM)
+        feature_dim = state["head.2.weight"].shape[1]
+        widths.add(input_dim)
+        model = net.KneeNet(None, feature_dim, input_dim=input_dim).to(device)
+        model.load_state_dict(state)
+        model.eval()
+        frozen_models.append(model)
+
+    if len(widths) > 1:
+        # Checkpoints from two pooling grids are attached. Test slices are
+        # embedded once, at one grid, so half these models would silently
+        # receive features they were never trained on -- and produce
+        # plausible-looking noise.
+        raise SystemExit(
+            f"frozen checkpoints expect different input widths: "
+            f"{sorted(widths)}.\\n"
+            "Attach one training run's output, not both.")
+
+    if widths:
+        input_dim = widths.pop()
+        embed.POOL_GRID = 1 if input_dim == embed.TOKEN_DIM * 2 else int(
+            round(((input_dim / embed.TOKEN_DIM) - 1) ** 0.5))
 
 # --- fine-tuned path -----------------------------------------------------
 # Both shapes the training path produces are accepted: the bare state dict
