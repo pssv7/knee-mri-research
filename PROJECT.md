@@ -186,7 +186,7 @@ docs/
   worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   294 tests
+tests/                   296 tests
 ```
 
 ---
@@ -373,6 +373,14 @@ All guarded by tests now.
 - **P100 (sm_60) is unsupported** by Kaggle's PyTorch build. Use T4.
 - **A process-pool worker defined in a notebook cell cannot be pickled.** It
   lives in `src/data/cache.py` as `build_series_record`.
+- **Lightning runs callback hooks before the module hook of the same name.**
+  A `Callback.on_validation_epoch_end` reading `callback_metrics` fires
+  *before* `LightningModule.on_validation_epoch_end` has logged anything, so
+  it reads an empty dict and reports `nan` for every epoch of a perfectly
+  healthy run. Read metrics in `on_validation_end` instead, which is where
+  `ModelCheckpoint` selects — which is also why selection was never affected.
+  Guarded by a real one-epoch Trainer in
+  `tests/test_lightning.py::TestEpochReportSeesTheMetrics`.
 - **`torch.cuda.is_available()` poisons a fork.** Lightning's `ddp_notebook`
   forks, and a child inheriting a CUDA context dies with "Cannot
   re-initialize CUDA in forked subprocess" — raised from inside Lightning's

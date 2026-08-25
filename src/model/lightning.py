@@ -265,12 +265,21 @@ class EpochReport(pl.Callback):
 
     Under DDP every rank runs this code, so an unguarded print produces one
     copy of the log per GPU and makes a run look twice as long as it is.
+
+    **This reads `callback_metrics` in `on_validation_end`, not in
+    `on_validation_epoch_end`.** Lightning runs callback hooks before the
+    LightningModule's hook of the same name, so a callback asking for
+    `val_macro` at `on_validation_epoch_end` arrives before
+    `KneeLitModule.on_validation_epoch_end` has computed it and reads an
+    empty dict -- printing `nan` for every epoch of an otherwise healthy run.
+    `ModelCheckpoint` selects in `on_validation_end` for the same reason, so
+    checkpoint selection was never affected by this; only the log was.
     """
 
     def __init__(self):
         self.rows: List[Dict[str, float]] = []
 
-    def on_validation_epoch_end(self, trainer, module):
+    def on_validation_end(self, trainer, module):
         if trainer.sanity_checking or not trainer.is_global_zero:
             return
         metrics = trainer.callback_metrics

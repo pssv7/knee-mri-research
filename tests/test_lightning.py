@@ -20,6 +20,7 @@ from src import config  # noqa: E402
 pytest.importorskip("lightning.pytorch", reason="lightning not installed",
                     exc_type=ImportError)
 
+import lightning.pytorch as pl  # noqa: E402
 import torch  # noqa: E402
 
 from src.model import lightning as knee_lightning  # noqa: E402
@@ -267,3 +268,54 @@ class TestGoldIsNeverMonitored:
         finetune = source[start:end]
         assert 'monitor="val_macro"' in finetune
         assert 'monitor="gold_macro"' not in finetune
+
+
+class TestEpochReportSeesTheMetrics:
+    """The reporter must read metrics after the module has logged them.
+
+    Lightning runs callback hooks *before* the LightningModule hook of the
+    same name, so a callback reading `val_macro` in `on_validation_epoch_end`
+    gets an empty dict and prints nan for every epoch of a healthy run. This
+    runs a real one-epoch Trainer rather than inspecting source, because the
+    ordering is Lightning's to define and could change under us.
+    """
+
+    def test_report_captures_logged_metrics(self, capsys):
+        from torch.utils.data import DataLoader, TensorDataset
+
+        class Tiny(pl.LightningModule):
+            def __init__(self):
+                super().__init__()
+                self.layer = torch.nn.Linear(2, 1)
+
+            def training_step(self, batch, _):
+                return self.layer(batch[0]).mean()
+
+            def validation_step(self, batch, _, dataloader_idx=0):
+                pass
+
+            def on_validation_epoch_end(self):
+                self.log("val_macro", 0.42)
+                self.log("gold_macro", 0.37)
+
+            def configure_optimizers(self):
+                return torch.optim.SGD(self.parameters(), lr=0.1)
+
+        report = knee_lightning.EpochReport()
+        data = DataLoader(TensorDataset(torch.randn(8, 2)), batch_size=4)
+        pl.Trainer(max_epochs=1, accelerator="cpu", devices=1, logger=False,
+                   enable_progress_bar=False, enable_model_summary=False,
+                   num_sanity_val_steps=0, callbacks=[report]).fit(
+                       Tiny(), data, data)
+
+        assert len(report.rows) == 1, "the reporter never fired"
+        row = report.rows[0]
+        assert row["val_macro"] == pytest.approx(0.42)
+        assert row["gold_macro"] == pytest.approx(0.37)
+        assert "nan" not in capsys.readouterr().out.lower()
+
+    def test_reads_on_validation_end_not_epoch_end(self):
+        # The specific hook matters; asserting it keeps a well-meaning rename
+        # from silently reintroducing the nan log.
+        assert hasattr(knee_lightning.EpochReport, "on_validation_end")
+        assert "on_validation_epoch_end" not in vars(knee_lightning.EpochReport)
