@@ -2364,9 +2364,16 @@ import timm
 EPOCHS = 12
 LR = 1e-4
 
-# Which fold this session trains. Edit this one line per session so five
-# sessions produce convnext_fold0.pt through convnext_fold4.pt.
-FOLD = 0
+# Which fold this session trains.
+#
+# 1, not 0, and deliberately: the 0.889 result was fold 1, so every capacity
+# rung is measured against it on the same split. Changing the fold and the
+# configuration together makes the delta uninterpretable, which has already
+# cost this project one ambiguous run. Leave it at 1 for ladder experiments.
+#
+# The five-fold ensemble is the one time this sweeps: run 0 through 4, one
+# per session, producing convnext_fold0.pt through convnext_fold4.pt.
+FOLD = 1
 CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
 
 keyed = folded.set_index("StudyInstanceUID")
