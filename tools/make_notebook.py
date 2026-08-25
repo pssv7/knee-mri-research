@@ -2098,7 +2098,7 @@ before launching five folds.
 
 Subsampling controls the cost, and both knobs are real trade-offs:
 
-    SLICES_PER_SERIES  16 of 24     a tear may fall in a dropped slice
+    SLICES_PER_SERIES  24 of 24     the whole cache; 2.5D context is adjacent
     MAX_SERIES          5 of ~5.5   a finding may live only in a dropped series
 
 The slice count was raised from 8 after four label configurations spanning
@@ -2277,15 +2277,22 @@ takes paths and opens them lazily per process, and drops the handles in
     nb.code("""
 from torch.utils.data import DataLoader
 
-# Capacity ladder, step 1, confirmed: 8 slices -> 16 took the leaderboard from
-# 0.845 to 0.869, after four label configurations spanning 0.854 to 0.891 on
-# gold had moved it 0.018 between them. A tear can occupy one or two slices,
-# and 8 of 24 evenly spaced could miss it outright.
-SLICES_PER_SERIES = 16
+# Capacity ladder. 8 slices -> 16 took the leaderboard 0.845 -> 0.869, and
+# 3 series -> 5 took it 0.869 -> 0.889, with the labels unchanged throughout.
+#
+# 24 is the whole cache, and it changes something the intermediate values
+# could not. stack_2p5d hands each slice its neighbours *in the subsampled
+# stack*: at 16 of 24 those neighbours sit one or two real slices away, so the
+# three-channel context is stitched from non-adjacent anatomy. At 24 the gaps
+# are all 1 and the context is genuinely adjacent. This is the last rung on
+# this axis -- there is nothing beyond the cache short of rebuilding it.
+SLICES_PER_SERIES = 24
 
-# One study per rank, because step 2 raised MAX_SERIES to 5: at 1 x 5 x 16
-# that is 80 images per step, under the 96 the previous run held comfortably.
-# Raise this only alongside a drop in MAX_SERIES or SLICES_PER_SERIES.
+# One study per rank. At 1 x 5 x 24 that is 120 images per step, against the
+# 80 the five-series run held -- the most this shape has asked of a T4.
+# BATCH_STUDIES is already 1, so there is no batch left to halve if it runs
+# out of memory; the fallback is MAX_SERIES 5 -> 4, not a lower slice count,
+# because slices are the axis that has paid twice.
 BATCH_STUDIES = 1
 
 # Effective batch is BATCH_STUDIES x DEVICES x ACCUM_STEPS, and it must stay
@@ -2781,7 +2788,7 @@ USE_TUNED = BLEND > 0.0
 # axis, so a mismatch runs clean and simply scores worse than it should. These
 # track notebook 08's SLICES_PER_SERIES and MAX_SERIES -- a checkpoint trained
 # at 8 slices and 3 series must be scored with 8 and 3 here.
-TUNED_SLICES = 16
+TUNED_SLICES = 24
 TUNED_MAX_SERIES = 5
 
 BATCH_SLICES = 256

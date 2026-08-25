@@ -3,8 +3,8 @@
 State document: `PROJECT.md` (read it first; it holds what exists and what
 failed). This file holds only what happens next and the gates between steps.
 
-Position as of 2026-08-24. **Best public LB 0.869** (ConvNeXt-T, 16 slices,
-dual-mode sharpened labels), up from 0.845.
+Position as of 2026-08-25. **Best public LB 0.889** (ConvNeXt-T, 16 slices, 5 series,
+dual-mode sharpened labels), up from 0.845 at the start of the ladder.
 
 | configuration | honest gold | LB |
 |---|---|---|
@@ -12,7 +12,8 @@ dual-mode sharpened labels), up from 0.845.
 | 8 slices, dual-mode soft | 0.816 | 0.827 |
 | 8 slices, dual-mode sharpened | 0.827 | 0.843 |
 | 8 slices, + silence weights | 0.817 | not submitted |
-| **16 slices, same labels** | **0.840** | **0.869** |
+| 16 slices, 3 series | 0.840 | 0.869 |
+| **16 slices, 5 series** (fold 1) | **0.861** | **0.889** |
 
 \* inflated by the gold-selection leak, since fixed.
 
@@ -50,17 +51,27 @@ the network is too small — a meniscal tear can occupy one or two slices, and
    `TUNED_SLICES` was raised to 16 to match, which is mandatory — the
    aggregation masks over the slice axis, so a train/infer mismatch scores
    worse in silence.
-2. **`max_series` 3 → 5 — implemented, ready to run.** `BATCH_STUDIES` drops
+2. **`max_series` 3 → 5 — DONE. Gold 0.861, LB 0.889 (was 0.869).** `BATCH_STUDIES` drops
    to 1 so the per-step image count falls to 80 (1 x 5 x 16), under the 96 the
-   16-slice run held; `ACCUM_STEPS` derives to 4 on two GPUs, keeping the
-   effective batch at eight studies. Notebook 10's `TUNED_MAX_SERIES` follows
-   to 5 — the same mandatory coupling as `TUNED_SLICES`, and the same silent
-   failure if it drifts. Expect ~10-11 min/epoch, ~2.2 h.
-   **Gate: LB must beat 0.869.**
-3. Backbone ConvNeXt-T → ConvNeXt-S.
-4. **Five folds** on whatever config the ladder settles at: four more sessions
+   16-slice run held. Ran on fold 1 rather than 0, but the LB gain (+0.020)
+   tracked the gold gain (+0.021) closely enough to retire that confound.
+   Runtime scaled 1.29 h → 1.95 h at submission, near the 5/3 ratio, which
+   confirmed the extra series were actually being read.
+
+3. **`SLICES_PER_SERIES` 16 → 24 — implemented, ready to run.** The whole
+   cache, and the last rung on this axis without rebuilding it. It changes
+   something the intermediate values could not: `stack_2p5d` gives each slice
+   its neighbours *in the subsampled stack*, so at 16 of 24 the 2.5D context
+   is stitched from anatomy one or two real slices away; at 24 every gap is 1
+   and the context is genuinely adjacent. 120 images/step (up from 80) is the
+   most this shape has asked of a T4 — if it OOMs, drop `MAX_SERIES` to 4
+   rather than the slice count. Notebook 10's `TUNED_SLICES` follows to 24.
+   Run on **fold 1** to keep it a single-variable change against the current
+   best. Expect ~16 min/epoch, ~3.3 h. **Gate: LB must beat 0.889.**
+4. Backbone ConvNeXt-T → ConvNeXt-S.
+5. **Five folds** on whatever config the ladder settles at: four more sessions
    editing only `FOLD`, ~7 GPU-h, historically +0.005–0.010.
-5. Resolution last — 224 → 384 requires rebuilding the 29 GB cache;
+6. Resolution last — 224 → 384 requires rebuilding the 29 GB cache;
    expensive, only if everything else plateaus.
 
 ## Phase C — extraction v3 (the lever that reaches toward 0.94)
