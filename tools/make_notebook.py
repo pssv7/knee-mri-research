@@ -2436,14 +2436,26 @@ elapsed = time.time() - start
 # this point, and anything that runs before the export is a chance to lose it
 # to an unrelated error -- which is exactly what a stray reporting bug did on
 # the first two-GPU run. Reporting is cosmetic and comes after, wrapped.
-print(f"\\nbest val macro: {checkpointer.best_model_score:.3f}")
-print("best checkpoint:", checkpointer.best_model_path)
+# Under ddp_notebook the fit happens in forked children, and Lightning
+# transfers only `best_model_path` back to this process -- `best_model_score`
+# is left None, and their launcher carries a "TODO: pass also best score" to
+# that effect. Formatting it here crashed a finished twelve-epoch run. So the
+# path is used, the score comes from the CSV below, and the path itself is
+# checked against the filesystem rather than trusted.
+checkpoint_path = checkpointer.best_model_path or ""
+if not checkpoint_path or not os.path.exists(checkpoint_path):
+    found = sorted(glob.glob(f"/kaggle/working/lit_fold{FOLD}*.ckpt"))
+    if not found:
+        raise SystemExit(
+            "training finished but no checkpoint was written -- check the "
+            "epoch log for whether val_macro was ever computed")
+    checkpoint_path = found[0]
+print("\\nbest checkpoint:", checkpoint_path)
 
 # Convert Lightning's checkpoint into the bare KneeNet state dict notebook 10
 # loads. Read from the file, not from `module`: the process that called fit is
 # not the process that trained.
-n_tensors = knee_lightning.export_from_checkpoint(
-    checkpointer.best_model_path, CHECKPOINT)
+n_tensors = knee_lightning.export_from_checkpoint(checkpoint_path, CHECKPOINT)
 print(f"wrote {CHECKPOINT} ({n_tensors} tensors)")
 
 # Re-read the epoch table rather than trusting the forked ranks' stdout. The
@@ -2460,6 +2472,10 @@ try:
         marker = "  <- selected" if epoch_no == best_epoch else ""
         print(f"{epoch_no + 1:5d} {row['val_macro']:9.3f} "
               f"{row['gold_macro']:7.3f}{marker}")
+    best = per_epoch_rows.loc[best_epoch]
+    print(f"\\nbest val macro {best['val_macro']:.3f} at epoch "
+          f"{best_epoch + 1}; gold there {best['gold_macro']:.3f} "
+          "(monitor only, never selected on)")
 except Exception as exc:  # noqa: BLE001 - the checkpoint is already safe
     print(f"\\ncould not read the epoch table ({exc}); "
           f"look under {csv_logger.save_dir} for metrics.csv")

@@ -384,3 +384,45 @@ class TestCheckpointIsTheBestNotTheLast:
         # only safe while exactly one file exists.
         self._run(tmp_path)
         assert len(list(tmp_path.glob("*.ckpt"))) == 1
+
+
+class TestParentProcessKnowsNothing:
+    """After a forked fit, the parent's callback state is mostly stale.
+
+    Lightning's multiprocessing launcher transfers `best_model_path` back to
+    the process that called `fit` and leaves `best_model_score` at None --
+    its own source carries a "TODO: pass also best score". Formatting that
+    None crashed a finished twelve-epoch run, after the export had been moved
+    behind it.
+    """
+
+    def test_launcher_still_does_not_return_the_score(self):
+        import inspect
+        from lightning.pytorch.strategies.launchers.multiprocessing import (
+            _MultiProcessingLauncher)
+        source = inspect.getsource(
+            _MultiProcessingLauncher._recover_results_in_main_process)
+        assert "best_model_path" in source
+        # If a future Lightning starts returning the score, this fails and the
+        # notebook's workaround can be simplified rather than left as cargo.
+        assert "best_model_score" not in source
+
+    def _finetune_source(self):
+        source = (config.PROJECT_ROOT / "tools" / "make_notebook.py").read_text()
+        start = source.index("def build_finetune_notebook")
+        return source[start:source.index("def build_export_notebook")]
+
+    def test_notebook_never_formats_the_score(self):
+        finetune = self._finetune_source()
+        assert "best_model_score:" not in finetune
+        assert "best_model_score:.3f" not in finetune
+
+    def test_checkpoint_path_is_verified_against_the_filesystem(self):
+        finetune = self._finetune_source()
+        assert "os.path.exists(checkpoint_path)" in finetune
+        assert 'lit_fold{FOLD}*.ckpt' in finetune
+
+    def test_export_still_precedes_the_metrics_read(self):
+        finetune = self._finetune_source()
+        assert (finetune.index("export_from_checkpoint(")
+                < finetune.index('"metrics.csv"'))

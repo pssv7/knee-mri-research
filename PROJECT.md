@@ -186,7 +186,7 @@ docs/
   worklog.md             dated session records, with numbers
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   298 tests
+tests/                   302 tests
 ```
 
 ---
@@ -373,6 +373,13 @@ All guarded by tests now.
 - **P100 (sm_60) is unsupported** by Kaggle's PyTorch build. Use T4.
 - **A process-pool worker defined in a notebook cell cannot be pickled.** It
   lives in `src/data/cache.py` as `build_series_record`.
+- **After a forked `fit`, the parent process knows almost nothing.**
+  Lightning's launcher transfers `best_model_path` back and leaves
+  `best_model_score` at `None` (its source says "TODO: pass also best
+  score"), and `CSVLogger` resolves its version in the child, so the parent
+  asking afterwards points one version too far. Read the checkpoint from the
+  filesystem and the metrics from the CSV; trust nothing the callbacks hold.
+  Guarded by `tests/test_lightning.py::TestParentProcessKnowsNothing`.
 - **Lightning runs callback hooks before the module hook of the same name.**
   A `Callback.on_validation_epoch_end` reading `callback_metrics` fires
   *before* `LightningModule.on_validation_epoch_end` has logged anything, so
