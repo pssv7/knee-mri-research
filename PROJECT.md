@@ -4,7 +4,7 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-24 (16 slices -> LB 0.869, new best; next rung is series count).
+Last updated: 2026-08-25 (capacity ladder: 0.845 -> 0.869 -> 0.889; next rung is 24 slices).
 
 ---
 
@@ -30,11 +30,12 @@ in train but **not** in test, so text is a training-time signal only.
 | Fine-tuned ConvNeXt-T, categorical labels | 0.845 |
 | Fine-tuned ConvNeXt-T, dual-mode soft labels | 0.827 |
 | Fine-tuned ConvNeXt-T, dual-mode sharpened | 0.843 |
-| **ConvNeXt-T, 16 slices, dual-mode labels** | **0.869 ← best** |
+| ConvNeXt-T, 16 slices, 3 series | 0.869 |
+| **ConvNeXt-T, 16 slices, 5 series** | **0.889 ← best** |
 | Leaderboard top | 0.952 |
 | Leaderboard 20th | 0.941 |
 
-**We are ~0.07 behind a very tight cluster.** Twenty teams sit within 0.011 of
+**We are ~0.05 behind a very tight cluster.** Twenty teams sit within 0.011 of
 each other at 0.94+, which means a known recipe exists and the gap is structural
 rather than a matter of tuning.
 

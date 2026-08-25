@@ -29,6 +29,26 @@ prediction was None.
 
 ---
 
+## 2026-08-25 (b) — five series: **LB 0.889**, new best
+
++0.020 over 0.869, and it tracked the gold gain (+0.021) closely enough to
+retire the fold-1 confound: the capacity effect was real and fold variance did
+not meaningfully distort it.
+
+| configuration | gold | LB |
+|---|---|---|
+| 8 slices, 3 series | 0.827 | 0.845 |
+| 16 slices, 3 series | 0.840 | 0.869 |
+| **16 slices, 5 series** | **0.861** | **0.889** |
+
+Runtime scaled 1.29 h -> 1.95 h, near the 5/3 ratio of the change, which was
+independent evidence at submission time that the extra series were actually
+being read rather than silently dropped.
+
+Two capacity rungs, +0.044 between them, with labels held constant throughout.
+
+---
+
 ## 2026-08-25 — five series: gold 0.840 -> 0.861
 
 **Second capacity rung lands about as hard as the first. Submission pending.**
