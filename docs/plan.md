@@ -68,11 +68,28 @@ candidate regulariser there, gated on the LB and nothing softer. Phase C
 (extraction) is now the lever.
 
 **Standing trap until the next upload:** `knee-convnxt` holds the 0.880
-report-loss checkpoint and notebook 10 ships `TUNED_SLICES = 16`. The
-LB-best artefacts live on the Desktop: `lit_fold1_oldd.ckpt` (24 slices,
-LB 0.891, needs `TUNED_SLICES = 24`) and `lit_fold1_old.ckpt` (16-slice
-reference, LB 0.889, the efficiency candidate). Restore a matching
-checkpoint + slice-count pair before any future submission.
+report-loss checkpoint and notebook 10 ships `TUNED_SLICES = 16`. Restore a
+matching checkpoint + slice-count pair before any future submission.
+
+**Checkpoint inventory, verified 2026-08-26 by opening each file** (geometry
+is *not* recoverable from a checkpoint — the architecture is identical at
+every slice/series count — so identification is by Lightning's stored
+`best_model_score` cross-referenced to this log):
+
+| Desktop file | val | aux | geometry | LB |
+|---|---|---|---|---|
+| `lit_fold0.ckpt` | 0.8605 | none | fold 0, 16 × **3** | 0.869 |
+| `lit_fold1_old.ckpt` | 0.8718 | none | fold 1, 16 × 5 | 0.889 |
+| `lit_fold1_oldd.ckpt` | 0.8799 | none | fold 1, **24** × 5 | **0.891** |
+| `lit_fold1.ckpt` | 0.8814 | report 0.5 | fold 1, 16 × 5 | 0.880 |
+| `convnext_fold1.pt` | — | none | export of `lit_fold1_oldd` (220/220 tensors identical) | 0.891 |
+
+Two consequences for the fold ensemble: **the only `.pt` export on hand is
+the 24-slice one**, so fold 1's 16 × 5 contribution must come from
+`lit_fold1_old.ckpt` (exported, or attached as the `.ckpt` — notebook 10
+reads both); and **`lit_fold0.ckpt` is 16 × 3**, predating the five-series
+change, so fold 0 is a retrain like 2, 3 and 4 rather than a checkpoint
+already in hand.
 
 The original screen design and its decision tree follow, kept because the
 branch conditions are the record of how this was called.
