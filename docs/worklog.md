@@ -5,6 +5,65 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (c) — the sweep ran; raw macro is a misleading screen
+
+**The gold sweep ran on Colab. Verdict pending: four of the five dumps never
+reached the laptop, so the fused gate has not been applied.** What the raw
+table and one local measurement already establish:
+
+Raw macro per configuration (58 gold studies, from the Colab table):
+
+| config | raw macro |
+|---|---|
+| baseline@3 | 0.860 |
+| baseline@5 | 0.853 |
+| correlates@5 | 0.856 |
+| granular@5 | 0.870 |
+| reason_first@5 | **0.877** |
+
+- **The pipeline reproduces.** baseline@3 is an independent re-draw of the
+  shipped configuration at temperature 0.7, and it scored raw macro 0.860
+  against the shipped 0.860, fused **0.890 against the shipped 0.891**. Two
+  runs one thousandth apart: sampling noise on the fused macro is small, so
+  the deltas above are mostly real rather than resampling luck. Individual
+  findings still swing (fused Lateral OA 0.862 → 0.846).
+- **More self-consistency samples did not help.** baseline@5 is 0.007 *below*
+  baseline@3 — lever 2 of Phase C looks worthless, and the variants must be
+  read against baseline@5, their own control, not against baseline@3.
+- **Raw macro is the wrong weighting, and this is now measured.** How much
+  fused gold AUC the probability mode adds over categorical-only, per
+  finding: Fracture +0.111, Effusion +0.091, Synovitis +0.091, Contusion
+  +0.049, Medial OA +0.043, Lateral OA +0.042 — and then Baker's +0.013,
+  Lateral Meniscus +0.011, MCL +0.007, PF OA +0.004, ACL +0.002, Medial
+  Meniscus +0.001. **Half the findings are already carried by the categorical
+  extractor and the lexicon**, so a probability-side gain there buys nothing
+  the labels do not already have.
+- **That makes the raw leader suspect.** `reason_first`'s +0.024 over its
+  control is concentrated in MCL (0.816 → 0.984) and Medial Meniscus
+  (0.784 → 0.905) — the two findings with the *least* leverage (+0.007,
+  +0.001) — while it loses on Effusion (−0.037), Lateral OA (−0.048) and
+  Synovitis (−0.027), three of the six that matter. Prediction on the record
+  before the dumps arrive: **reason_first fuses at or below baseline**, and
+  `granular` is the better candidate (Synovitis +0.035, Lateral OA +0.019
+  against its control, against Effusion −0.031). None obviously clears
+  +0.005 fused.
+- `correlates` did move its targets — Synovitis +0.020 and PF OA +0.050 over
+  baseline@5 — but gave it back on Effusion (−0.041 vs baseline@3). Telling
+  the model synovitis accompanies effusion appears to have flattened
+  effusion's own discrimination. The idea works; the trade is not yet a win.
+
+**Defect found and fixed:** section 6 called `files.download()` once per
+dump, and the browser blocks a burst of downloads from one cell — four of
+five were lost silently, since the failure is browser-side and nothing in
+the notebook raises. The cell now writes one `gold_sweep.zip` and downloads
+that. Verified end to end by `tools/check_notebook.py`, which executes the
+real cell and produced a five-dump archive. Section 6's markdown now carries
+the leverage table so the raw screen is not read as a verdict.
+
+Next (user, Colab — the session still holds the parquets): zip and download
+them, unzip into `data/meta/gold_sweep/`, run
+`python3 tools/score_prompt_variants.py`. That applies the gate.
+
 ## 2026-08-26 (b) — Phase C harness: prompt-variant gold sweep, fused gate
 
 **Levers 1–2 of extraction v3 are implemented and tested (325 tests); the

@@ -853,12 +853,26 @@ co-occurrence priors for silent findings, aimed at Synovitis/Lateral/PF OA;
 `granular`: pressure against tie blocks; `reason_first`: a short sorting step
 before the numbers). ~290 prompts × 5 samples — minutes on an A100.
 
-The raw AUC printed here is a screen, not the gate. **Download every
-`llm_probs_gold__*.parquet` this cell produces**, drop them into
-`data/meta/gold_sweep/`, and run `python3 tools/score_prompt_variants.py`
-locally — that scores the full fusion (the number comparable to the shipped
-labels' 0.891) and applies the gate: beat 0.891 by more than 0.005 with no
-finding below 0.75. Only a gate-passing variant earns the corpus run below.
+The raw AUC printed here is a screen, not the gate. **Download the
+`gold_sweep.zip` this cell produces**, unzip it into `data/meta/gold_sweep/`,
+and run `python3 tools/score_prompt_variants.py` locally — that scores the
+full fusion (the number comparable to the shipped labels' 0.891) and applies
+the gate: beat 0.891 by more than 0.005 with no finding below 0.75. Only a
+gate-passing variant earns the corpus run below.
+
+**Read the raw table with the leverage column in mind.** It weights all
+twelve findings equally; fusion does not, because the categorical extractor
+and the lexicon already carry several of them. Measured 2026-08-26 — how
+much fused gold AUC the probability mode adds over categorical-only:
+
+| leverage | findings |
+|---|---|
+| high (+0.04 to +0.11) | Fracture, Effusion, Synovitis, Contusion, Medial OA, Lateral OA |
+| none (+0.00 to +0.01) | Medial Meniscus, ACL, PF OA, MCL, Lateral Meniscus, Baker's |
+
+A variant that wins raw macro on the bottom row has won nothing — that
+ground is already held. Judge a candidate by the top row, then confirm with
+the local fused score.
 """)
 
     nb.code("""
@@ -917,7 +931,15 @@ print(f"{'macro':18s} " + "  ".join(
 print("  shipped baseline raw macro: 0.860 -- fused labels: 0.891 (the gate)")
 
 # Dump every configuration so fusion is scored locally in seconds rather than
-# by re-running the model. 58 rows each -- the downloads are instant.
+# by re-running the model. 58 rows each.
+#
+# One zip, one download. Calling files.download() once per file loses all but
+# the first: the browser blocks a burst of downloads from a single cell, and
+# the 2026-08-26 sweep lost four of its five dumps that way -- silently, since
+# the failure is browser-side and nothing in the notebook raises.
+import zipfile
+
+written = []
 for (variant, n), results in sweep_results.items():
     dump = pd.DataFrame(
         [{name: r[name]["probability"] for name in LABELS} for r in results])
@@ -926,12 +948,21 @@ for (variant, n), results in sweep_results.items():
         dump[f"{name}_confidence"] = [r[name]["confidence"] for r in results]
     path = f"llm_probs_gold__{variant}_n{n}.parquet"
     dump.to_parquet(path, index=False)
+    written.append(path)
     print("wrote", path)
-    try:
-        from google.colab import files
-        files.download(path)
-    except Exception:
-        pass
+
+BUNDLE = "gold_sweep.zip"
+with zipfile.ZipFile(BUNDLE, "w", zipfile.ZIP_DEFLATED) as archive:
+    for path in written:
+        archive.write(path)
+print(f"\\nbundled {len(written)} dumps into {BUNDLE}")
+print("unzip into data/meta/gold_sweep/ and run tools/score_prompt_variants.py")
+
+try:
+    from google.colab import files
+    files.download(BUNDLE)
+except Exception:
+    pass
 """)
 
     nb.md("""

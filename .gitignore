@@ -27,3 +27,6 @@ docs/competition_pages.md
 kaggle.json
 access_token
 /checkpoints/
+
+# notebook-checker artefact (tools/check_notebook.py runs the sweep cell)
+gold_sweep.zip
