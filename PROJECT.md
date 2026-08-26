@@ -7,12 +7,15 @@ been paid for.
 Last updated: 2026-08-26 (capacity ladder complete at 0.845 -> 0.869 -> 0.889 ->
 0.891; the slice axis is exhausted. **Phase C2 closed** — the report loss won
 val 0.881 / gold 0.867 but scored LB 0.880 against the aux-free 0.889, so both
-lambdas ship at 0.0. **Phase C levers 1, 2 and 4 closed the same day** — three
-prompt variants, a 3->5 sample bump and four ensembles all fused at or below
-the shipped 0.891. Lever 3, re-extracting the categorical mode with the 32B,
-is what remains, and `docs/plan.md` holds the question to settle before
-spending on it: no label gain has ever moved the LB. See worklog 2026-08-26
-(c) and (d)).
+lambdas ship at 0.0. **Phase C closed entirely the same day** — prompt
+variants, a 3->5 sample bump, four ensembles and a 32B categorical
+re-extraction all fused at or below the shipped 0.891, and a replication
+showed the differences between them were sampling noise (run-to-run sd
+~0.004 against a between-config spread of 0.007). **The 58-study gold set
+cannot resolve a label change smaller than ~0.01, and the gate asked for
+0.005** — label quality is done as a lever. Budget goes to Phase D: the
+five-fold ensemble, then the gradient-similarity aux experiment. See worklog
+2026-08-26 (c) through (h)).
 
 ---
 
