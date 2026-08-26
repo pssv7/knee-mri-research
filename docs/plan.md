@@ -268,8 +268,10 @@ history when the LB entry is spent.
 **The active plan is two tracks:**
 - **Kaggle → Phase D fold ensemble, started now.** Notebook 08 ships
   `FOLD = 3` for the next session; sweep 0, 2, 4 after (fold 1 exists).
-  16 × 5 reference config, lambdas 0.0, ~1.8 h per fold. Then one five-fold
-  submission (~8.6 h, inside the cap), expecting +0.005–0.010 on 0.889.
+  16 × 5 reference config, lambdas 0.0, **~2.3 h per fold** (measured
+  2026-08-26: 11.4 min/epoch x 12; the old ~1.8 h predates the five-series
+  change). Four folds ~9.1 h, then one five-fold submission (~8.6 h, inside
+  the cap) — ~18 h against the 25 h/week quota. Expect +0.005–0.010 on 0.889.
   Before it: `knee-convnxt` must hold exactly the five `convnext_fold*.pt`
   exports — the 0.880 report-loss ckpt leaves, and no fold may be present
   as both `.pt` and `.ckpt`.
@@ -301,7 +303,8 @@ the C2-winning config retrains on them (fold 1 first, same gate discipline).
 - Deadlines: entry/team merger 2026-10-15, final submission 2026-10-22.
   Leave the final week for submission dry-runs.
 - **Five folds** on whatever config C2/C settle: four more sessions editing
-  only `FOLD`, ~7 GPU-h, historically +0.005–0.010.
+  only `FOLD`, **~9 GPU-h** for the four outstanding folds, historically
+  +0.005–0.010.
 - Keep the two final submissions distinct: one AUC entry, one lean
   Efficiency entry. The tracks pull opposite ways and two slots mean no
   compromise config is needed.
@@ -339,7 +342,7 @@ it twice:
 
 ## Standing budget
 
-Kaggle: 25 GPU-h/week, one session at a time. A fold is ~1.8 h at 16 × 5, a
+Kaggle: 25 GPU-h/week, one session at a time. A fold is **~2.3 h** at 16 × 5, a
 submission run ~2 h. Colab Pro (A100/L4) is reserved for extraction; a gold
 checkpoint pass costs minutes, a corpus pass ~1 h. Report embeddings build
 locally on CPU in minutes.

@@ -2827,19 +2827,44 @@ with torch.no_grad(), torch.amp.autocast("cuda"):
 gold_probs = np.concatenate(rows)
 truth = gold.set_index("StudyInstanceUID").loc[gold_ids]
 
+# The frozen DINOv2 path, retired 2026-08-23 at LB 0.787. Kept only as
+# historical context -- beating it is not news and has not been since the
+# first capacity rung.
 FROZEN = dict(zip(config.LABELS,
                   [0.728, 0.671, 0.698, 0.680, 0.895, 0.899,
                    0.772, 0.897, 0.746, 0.862, 0.711, 0.683]))
 
-print(f"{'finding':18s} {'this run':>9s}  {'frozen DINOv2':>13s}")
-print("-" * 44)
+# The comparisons that actually decide anything. Both are fold 1 at 16 x 5,
+# so a fold-1 run is directly comparable and any other fold is not.
+REFERENCE_GOLD = 0.861     # fold 1, 16 x 5, no aux losses -> LB 0.889
+BEST_GOLD = 0.865          # fold 1, 24 x 5              -> LB 0.891 (best)
+
+print(f"{'finding':18s} {'this run':>9s}  {'frozen (retired)':>16s}")
+print("-" * 47)
 scores = []
 for i, name in enumerate(config.LABELS):
     value = auc(truth[name].to_numpy().astype(int), gold_probs[:, i])
     scores.append(value)
-    print(f"{name:18s} {value:9.3f}  {FROZEN[name]:13.3f}")
-print("-" * 44)
-print(f"{'macro':18s} {np.nanmean(scores):9.3f}  {np.mean(list(FROZEN.values())):13.3f}")
+    print(f"{name:18s} {value:9.3f}  {FROZEN[name]:16.3f}")
+print("-" * 47)
+macro = float(np.nanmean(scores))
+print(f"{'macro':18s} {macro:9.3f}  {np.mean(list(FROZEN.values())):16.3f}")
+
+# Beating the retired baseline is not the question; beating the model that
+# currently holds the leaderboard slot is. Gold's own noise floor is ~0.02,
+# so print the deltas next to it rather than inviting a read off the table.
+print(f"\\nthe comparisons that matter (fold 1, 16 x 5):")
+print(f"  vs reference  gold {REFERENCE_GOLD:.3f} (LB 0.889): "
+      f"{macro - REFERENCE_GOLD:+.3f}")
+print(f"  vs best       gold {BEST_GOLD:.3f} (LB 0.891): "
+      f"{macro - BEST_GOLD:+.3f}")
+if abs(macro - REFERENCE_GOLD) < 0.02:
+    print("  -> inside the gold 58's ~0.02 noise floor: this is a null "
+          "against the reference, whatever the frozen column says.")
+if FOLD != 1:
+    print(f"  -> NOTE: this is fold {FOLD}; both references are fold 1, so "
+          "these deltas are not comparable. Judge fold members by the "
+          "ensemble's leaderboard score, not by gold here.")
 """)
 
     nb.md("""
