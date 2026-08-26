@@ -40,9 +40,29 @@ overfitting, not headroom. What survives from Phase B as standing rules:
 - **Experiments iterate on fold 1 at 16 slices × 5 series** against gold
   0.861 — the only split with a measured baseline. One change at a time.
 - 24 slices is a one-line change held for a final AUC-slot run only.
-- ConvNeXt-S is demoted, not dead: if ever run, it needs regularisation and
-  the 16-slice geometry. Resolution (224 → 384) means rebuilding the 29 GB
-  cache; last resort.
+- **ConvNeXt-S has never been run** — Tiny is the incumbent from the first
+  fine-tuning run, not the winner of a comparison. It stays demoted on three
+  measured grounds, recorded 2026-08-26 so this is not re-litigated:
+  1. *The last capacity rung failed the same way it would.* 24 slices added
+     capacity against the same 4,349 studies and overfit — val peaked at
+     epoch 7, gold fell 0.865 → 0.842 — for +0.002 LB. Small adds 78% more
+     parameters (27.8M → 49.5M) in that same direction, and model gold
+     (0.865) sits *below* label gold (0.891): the model is label-limited,
+     not capacity-starved.
+  2. *It collides with the 9 h submission cap.* Measured ~1.7× forward cost.
+     At 16 × 5 a fold costs 1.65 h of inference, so five folds fit in 8.5 h;
+     at Small's cost that becomes ~2.8 h/fold and the cap allows **three
+     folds, not five**. Choosing Small spends two folds of ensembling
+     (historically +0.005–0.010 across five) on an untested backbone.
+  3. *The Efficiency Prize charges for it twice* — an extra hour of runtime
+     costs 0.111 and needs +0.050 AUC to break even; nothing measured here
+     has ever cleared that.
+
+  The one shape worth testing, if budget survives the fold ensemble: Small
+  on fold 1 at 16 × 5 **with explicit regularisation** (`drop_path_rate`,
+  which timm exposes — not the report loss, which the LB rejected), one run,
+  gated on gold against 0.861. Resolution (224 → 384) is a separate lever and
+  means rebuilding the 29 GB cache; last resort.
 - **Five folds multiply a winning config, they do not rescue one** —
   historically +0.005–0.010, spent once at the end (see Phase D for the 9 h
   ceiling on fold count).
