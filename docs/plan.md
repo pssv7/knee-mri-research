@@ -121,9 +121,11 @@ every slice/series count — so identification is by Lightning's stored
 | `convnext_fold1.pt` (older) | — | none | export of `lit_fold1_oldd` (220/220 tensors identical) | 0.891 |
 | `convnext_fold1.pt` (2026-08-26) | 0.874 | report 1.0 cosine | fold 1, 16 × 5 | not submitted, gold 0.856 |
 
-**Three different models have now been called `convnext_fold1.pt`** — the
-24-slice export, and the cosine-aux run of 2026-08-26. Notebook 10 globs
-that filename and would average whichever is present without complaint, so
+**Two different models are now called `convnext_fold1.pt`** — the 24-slice
+export (LB 0.891) and the cosine-aux run of 2026-08-26 (gold 0.856, never
+submitted). Neither is the ensemble's fold-1 member, which is the 16 × 5
+reference and exists only as `lit_fold1_old.ckpt`. Notebook 10 globs that
+filename and would average whichever copy is present without complaint, so
 check the file, not the name.
 
 Two consequences for the fold ensemble: **no `.pt` export of the 16 × 5
