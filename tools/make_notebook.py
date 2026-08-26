@@ -2520,13 +2520,16 @@ comparison is between backbones rather than between architectures.
     nb.code("""
 import timm
 
+# Notebook 10's TUNED_BACKBONE must match this, along with the slice and
+# series counts. `net.build_backbone` handles the ViT-family input-size
+# argument, so a DINOv2 name works here unchanged.
 BACKBONE = "convnext_tiny.fb_in22k_ft_in1k"
 
 # Built once here before the trainer spawns its workers. Each rank constructs
 # its own backbone, and two processes racing to download the same weights into
 # the same cache is a failure that only appears on multi-GPU runs -- warming
 # the cache first turns that race into two cache hits.
-_warm = timm.create_model(BACKBONE, pretrained=True, num_classes=0, in_chans=3)
+_warm = net.build_backbone(BACKBONE)
 FEATURE_DIM = _warm.num_features
 print(f"{BACKBONE}: {FEATURE_DIM} features, "
       f"{sum(p.numel() for p in _warm.parameters()) / 1e6:.1f}M params")
@@ -2652,8 +2655,7 @@ TOTAL_STEPS = knee_lightning.optimiser_steps(
 print("optimiser steps:", TOTAL_STEPS)
 
 module = knee_lightning.KneeLitModule(
-    backbone=timm.create_model(BACKBONE, pretrained=True, num_classes=0,
-                               in_chans=3),
+    backbone=net.build_backbone(BACKBONE),
     feature_dim=FEATURE_DIM, lr=LR, total_steps=TOTAL_STEPS,
     report_dim=REPORT_DIM, lambda_report=LAMBDA_REPORT,
     lambda_rank=LAMBDA_RANK, aux_mode=AUX_MODE, aux_gate=AUX_GATE)
@@ -2816,8 +2818,7 @@ if not os.path.exists(scoring_path):
     print(f"{CHECKPOINT} missing; scoring from {scoring_path}")
 
 scoring_model = net.KneeNet(
-    timm.create_model(BACKBONE, pretrained=False, num_classes=0, in_chans=3),
-    FEATURE_DIM).to(device)
+    net.build_backbone(BACKBONE, pretrained=False), FEATURE_DIM).to(device)
 scoring_model.load_state_dict(net.load_knee_state(scoring_path,
                                                   map_location=device))
 scoring_model.eval()
@@ -2871,6 +2872,57 @@ if FOLD != 1:
     print(f"  -> NOTE: this is fold {FOLD}; both references are fold 1, so "
           "these deltas are not comparable. Judge fold members by the "
           "ensemble's leaderboard score, not by gold here.")
+""")
+
+    nb.md("""
+## 9. Out-of-fold predictions
+
+Writes this fold's validation predictions to `oof_fold{FOLD}.parquet`. The
+studies here were never trained on by this checkpoint, so five folds tile the
+whole 4,349-study corpus with predictions from a reader that saw the images and
+never saw the study it is scoring.
+
+This is the only label source in the project that can rank studies inside the
+blocks the reports leave silent -- 27% of gold positives are never written down
+at all, and no extractor can reach those. Whether that is worth anything is
+Phase E's question; this cell just stops the answer from costing another pass,
+since the forward pass has already happened.
+
+**Attach the resulting file to the `knee-labels` dataset alongside the
+checkpoint.** A fold whose OOF dump is missing has to be re-run to get it.
+""")
+
+    nb.code("""
+# The gold studies are excluded from training everywhere, so they are absent
+# from every fold's validation split and no OOF row can be one of them. That
+# keeps this file usable for label work without a leak -- but it also means
+# the gold 58 never appear here, so Phase E's gate still reads gold from the
+# labels it builds, not from this dump.
+oof_ids, oof_rows = [], []
+with torch.no_grad(), torch.amp.autocast("cuda"):
+    for batch in val_loader:
+        logits = scoring_model(batch["volumes"].to(device),
+                               batch["meta"].to(device),
+                               batch["mask"].to(device))
+        oof_rows.append(torch.sigmoid(logits.float()).cpu().numpy())
+        oof_ids += batch[config.ID_COL]
+
+oof = pd.DataFrame(np.concatenate(oof_rows), columns=config.LABELS)
+oof.insert(0, config.ID_COL, oof_ids)
+oof["fold"] = FOLD
+
+OOF_PATH = f"/kaggle/working/oof_fold{FOLD}.parquet"
+oof.to_parquet(OOF_PATH, index=False)
+print(f"wrote {OOF_PATH}: {len(oof)} studies x {len(config.LABELS)} findings")
+print(f"mean predicted rate: {oof[config.LABELS].to_numpy().mean():.3f}")
+
+# A dump that is all one value is a broken export, not a cautious model, and
+# it would quietly poison any blend built on it.
+_spread = oof[config.LABELS].to_numpy().std(axis=0)
+if float(_spread.min()) < 0.01:
+    _flat = [n for n, s in zip(config.LABELS, _spread) if s < 0.01]
+    print(f"  WARNING: near-constant predictions for {_flat} -- "
+          "check before using this dump for label work")
 """)
 
     nb.md("""
@@ -3109,6 +3161,13 @@ USE_TUNED = BLEND > 0.0
 TUNED_SLICES = 16
 TUNED_MAX_SERIES = 5
 
+# Must match notebook 08's BACKBONE. This was hard-coded to ConvNeXt here
+# while notebook 08 exposed it as a constant, so a backbone experiment would
+# have trained one trunk and scored another; the strict load would have caught
+# it, but only after the hours were spent. Now it travels with the slice and
+# series counts -- the three are re-uploaded together.
+TUNED_BACKBONE = "convnext_tiny.fb_in22k_ft_in1k"
+
 BATCH_SLICES = 256
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("device:", device, "| blend:", BLEND)
@@ -3203,8 +3262,7 @@ for pattern in TUNED_PATTERNS:
 
 tuned_models = []
 for path in tuned_paths:
-    backbone = timm.create_model("convnext_tiny.fb_in22k_ft_in1k",
-                                 pretrained=False, num_classes=0, in_chans=3)
+    backbone = net.build_backbone(TUNED_BACKBONE, pretrained=False)
     model = net.KneeNet(backbone, backbone.num_features).to(device)
     model.load_state_dict(net.load_knee_state(path, map_location="cpu"))
     model.eval()

@@ -399,3 +399,52 @@ class TestLoadKneeState:
         torch.save({"state_dict": {}}, path)
         with pytest.raises(ValueError, match="no weights found"):
             net.load_knee_state(str(path))
+
+
+class TestBuildBackbone:
+    """Both notebooks construct their trunk here, so the two cannot diverge.
+
+    The interesting behaviour is the input-size argument: ViT-family weights
+    need it and ConvNets reject it, and getting that wrong surfaces either as
+    a crash at submission time or as interpolated position embeddings that
+    were never asked for. timm is faked so the test states the contract
+    without downloading weights.
+    """
+
+    def _fake_timm(self, monkeypatch, accepts_img_size):
+        calls = []
+
+        class FakeTimm:
+            @staticmethod
+            def create_model(name, **kwargs):
+                calls.append(kwargs)
+                if "img_size" in kwargs and not accepts_img_size:
+                    raise TypeError("unexpected keyword argument 'img_size'")
+                return nn.Identity()
+
+        monkeypatch.setitem(sys.modules, "timm", FakeTimm)
+        return calls
+
+    def test_vit_family_receives_the_cache_size(self, monkeypatch):
+        calls = self._fake_timm(monkeypatch, accepts_img_size=True)
+        net.build_backbone("vit_small_patch14_reg4_dinov2.lvd142m")
+        assert len(calls) == 1
+        assert calls[0]["img_size"] == config.CACHE_SIZE
+
+    def test_a_convnet_is_retried_without_the_argument(self, monkeypatch):
+        calls = self._fake_timm(monkeypatch, accepts_img_size=False)
+        net.build_backbone("convnext_tiny.fb_in22k_ft_in1k")
+        assert len(calls) == 2
+        assert "img_size" not in calls[1]
+
+    def test_channels_match_the_2p5d_stack(self, monkeypatch):
+        calls = self._fake_timm(monkeypatch, accepts_img_size=True)
+        net.build_backbone("anything", pretrained=False)
+        assert calls[0]["in_chans"] == net.SLICE_CONTEXT
+        assert calls[0]["pretrained"] is False
+        assert calls[0]["num_classes"] == 0
+
+    def test_the_cache_size_divides_the_dinov2_patch_grid(self):
+        # 224 = 16 x 14. A cache size that did not divide by 14 would make the
+        # position-embedding interpolation silently lossy rather than exact.
+        assert config.CACHE_SIZE % 14 == 0

@@ -292,14 +292,67 @@ member and the ensemble is judged only by its five-fold LB. The cosine run
 is a genuine close, but it closes a *family* that was already two-for-two
 against the LB; nothing downstream was gated on it passing.
 
-- **First, before any further Kaggle run: instrument notebook 08 for OOF
-  dumps.** One added cell — after training, write the validation fold's
-  per-study predictions (plus the gold 58's, monitoring only) to
-  `/kaggle/working/oof_fold{N}.parquet` alongside the checkpoint. Val
-  inference already happens every epoch, so this is minutes, not hours.
-  Folds 0/2/4 then produce Phase E's inputs for free; skipping this means
-  buying three ~2.3 h runs and later paying inference again for what they
-  already computed and discarded.
+**The budget assumption that shaped the old ordering was wrong.** With the
+final submission on 2026-10-22 there are ~8 weeks left, i.e. **~200 GPU-h**
+at 25 h/week, against a plan that spends 15.5 h. Training hours are not the
+scarce resource; the scarce resources are the **9 h inference cap**, the
+**two final submission slots**, and ideas that could actually work. The
+three-part cost argument that demoted ConvNeXt-S was written when the fold
+ensemble looked like the whole budget, and points 2 and 3 of it (cap,
+efficiency prize) still stand for anything that ships — but point 1, "we
+cannot afford the run", no longer does for a *probe*.
+
+- **Done 2026-08-26 (local): notebook 08 instrumented.** `net.build_backbone`
+  now constructs the trunk for both notebooks from one name, handling the
+  ViT-family `img_size` argument (notebook 10 had ConvNeXt hard-coded, so a
+  backbone experiment would have trained one trunk and scored another);
+  notebook 10 gained `TUNED_BACKBONE`, which travels with `TUNED_SLICES` and
+  `TUNED_MAX_SERIES`. Section 9 writes `oof_fold{N}.parquet` after training,
+  so every run from here produces Phase E's inputs for free. 346 tests.
+
+- **Next Kaggle run: the DINOv2-S fine-tune probe, ahead of folds 0/2/4.**
+  One run, fold 1, 16 × 5, `BACKBONE =
+  "vit_small_patch14_reg4_dinov2.lvd142m"`, everything else identical,
+  ~2.3 h. **It goes first because it is the only queued run that can
+  invalidate the expensive one.** The ensemble's expected value is now
+  ~level with 0.891 (above), so spending 6.9 h to finish it before knowing
+  whether the ensemble should be ConvNeXt-only is buying an artefact that
+  might be rebuilt. Cheap-before-expensive, applied to sequencing.
+
+  **What the prior says, honestly.** Frozen DINOv2-S (reg4) *is* the 0.787
+  baseline — the worst result the project has. That does not refute a
+  fine-tune (fine-tuning bought ConvNeXt +0.058 over its frozen self, and
+  `embed.py` has run this exact backbone at 224 for a year), but nothing
+  here encourages it either: every architecture and capacity change measured
+  on this project has failed — grid-4 (−0.023 gold), 24 slices (+0.002 LB,
+  overfitting), ConvNeXt-S (demoted). ViTs are data-hungry and there are
+  4,349 studies with mined labels.
+
+  **The case for running it anyway is diversity, not capacity.** Fold 3
+  settled that fold-diversity is worth ~nothing: two folds of one
+  architecture sit 0.012 apart and average to near their mean. A trunk with
+  a different inductive bias and a different pretraining objective
+  (self-supervised LVD-142M vs supervised IN22k) is the kind of diversity
+  that does pay in an ensemble. **Counter-evidence to hold onto:** the
+  frozen+tuned blend landed *between* its members (0.839, between 0.787 and
+  0.845), so diversity pays only if the new member is comparable in
+  strength, never if it is weaker.
+
+  **Gate, on fold 1's gold 0.861** (fold 1 is mandatory — it is the only
+  split with a baseline, and fold 3 just demonstrated why):
+  - **≥ 0.861** — the axis is open. Rebuild the ensemble around a mixed
+    ConvNeXt/DINOv2 average and re-cost the cap before committing folds.
+  - **0.851–0.861** — not a replacement, but a candidate diversity member.
+    Worth two DINOv2 folds in a mixed ensemble, decided on one LB entry.
+  - **< 0.85** — closed like grid-4. Back to ConvNeXt folds 0/2/4, and the
+    backbone question is settled by measurement rather than re-argued.
+
+  **Read the projected-runtime line in the same run.** DINOv2-S/14 at 224 is
+  ~261 tokens against ConvNeXt-T's convolutions; if inference is ~1.3× then
+  five DINOv2 folds do not fit under the 9 h cap and a mixed ensemble is the
+  only shape that can ship. Measure it, do not estimate it.
+
+- **Then folds 0/2/4** (~6.9 h), composition decided by the probe.
 - **Kaggle → Phase D fold ensemble, 2 of 5 in hand.** Fold 3 done
   2026-08-26 (verified aux-free from the checkpoint's own hparams); fold 1
   is `lit_fold1_old.ckpt` (needs a `.pt` export; the same short session can

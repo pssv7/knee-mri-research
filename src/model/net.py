@@ -49,6 +49,32 @@ def stack_2p5d(volumes: torch.Tensor) -> torch.Tensor:
     return stacked.reshape(n * depth, SLICE_CONTEXT, height, width)
 
 
+def build_backbone(name: str, pretrained: bool = True,
+                   image_size: Optional[int] = None):
+    """Create a timm trunk mapping (N, 3, H, W) -> (N, num_features).
+
+    Every backbone this project runs is constructed through here so the
+    training and submission notebooks cannot build different trunks from the
+    same name -- notebook 10 hard-coded ConvNeXt for a while, which would have
+    met a DINOv2 checkpoint with a shape error at submission time.
+
+    ViT-family weights (DINOv2 among them) are published at a fixed input size
+    and timm's patch embedding refuses anything else, so the cache's size is
+    passed explicitly and the position embeddings are interpolated -- 224 is
+    16x14, which divides cleanly. ConvNets accept any size and reject the
+    argument, hence the fallback rather than an unconditional pass.
+    """
+    import timm
+
+    image_size = config.CACHE_SIZE if image_size is None else image_size
+    kwargs = dict(pretrained=pretrained, num_classes=0,
+                  in_chans=SLICE_CONTEXT)
+    try:
+        return timm.create_model(name, img_size=image_size, **kwargs)
+    except TypeError:
+        return timm.create_model(name, **kwargs)
+
+
 class AttentionPool(nn.Module):
     """Masked attention pooling over a sequence of embeddings.
 
