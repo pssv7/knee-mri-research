@@ -641,8 +641,19 @@ section 1, skip this section, and continue from section 3.** The restart is
 required: vLLM replaces torch and the CUDA libraries underneath a process that
 has already imported the old ones.
 
-The dependency-conflict wall of text pip prints here is noise. Every conflict is
-against RAPIDS and Google SDK packages that this notebook never imports.
+**The `ERROR: pip's dependency resolver ...` wall of text here is noise, and
+the install it follows succeeded** — pip prints that report at ERROR level
+after resolving, not instead of installing. Every conflict is against
+packages this notebook never imports: RAPIDS (`cudf`, `cuml`, `raft`, `rmm`,
+`cuvs`, `dask-cuda`, `numba-cuda`, and their `cuda-toolkit` / `cuda-python`
+pins, which vLLM's newer CUDA wheels invalidate), the Google SDKs
+(`google-adk`, `google-ai-generativelanguage`, `grpcio-status` over
+protobuf), and `ipython`'s optional `jedi` — that last one costs tab
+completion and `obj?` introspection, nothing this notebook runs.
+
+The cell prints a banner with the installed vLLM version underneath the
+wall. **If that banner is missing, the install genuinely failed** — that is
+the one case to stop and report; a conflict list above a banner is not.
 """)
 
     nb.code("""
@@ -655,7 +666,29 @@ against RAPIDS and Google SDK packages that this notebook never imports.
 # rather than reconciled.
 !pip uninstall -y -q torchaudio
 
-print("installed -- RESTART THE RUNTIME now, then re-run section 1 and skip this cell")
+# pip's conflict report is long enough to push the restart instruction off
+# screen, and it reads like a failure while being none -- so confirm the
+# install positively and say so louder than the noise above. Reading the
+# version from package metadata does not import vllm, which must not happen
+# before the restart.
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    installed = version("vllm")
+except PackageNotFoundError:
+    installed = None
+
+print()
+print("=" * 68)
+if installed:
+    print(f"  vLLM {installed} installed. Conflicts printed above are noise.")
+    print("  RESTART THE RUNTIME NOW, then re-run section 1, skip this")
+    print("  cell, and continue from section 3.")
+else:
+    print("  vLLM did NOT install. Stop here and report the pip output --")
+    print("  the conflict list above is normally harmless, so a missing")
+    print("  version means something else failed.")
+print("=" * 68)
 """)
 
     nb.md("""
