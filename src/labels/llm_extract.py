@@ -300,12 +300,72 @@ Respond with ONLY a JSON object mapping each finding to a number:
 Include all twelve findings."""
 
 
-def build_probability_prompt(report: str) -> str:
+# ---------------------------------------------------------------------------
+# Prompt variants (Phase C — extraction v3)
+# ---------------------------------------------------------------------------
+# Each candidate changes ONE idea against the baseline, so a gold-sweep delta
+# is attributable to it. Variants are built by anchored substitution on the
+# baseline text, and the anchors are asserted below: rewording the baseline
+# without updating the variants fails at import instead of silently shipping
+# a variant that no longer differs from it.
+#
+# Nothing here ships without a gold measurement — two reasoned prompt changes
+# have already measured worse (see PROJECT.md). The weak findings these aim
+# at, from the fused labels: Synovitis 0.792, Lateral OA and PF OA next.
+
+_SILENCE_ANCHOR = "Most unmentioned findings land between 5 and 35."
+
+_CORRELATES_BLOCK = _SILENCE_ANCHOR + """
+  Co-occurrence is your best evidence for silent findings, and these
+  associations are strong in knee MRI:
+  - Synovitis is rarely dictated but usually accompanies a joint effusion or
+    active osteoarthritis. An effusion or advanced OA with no comment on the
+    synovium deserves a clearly raised estimate, not a floor value.
+  - Osteoarthritis travels across compartments: described medial OA raises
+    the probability of unmentioned patellofemoral and lateral OA.
+  - Bone contusion accompanies acute injury (an ACL rupture, a recent
+    trauma); a purely chronic degenerative report lowers it.
+  - Effusion is raised by any acute internal derangement or active OA.
+  A correlate never overrides an explicit statement: a structure described
+  as normal stays low regardless of the rest of the report."""
+
+_ROUNDING_ANCHOR = "Do not round to 0, 50, or 100."
+
+_GRANULAR_BLOCK = """Use precise integers — 7, 23, 41, 88 — never multiples
+of 5 or 10, and avoid giving two findings the same number unless the report
+truly says the same about both. The scores are used to RANK studies, so ties
+are wasted answers. Do not round to 0, 50, or 100."""
+
+_RESPOND_ANCHOR = "Respond with ONLY a JSON object mapping each finding to a number:"
+
+_REASON_FIRST_BLOCK = """First write two or three sentences (plain prose, no
+braces) sorting the findings: which the report describes as present, which it
+calls absent or normal, which it hedges on, and which it never mentions.
+Then output the JSON object mapping each finding to a number:"""
+
+_VARIANT_EDITS = {
+    # One idea each: named co-occurrence priors for silent findings;
+    # pressure against tie blocks; a short sorting step before the numbers.
+    "correlates": (_SILENCE_ANCHOR, _CORRELATES_BLOCK),
+    "granular": (_ROUNDING_ANCHOR, _GRANULAR_BLOCK),
+    "reason_first": (_RESPOND_ANCHOR, _REASON_FIRST_BLOCK),
+}
+
+PROBABILITY_PROMPT_VARIANTS = {"baseline": PROBABILITY_PROMPT}
+for _name, (_anchor, _replacement) in _VARIANT_EDITS.items():
+    assert _anchor in PROBABILITY_PROMPT, f"anchor for {_name!r} lost"
+    PROBABILITY_PROMPT_VARIANTS[_name] = PROBABILITY_PROMPT.replace(
+        _anchor, _replacement)
+    assert PROBABILITY_PROMPT_VARIANTS[_name] != PROBABILITY_PROMPT
+
+
+def build_probability_prompt(report: str, variant: str = "baseline") -> str:
     """The probability-valued variant of the extraction prompt."""
     definitions = "\n".join(
         f'  "{name}": {definition}' for name, definition in FINDING_DEFINITIONS.items()
     )
-    return PROBABILITY_PROMPT.format(definitions=definitions, report=report)
+    template = PROBABILITY_PROMPT_VARIANTS[variant]
+    return template.format(definitions=definitions, report=report)
 
 
 def parse_probabilities(text: str) -> Dict[str, Optional[float]]:

@@ -159,6 +159,20 @@ Candidate levers, in order of expected value per hour:
 4. **Prompt ensembling** — two or three phrasings averaged, if single-prompt
    iteration plateaus.
 
+**The harness for levers 1–2 is built (2026-08-26).** Notebook 03's gold
+checkpoint is now a five-configuration sweep — baseline at n=3 and n=5, then
+three one-idea prompt variants at n=5 (`correlates`: co-occurrence priors
+for silent findings, aimed straight at Synovitis/Lateral/PF OA; `granular`:
+anti-tie pressure; `reason_first`: a short sorting step before the numbers;
+all in `src/labels/llm_extract.py` under `PROBABILITY_PROMPT_VARIANTS`).
+One Colab session, minutes on an A100. The dumps land in
+`data/meta/gold_sweep/` and `python3 tools/score_prompt_variants.py` scores
+the **full fusion** per variant against the shipped 0.891 — raw AUC is
+printed as a screen but the fused number gates, because fusion is what
+trains. Section 7's corpus cell takes `PROMPT_VARIANT` / `N_SAMPLES_CORPUS`
+and runs only on a gate pass. Levers 3–4 stay parked until the sweep reads
+out.
+
 Gate for a corpus re-run: gold macro of the fused labels must beat 0.891 by
 more than ~0.005 with no finding dropping below 0.75. If new labels ship,
 the C2-winning config retrains on them (fold 1 first, same gate discipline).

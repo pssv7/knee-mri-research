@@ -159,6 +159,45 @@ class TestProbabilityExtraction:
         prompt = lx.build_probability_prompt("x")
         assert "NOT the same as absent" in prompt
 
+    def test_variants_all_render_and_differ_from_baseline(self):
+        # A variant identical to the baseline would burn a sweep slot on a
+        # duplicate measurement; a variant that drops the schema would burn
+        # it on unparseable output.
+        baseline = lx.build_probability_prompt("Normal knee.")
+        assert lx.build_probability_prompt(
+            "Normal knee.", variant="baseline") == baseline
+        for name in lx.PROBABILITY_PROMPT_VARIANTS:
+            prompt = lx.build_probability_prompt("Normal knee.", variant=name)
+            assert "Normal knee." in prompt
+            for finding in config.LABELS:
+                assert finding in prompt
+            if name != "baseline":
+                assert prompt != baseline
+
+    def test_variant_edits_landed(self):
+        # Each candidate is one idea; these markers are the idea being there.
+        assert "Synovitis is rarely dictated" in lx.build_probability_prompt(
+            "x", variant="correlates")
+        assert "never multiples" in lx.build_probability_prompt(
+            "x", variant="granular")
+        assert "two or three sentences" in lx.build_probability_prompt(
+            "x", variant="reason_first")
+
+    def test_unknown_variant_raises(self):
+        with pytest.raises(KeyError):
+            lx.build_probability_prompt("x", variant="no_such_variant")
+
+    def test_reason_first_response_shape_parses(self):
+        # The reason_first variant produces prose before the JSON; the parser
+        # must find the object anyway.
+        text = ("The report describes an ACL rupture as present and calls the "
+                "MCL intact. Effusion is hedged; the rest goes unmentioned.\n"
+                '{"ACL": 93, "MCL": 4, "Effusion": 45}')
+        result = lx.parse_probabilities(text)
+        assert result["ACL"] == pytest.approx(0.93)
+        assert result["Effusion"] == pytest.approx(0.45)
+        assert result["Fracture"] is None
+
     def test_parses_percentages_to_unit_range(self):
         result = lx.parse_probabilities('{"ACL": 88, "MCL": 3}')
         assert result["ACL"] == pytest.approx(0.88)

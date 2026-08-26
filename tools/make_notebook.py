@@ -718,7 +718,8 @@ from transformers import AutoTokenizer
 
 MAX_REPORT_CHARS = 6000   # longest report in the corpus is ~4,750
 N_SAMPLES = 3
-MAX_NEW_TOKENS = 400      # a probability JSON is short
+MAX_NEW_TOKENS = 512      # a probability JSON is short; the reason_first
+                          # variant spends ~100 extra tokens of prose first
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL)
 
@@ -739,8 +740,6 @@ if USE_VLLM:
     # which their kernels require; full-precision Qwen declares bfloat16.
     llm = LLM(model=MODEL, dtype="auto", gpu_memory_utilization=0.90,
               max_model_len=6144, trust_remote_code=True)
-    sampling = SamplingParams(temperature=0.7, top_p=0.9,
-                              max_tokens=MAX_NEW_TOKENS, n=N_SAMPLES)
 else:
     import torch
     from transformers import AutoModelForCausalLM
@@ -760,17 +759,18 @@ else:
     tokenizer.padding_side = "left"
 
 
-def to_chat(report):
+def to_chat(report, variant="baseline"):
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user",
-         "content": build_probability_prompt(str(report)[:MAX_REPORT_CHARS])},
+         "content": build_probability_prompt(str(report)[:MAX_REPORT_CHARS],
+                                             variant=variant)},
     ]
     return tokenizer.apply_chat_template(messages, tokenize=False,
                                          add_generation_prompt=True)
 
 
-def _generate_hf(prompts, batch_size=8):
+def _generate_hf(prompts, n_samples, batch_size=8):
     import torch
     from tqdm.auto import tqdm
 
@@ -782,54 +782,64 @@ def _generate_hf(prompts, batch_size=8):
         with torch.no_grad():
             out = hf_model.generate(
                 **encoded, max_new_tokens=MAX_NEW_TOKENS, do_sample=True,
-                temperature=0.7, top_p=0.9, num_return_sequences=N_SAMPLES,
+                temperature=0.7, top_p=0.9, num_return_sequences=n_samples,
                 pad_token_id=tokenizer.pad_token_id)
         # Strip the prompt so only the completion is parsed.
         generated = out[:, encoded["input_ids"].shape[1]:]
         decoded = tokenizer.batch_decode(generated, skip_special_tokens=True)
         for i in range(len(chunk)):
-            texts.append(decoded[i * N_SAMPLES:(i + 1) * N_SAMPLES])
+            texts.append(decoded[i * n_samples:(i + 1) * n_samples])
     return texts
 
 
-def run_extraction(reports, desc=""):
-    prompts = [to_chat(r) for r in reports]
-    print(f"generating {len(prompts)} x {N_SAMPLES} samples {desc} "
-          f"({'vLLM' if USE_VLLM else 'transformers'})...")
+def run_extraction(reports, desc="", variant="baseline", n_samples=N_SAMPLES):
+    prompts = [to_chat(r, variant) for r in reports]
+    print(f"generating {len(prompts)} x {n_samples} samples {desc} "
+          f"variant={variant} ({'vLLM' if USE_VLLM else 'transformers'})...")
 
     if USE_VLLM:
+        sampling = SamplingParams(temperature=0.7, top_p=0.9,
+                                  max_tokens=MAX_NEW_TOKENS, n=n_samples)
         outputs = llm.generate(prompts, sampling)
         per_report = [[o.text for o in output.outputs] for output in outputs]
     else:
-        per_report = _generate_hf(prompts)
+        per_report = _generate_hf(prompts, n_samples)
 
     return [aggregate_probabilities([parse_probabilities(t) for t in texts])
             for texts in per_report]
 """)
 
     nb.md("""
-## 6. Checkpoint — score against the 58 gold studies
+## 6. Checkpoint — the gold sweep (Phase C, extraction v3)
 
-**Stop here and read the table.** This is the only honest measurement available.
-The rule-based extractor already in the repo scores macro AUC 0.735, and its
-weakest findings are the ones this model needs to carry:
+**Stop here and read the tables.** This is the only honest measurement
+available, and it is deliberately a sweep: five configurations over the 58
+gold reports — the shipped baseline at 3 and at 5 self-consistency samples,
+then three one-idea prompt variants at 5 samples (`correlates`: named
+co-occurrence priors for silent findings, aimed at Synovitis/Lateral/PF OA;
+`granular`: pressure against tie blocks; `reason_first`: a short sorting step
+before the numbers). ~290 prompts × 5 samples — minutes on an A100.
 
-| finding | lexicon AUC |
-|---|---|
-| Synovitis | 0.619 |
-| PF OA | 0.646 |
-| Contusion | 0.662 |
-| Medial Meniscus | 0.678 |
-| Lateral OA | 0.680 |
-
-If the model lands below the lexicon on most findings, something is wrong with
-the prompt or the parsing — report the table back rather than continuing.
+The raw AUC printed here is a screen, not the gate. **Download every
+`llm_probs_gold__*.parquet` this cell produces**, drop them into
+`data/meta/gold_sweep/`, and run `python3 tools/score_prompt_variants.py`
+locally — that scores the full fusion (the number comparable to the shipped
+labels' 0.891) and applies the gate: beat 0.891 by more than 0.005 with no
+finding below 0.75. Only a gate-passing variant earns the corpus run below.
 """)
 
     nb.code("""
 import numpy as np
 
-gold_results = run_extraction(gold["Report"].tolist(), "(gold 58)")
+SWEEP = [("baseline", 3), ("baseline", 5), ("correlates", 5),
+         ("granular", 5), ("reason_first", 5)]
+
+sweep_results = {}
+for variant, n in SWEEP:
+    sweep_results[(variant, n)] = run_extraction(
+        gold["Report"].tolist(), "(gold 58)", variant=variant, n_samples=n)
+
+gold_results = sweep_results[("baseline", 3)]
 
 
 def auc(y_true, scores):
@@ -848,55 +858,77 @@ def auc(y_true, scores):
     return (ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
 
 
-# Distinct values matter as much as AUC here. The categorical extractor tied
-# 369 of 696 label slots on one value, and AUC cannot rank inside a tie block.
-PREVIOUS = dict(zip(LABELS, [0.855, 0.812, 0.678, 0.735, 0.814, 0.680,
-                             0.646, 0.713, 0.619, 0.818, 0.662, 0.794]))
+# Raw per-finding AUC, one column per sweep configuration. This is a screen:
+# the decision number is the fused score, computed locally from the dumps by
+# tools/score_prompt_variants.py. The shipped baseline's raw macro was 0.860.
+def raw_scores(results, name):
+    return np.array([r[name]["probability"] if r[name]["probability"] is not None
+                     else 0.0 for r in results])
 
-print(f"\\n{'finding':18s} {'n+':>3s} {'AUC':>6s} {'prev':>6s} {'distinct':>9s} {'maxtie':>7s}")
-print("-" * 58)
-aucs = []
+
+header = "  ".join(f"{v[:9]}@{n}" for v, n in SWEEP)
+print(f"\\n{'finding':18s} {header}")
+print("-" * (20 + 13 * len(SWEEP)))
+macros = {key: [] for key in sweep_results}
 for name in LABELS:
     truth = gold[name].astype(int).to_numpy()
-    scores = np.array([r[name]["probability"] if r[name]["probability"] is not None
-                       else 0.0 for r in gold_results])
-    a = auc(truth, scores); aucs.append(a)
-    values, counts = np.unique(scores, return_counts=True)
-    print(f"{name:18s} {truth.sum():3d} {a:6.3f} {PREVIOUS[name]:6.3f} "
-          f"{len(values):9d} {counts.max():7d}")
-print("-" * 58)
-print(f"macro AUC: {np.nanmean(aucs):.3f}")
-print(f"  previous categorical LLM: 0.838   fused with lexicon: 0.854")
-print(f"  leaderboard cluster sits at 0.94, so the target is >0.92 here")
+    row = []
+    for key in ((v, n) for v, n in SWEEP):
+        a = auc(truth, raw_scores(sweep_results[key], name))
+        macros[key].append(a)
+        row.append(f"{a:11.3f}")
+    print(f"{name:18s} {'  '.join(row)}")
+print("-" * (20 + 13 * len(SWEEP)))
+print(f"{'macro':18s} " + "  ".join(
+    f"{np.nanmean(macros[(v, n)]):11.3f}" for v, n in SWEEP))
+print("  shipped baseline raw macro: 0.860 -- fused labels: 0.891 (the gate)")
 
-# Dump the gold output so fusion strategies can be tried locally in seconds
-# rather than by re-running the model. 58 rows -- the download is instant.
-gold_dump = pd.DataFrame(
-    [{name: r[name]["probability"] for name in LABELS} for r in gold_results])
-gold_dump.insert(0, "StudyInstanceUID", gold["StudyInstanceUID"].values)
-for name in LABELS:
-    gold_dump[f"{name}_confidence"] = [r[name]["confidence"] for r in gold_results]
-gold_dump.to_parquet("llm_probs_gold.parquet", index=False)
-print("\\nwrote llm_probs_gold.parquet -- download this before running the corpus")
-
-try:
-    from google.colab import files
-    files.download("llm_probs_gold.parquet")
-except Exception:
-    pass
+# Dump every configuration so fusion is scored locally in seconds rather than
+# by re-running the model. 58 rows each -- the downloads are instant.
+for (variant, n), results in sweep_results.items():
+    dump = pd.DataFrame(
+        [{name: r[name]["probability"] for name in LABELS} for r in results])
+    dump.insert(0, "StudyInstanceUID", gold["StudyInstanceUID"].values)
+    for name in LABELS:
+        dump[f"{name}_confidence"] = [r[name]["confidence"] for r in results]
+    path = f"llm_probs_gold__{variant}_n{n}.parquet"
+    dump.to_parquet(path, index=False)
+    print("wrote", path)
+    try:
+        from google.colab import files
+        files.download(path)
+    except Exception:
+        pass
 """)
 
     nb.md("""
 ## 7. Full corpus
 
-Only run this once the table above looks right. This is the long cell.
+Only run this after `tools/score_prompt_variants.py` has picked a winner
+**locally, on the fused score** — set the two constants to the winning
+configuration first. If nothing passes the gate (fused macro > 0.891 + 0.005,
+no finding below 0.75), stop here: the sweep cost minutes, and a corpus run
+that ships nothing costs an hour. This is the long cell (~45–75 min at 3
+samples, scale accordingly).
+
+The gold 58 are re-run at the chosen configuration so the pair of files
+section 8 writes is internally consistent.
 """)
 
     nb.code("""
 import time
 
+# The sweep's verdict goes here, and stays at the shipped default until a
+# variant passes the local fused gate.
+PROMPT_VARIANT = "baseline"
+N_SAMPLES_CORPUS = 3
+
 start = time.time()
-mined = run_extraction(unlabelled["Report"].tolist(), "(4,349 reports)")
+gold_results = run_extraction(gold["Report"].tolist(), "(gold 58)",
+                              variant=PROMPT_VARIANT,
+                              n_samples=N_SAMPLES_CORPUS)
+mined = run_extraction(unlabelled["Report"].tolist(), "(4,349 reports)",
+                       variant=PROMPT_VARIANT, n_samples=N_SAMPLES_CORPUS)
 print(f"done in {(time.time() - start) / 60:.1f} min")
 """)
 

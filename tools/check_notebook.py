@@ -126,7 +126,7 @@ def check_logic_cells(cells):
     # Stand in for the model by driving the notebook's own aggregation path
     # with lexicon output mapped to probabilities, so cells 12 and 16 handle
     # objects of the real shape.
-    def fake_run(reports, desc=""):
+    def fake_run(reports, desc="", variant="baseline", n_samples=3):
         results = []
         for report in reports:
             extracted = lexicon.extract_report(str(report))

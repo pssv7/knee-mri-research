@@ -5,6 +5,45 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (b) — Phase C harness: prompt-variant gold sweep, fused gate
+
+**Levers 1–2 of extraction v3 are implemented and tested (325 tests); the
+next step is one Colab session.** No numbers yet — this entry records the
+instrument, not a result.
+
+- `src/labels/llm_extract.py`: `PROBABILITY_PROMPT_VARIANTS` — the baseline
+  plus three candidates, each one idea so a delta is attributable, built by
+  anchored substitution with import-time asserts (rewording the baseline
+  without updating a variant fails loudly). `correlates` gives the model
+  named co-occurrence priors for silent findings (synovitis↔effusion/OA,
+  cross-compartment OA, contusion↔acute injury) — aimed at Synovitis 0.792
+  and Lateral/PF OA, the fused labels' weakest. `granular` pushes precise
+  non-round integers against tie blocks. `reason_first` asks for two or
+  three sentences of sorting prose before the JSON (the parser already
+  finds a JSON object after prose; `MAX_NEW_TOKENS` 400 → 512 for the
+  headroom).
+- Notebook 03 section 6 is now a five-configuration sweep over the gold 58:
+  baseline@3, baseline@5, and the three variants@5 — baseline@5 is the
+  control that separates the sample-count lever from the wording levers.
+  `run_extraction` takes `variant`/`n_samples`; one dump per configuration
+  (`llm_probs_gold__<variant>_n<n>.parquet`), all downloaded.
+- `tools/score_prompt_variants.py` (local, seconds): scores every dump in
+  `data/meta/gold_sweep/` as the **full fusion** — score_average with the
+  categorical frame, lexicon blend on top — next to the shipped reference,
+  and applies the plan's gate: fused macro > shipped + 0.005, no finding
+  below 0.75. Verified to reproduce the shipped 0.891 exactly, and to fail
+  a byte-identical copy of the shipped dump (margin logic works). Raw AUC
+  prints as context; the fused number gates, because fusion is what trains.
+- Notebook 03 section 7 takes `PROMPT_VARIANT` / `N_SAMPLES_CORPUS`, re-runs
+  the gold 58 at the chosen configuration so section 8's file pair is
+  consistent, and is explicitly forbidden until the local gate passes.
+
+Next (user, Colab): run notebook 03 through section 6 on an A100 (~minutes),
+drop the dumps into `data/meta/gold_sweep/`, run
+`python3 tools/score_prompt_variants.py`, and bring the table back. Corpus
+(~1 h) only on a PASS; if nothing passes, lever 3 (32B categorical
+re-extraction) is next in line.
+
 ## 2026-08-26 — report loss on the LB: **0.880**, and the gold forecast breaks
 
 **The C2 winner submitted (fold 1, 16 × 5, `LAMBDA_REPORT = 0.5`): public LB
