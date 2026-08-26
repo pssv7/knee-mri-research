@@ -5,6 +5,39 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (l) — fold 3 banked: the ensemble's first new member
+
+**Fold 3, 16 × 5, aux-free: val 0.869, gold 0.867 at epoch 7. Verified from
+the checkpoint, not from the log** — `lit_fold3.ckpt` stores
+`lambda_report: 0.0`, `lambda_rank: 0.0`, carries zero non-`model.` keys, and
+its `metrics.csv` has no `report_cosine`/`report_gate` columns. It was
+trained on the reference configuration and is a valid ensemble member.
+`total_steps` 5232 (436 × 12), matching fold 0's split size rather than
+fold 1's 5220.
+
+**Correction to how this run was first read.** When its numbers arrived they
+were compared against the fold-1 references (gold 0.861, LB 0.889) and called
+"a null" — that comparison was invalid, because fold 3 is a different split
+with no baseline of its own. The conclusion not to submit it stood for a
+better reason than the one given: **a single fold is not a submission at all,
+it is one member of an average.** The notebook now prints exactly this
+warning whenever `FOLD != 1`, added earlier the same day for this reason.
+Judge ensemble members by the five-fold leaderboard score; do not read a
+fold's gold against fold 1's.
+
+**Ensemble status: 2 of 5 in hand.**
+
+| fold | source | state |
+|---|---|---|
+| 0 | — | **next run** |
+| 1 | `lit_fold1_old.ckpt` (val 0.8718) | have, needs `.pt` export |
+| 2 | — | outstanding |
+| 3 | `lit_fold3.ckpt` (val 0.8686) | **done, verified clean** |
+| 4 | — | outstanding |
+
+Three runs left at ~2.3 h each (~6.9 h), then the five-fold submission
+(~8.6 h inference, inside the 9 h cap). Notebook 08 now ships `FOLD = 0`.
+
 ## 2026-08-26 (k) — gradient gating measured: no collapse, no gain. C2 closes for good
 
 **`AUX_MODE = "cosine"`, `LAMBDA_REPORT = 1.0`, fold 1, 16 × 5: val 0.874,

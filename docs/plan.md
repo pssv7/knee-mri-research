@@ -120,6 +120,7 @@ every slice/series count — so identification is by Lightning's stored
 | `lit_fold1.ckpt` | 0.8814 | report 0.5 | fold 1, 16 × 5 | 0.880 |
 | `convnext_fold1.pt` (older) | — | none | export of `lit_fold1_oldd` (220/220 tensors identical) | 0.891 |
 | `convnext_fold1.pt` (2026-08-26) | 0.874 | report 1.0 cosine | fold 1, 16 × 5 | not submitted, gold 0.856 |
+| `lit_fold3.ckpt` | 0.8686 | none | fold 3, 16 × 5 | ensemble member, verified clean |
 
 **Two different models are now called `convnext_fold1.pt`** — the 24-slice
 export (LB 0.891) and the cosine-aux run of 2026-08-26 (gold 0.856, never
@@ -132,8 +133,8 @@ Two consequences for the fold ensemble: **no `.pt` export of the 16 × 5
 reference exists**, so fold 1's 16 × 5 contribution must come from
 `lit_fold1_old.ckpt` (exported, or attached as the `.ckpt` — notebook 10
 reads both); and **`lit_fold0.ckpt` is 16 × 3**, predating the five-series
-change, so fold 0 is a retrain like 2, 3 and 4 rather than a checkpoint
-already in hand.
+change, so fold 0 is a retrain like 2 and 4 rather than a checkpoint
+already in hand. Fold 3 is done and clean.
 
 The original screen design and its decision tree follow, kept because the
 branch conditions are the record of how this was called.
@@ -278,8 +279,15 @@ corpus + retrain + submission, and even a pass should be read against this
 history when the LB entry is spent.
 
 **The active plan is two tracks:**
-- **Kaggle → Phase D fold ensemble, started now.** Notebook 08 ships
-  `FOLD = 3` for the next session; sweep 0, 2, 4 after (fold 1 exists).
+- **Kaggle → Phase D fold ensemble, in progress. 2 of 5 in hand.**
+  Fold 3 done 2026-08-26 (val 0.869, verified aux-free from the checkpoint's
+  own hparams); fold 1 is `lit_fold1_old.ckpt`. Notebook 08 ships
+  `FOLD = 0`; then 2, then 4. ~2.3 h each, ~6.9 h left, then the five-fold
+  submission (~8.6 h, inside the cap).
+  **Never read an ensemble fold's gold against fold 1's references** — a
+  different split has no baseline, and the notebook now warns when
+  `FOLD != 1`. Judge members by the ensemble's leaderboard score.
+
   16 × 5 reference config, lambdas 0.0, **~2.3 h per fold** (measured
   2026-08-26: 11.4 min/epoch x 12; the old ~1.8 h predates the five-series
   change). Four folds ~9.1 h, then one five-fold submission (~8.6 h, inside

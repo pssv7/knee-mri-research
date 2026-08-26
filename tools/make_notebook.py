@@ -2618,9 +2618,10 @@ REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
 # THE FOLD AND THE AUX SETTINGS MOVE TOGETHER. This notebook serves two runs
 # and they are mutually exclusive:
 #
-#   Ensemble fold   FOLD = 0 | 2 | 3 | 4, LAMBDA_REPORT = 0.0,
-#                   AUX_MODE = "fixed". Fold 1 already exists (16 x 5
-#                   reference, LB 0.889), so the sweep is the other four.
+#   Ensemble fold   LAMBDA_REPORT = 0.0, AUX_MODE = "fixed".
+#                   Fold 3 done 2026-08-26 (val 0.869, verified aux-free);
+#                   fold 1 exists as lit_fold1_old.ckpt (16 x 5 reference,
+#                   LB 0.889). Outstanding: FOLD = 0, then 2, then 4.
 #   Aux experiment  FOLD = 1, LAMBDA_REPORT = 1.0, AUX_MODE = "cosine".
 #                   Fold 1 because it is the ONLY split with a measured
 #                   baseline (val 0.872 / gold 0.861 / LB 0.889); the same
@@ -2630,7 +2631,7 @@ REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
 # project one ambiguous run, and an ensemble fold trained with an auxiliary
 # loss is worse than useless -- it silently makes one member of the average
 # a different model. The banner printed below states which run this is.
-FOLD = 3
+FOLD = 0
 CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
 
 keyed = folded.set_index("StudyInstanceUID")
