@@ -5,6 +5,41 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (e) — two tracks armed: fold sweep on Kaggle, 32B categorical on Colab
+
+**The decision from (d) resolved into a plan that does not force the
+either/or: lever 3's measurement is cheap (gold checkpoint, minutes of
+Colab) — only its payoff is expensive, so it runs in parallel with the
+fold ensemble instead of competing with it for Kaggle hours.**
+
+Track 1 — fold ensemble (Kaggle, user): notebook 08 now ships `FOLD = 3`
+(user's pick for the next session); the config is the 16 × 5 reference with
+both aux lambdas at 0.0 — the generated notebook needs no edits. Remaining
+sessions sweep 0, 2, 4. Five folds fit the 9 h submission cap at 16 slices.
+The full pre-flight checklist applies, plus the standing trap: `knee-convnxt`
+holds the 0.880 report-loss ckpt and must end up holding exactly the fold
+`.pt` exports (never `.pt` and `.ckpt` of the same fold — notebook 10 globs
+both and double-counts).
+
+Track 2 — 32B categorical gold measurement (Colab, user): notebook 03 gains
+section 6b — `run_categorical` (the module's original categorical prompt and
+parser, untouched and still tested) over the gold 58 with whatever model
+section 1 picked, `CAT_MAX_NEW_TOKENS = 900` because the categorical JSON
+carries severity/certainty/evidence. Writes `llm_labels_gold__32b.parquet`
+in the shipped frame's exact schema. `tools/score_categorical_upgrade.py`
+(local, seconds) swaps the 32B frame into the identical full fusion next to
+the 14B and applies the standard gate; it prints the six categorical-ground
+findings separately because that is where an upgrade must win or it wins
+nowhere. Verified: the 14B frame passed through it reproduces fused 0.891
+and cat-only 0.838 (the recorded 14B numbers), and an identity copy fails
+the gate. A PASS earns the ~1 h categorical corpus re-run; a fail closes
+Phase C with every extraction lever measured.
+
+Guard-rail updated rather than deleted: the notebook test that forbade
+`parse_response` in the run loop (it caught a real regression once) now
+asserts the tighter invariant — the probability path parses probabilities
+only, the categorical parser lives only in `run_categorical`. 325 tests.
+
 ## 2026-08-26 (d) — Phase C prompt levers all fail the gate
 
 **All five dumps scored. Nothing passes; every variant fuses at or below the

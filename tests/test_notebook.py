@@ -120,13 +120,27 @@ class TestEmbeddedModule:
 
     def test_the_categorical_path_is_not_silently_still_wired(self):
         # The notebook was switched to probabilities because the categorical
-        # contract tied 53% of label slots onto one value. If a later edit
-        # reinstates parse_response in the run loop, the tie problem returns
-        # with no visible symptom.
+        # contract tied 53% of label slots onto one value. Phase C lever 3
+        # (2026-08-26) reintroduced a *separate* categorical function to
+        # measure the 32B, so the invariant tightens rather than disappears:
+        # run_extraction -- the function that feeds llm_probs.parquet --
+        # must parse probabilities only, and parse_response may appear only
+        # inside run_categorical, whose output goes to its own parquet.
         joined = "\n".join(cell_source(c) for c in code_cells())
-        run_loop = joined[joined.index("def run_extraction"):]
-        assert "parse_probabilities" in run_loop
-        assert "parse_response(" not in run_loop
+        start = joined.index("def run_extraction")
+        end = joined.index("\ndef ", start + 1)
+        run_extraction_body = joined[start:end]
+        assert "parse_probabilities" in run_extraction_body
+        assert "parse_response(" not in run_extraction_body
+
+        start = joined.index("def run_categorical")
+        end = joined.index("\ncat_gold_results", start)
+        run_categorical_body = joined[start:end]
+        assert "parse_response(" in run_categorical_body
+        assert "parse_probabilities" not in run_categorical_body
+        # And the corpus cell still calls the probability path.
+        corpus = joined[joined.index("mined = run_extraction"):]
+        assert "PROMPT_VARIANT" in corpus
 
 
 class TestBootstrapReloads:

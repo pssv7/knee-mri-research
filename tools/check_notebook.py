@@ -142,16 +142,37 @@ def check_logic_cells(cells):
         return results
 
     namespace["run_extraction"] = fake_run
+
+    # The categorical twin, in the shape aggregate_samples expects.
+    def fake_run_categorical(reports, desc="", n_samples=3):
+        results = []
+        for report in reports:
+            extracted = lexicon.extract_report(str(report))
+            sample = {
+                name: {"present": value["present"],
+                       "severity": value["severity"],
+                       "evidence": value.get("span")}
+                for name, value in extracted.items()
+            }
+            results.append(namespace["aggregate_samples"]([sample] * 3))
+        return results
+
+    namespace["run_categorical"] = fake_run_categorical
     import numpy
     namespace["np"] = numpy
 
-    print("cell 12 -- gold checkpoint and AUC table")
+    print("cell 12 -- gold sweep and AUC table")
     exec(cells[12], namespace)  # noqa: S102
 
-    print("cell 16 -- frame build and save")
+    print("cell 14 -- categorical gold checkpoint")
+    exec(cells[14], namespace)  # noqa: S102
+    assert namespace["cat_dump"].shape[0] == 58
+    assert "Medial Meniscus_severity" in namespace["cat_dump"].columns
+
+    print("cell 18 -- frame build and save")
     namespace["mined"] = fake_run(namespace["unlabelled"]["Report"].tolist()[:50])
     namespace["unlabelled"] = namespace["unlabelled"].head(50)
-    exec(cells[16], namespace)  # noqa: S102
+    exec(cells[18], namespace)  # noqa: S102
 
 
 def check_model_cell(cells):
@@ -165,6 +186,11 @@ def check_model_cell(cells):
     assert results[0]["MCL"]["probability"] < 0.5
     # An omitted finding must stay None, not default to anything.
     assert results[0]["Fracture"]["probability"] is None
+    # The categorical path must run the same wiring and fail parsing softly:
+    # the stub answers in probability shape, which parse_response rejects,
+    # and a rejected sample must come back as silence rather than raise.
+    cat = namespace["run_categorical"](["Rotura del menisco interno."], "(stub)")
+    assert cat[0]["ACL"]["present"] is None
     print(f"      n_samples={namespace['N_SAMPLES']} "
           f"max_model_len={namespace['llm'].kwargs.get('max_model_len')}")
 
@@ -180,7 +206,7 @@ def main():
     print("\nnot verifiable without a GPU:")
     print("      cell 4  -- pip install vllm")
     print("      cell 10 -- real model weights load")
-    print("      cell 14 -- full corpus generation")
+    print("      cell 16 -- full corpus generation")
     print("\nall locally verifiable cells OK")
 
 

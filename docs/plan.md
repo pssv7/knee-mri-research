@@ -156,7 +156,11 @@ Candidate levers, and where each now stands:
 3. **Categorical re-extraction with the 32B** — the one lever left, and the
    leverage measurement points straight at it. The categorical corpus is
    still from the 14B; fusion currently mixes 14B-categorical with
-   32B-probability. Requires restoring the categorical cells in notebook 03.
+   32B-probability. **Harness built 2026-08-26:** notebook 03 §6b runs the
+   original categorical prompt on the gold 58 (minutes on Colab);
+   `tools/score_categorical_upgrade.py` applies the fused gate locally.
+   Only a PASS earns the ~1 h corpus re-run — the cheap measurement first,
+   so this no longer competes with Phase D for budget.
 4. ~~**Prompt ensembling.**~~ **CLOSED 2026-08-26**, tested free on the
    sweep's own dumps: the three phrasings averaged fuse to 0.893 (+0.002,
    jackknife 0.76) — a real but sub-gate gain costing 3× the corpus
@@ -177,16 +181,27 @@ one with room. **Standing rule from the same day: never rank a prompt
 candidate on raw macro** — the raw screen ranked `reason_first` first and it
 fused last.
 
-### The question to settle before spending on lever 3
+### The label-premise caution, resolved into sequencing (2026-08-26)
 
 Phase A closed with labels moving 0.854 → 0.891 on gold (+0.037) while the
-LB moved −0.002. C2 then added a second case of a gold gain the LB refused
+LB moved −0.002, and C2 added a second case of a gold gain the LB refused
 (+0.006 gold → −0.009 LB). **No label-quality gain this project has measured
-has ever produced a leaderboard gain.** Lever 3 costs a Colab corpus run
-(~1 h), a retrain (~1.8 h) and a submission (~2 h) to test the same premise a
-third time. The alternatives for that budget are Phase D's fold ensembling
-(historically +0.005–0.010, on a config that already scores 0.891) and the
-efficiency entry. Decide deliberately rather than by momentum.
+has ever produced a leaderboard gain.** The resolution: lever 3's *gate* is
+minutes of Colab, so it runs in parallel — only a PASS commits the ~5 h of
+corpus + retrain + submission, and even a pass should be read against this
+history when the LB entry is spent.
+
+**The active plan is two tracks:**
+- **Kaggle → Phase D fold ensemble, started now.** Notebook 08 ships
+  `FOLD = 3` for the next session; sweep 0, 2, 4 after (fold 1 exists).
+  16 × 5 reference config, lambdas 0.0, ~1.8 h per fold. Then one five-fold
+  submission (~8.6 h, inside the cap), expecting +0.005–0.010 on 0.889.
+  Before it: `knee-convnxt` must hold exactly the five `convnext_fold*.pt`
+  exports — the 0.880 report-loss ckpt leaves, and no fold may be present
+  as both `.pt` and `.ckpt`.
+- **Colab → notebook 03 §6b**, then `tools/score_categorical_upgrade.py`
+  locally. PASS → corpus re-run, re-fuse, retrain gates on gold as usual;
+  fail → Phase C closes with every extraction lever measured.
 
 **The harness for levers 1–2 is built (2026-08-26).** Notebook 03's gold
 checkpoint is now a five-configuration sweep — baseline at n=3 and n=5, then

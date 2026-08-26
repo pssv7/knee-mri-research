@@ -803,7 +803,7 @@ def to_chat(report, variant="baseline"):
                                          add_generation_prompt=True)
 
 
-def _generate_hf(prompts, n_samples, batch_size=8):
+def _generate_hf(prompts, n_samples, batch_size=8, max_new_tokens=None):
     import torch
     from tqdm.auto import tqdm
 
@@ -814,7 +814,8 @@ def _generate_hf(prompts, n_samples, batch_size=8):
                             truncation=True, max_length=6144).to(hf_model.device)
         with torch.no_grad():
             out = hf_model.generate(
-                **encoded, max_new_tokens=MAX_NEW_TOKENS, do_sample=True,
+                **encoded, max_new_tokens=max_new_tokens or MAX_NEW_TOKENS,
+                do_sample=True,
                 temperature=0.7, top_p=0.9, num_return_sequences=n_samples,
                 pad_token_id=tokenizer.pad_token_id)
         # Strip the prompt so only the completion is parsed.
@@ -839,6 +840,41 @@ def run_extraction(reports, desc="", variant="baseline", n_samples=N_SAMPLES):
         per_report = _generate_hf(prompts, n_samples)
 
     return [aggregate_probabilities([parse_probabilities(t) for t in texts])
+            for texts in per_report]
+
+
+# Categorical mode (Phase C lever 3). The shipped categorical corpus is
+# still from the 14B; these reuse the module's original categorical prompt
+# and parser so the 32B can be measured on the same contract. The JSON here
+# carries severity/certainty/evidence per finding, so it needs more room
+# than a bare number map.
+CAT_MAX_NEW_TOKENS = 900
+
+
+def to_chat_categorical(report):
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": build_prompt(str(report)[:MAX_REPORT_CHARS])},
+    ]
+    return tokenizer.apply_chat_template(messages, tokenize=False,
+                                         add_generation_prompt=True)
+
+
+def run_categorical(reports, desc="", n_samples=N_SAMPLES):
+    prompts = [to_chat_categorical(r) for r in reports]
+    print(f"generating {len(prompts)} x {n_samples} categorical samples {desc} "
+          f"({'vLLM' if USE_VLLM else 'transformers'})...")
+
+    if USE_VLLM:
+        sampling = SamplingParams(temperature=0.7, top_p=0.9,
+                                  max_tokens=CAT_MAX_NEW_TOKENS, n=n_samples)
+        outputs = llm.generate(prompts, sampling)
+        per_report = [[o.text for o in output.outputs] for output in outputs]
+    else:
+        per_report = _generate_hf(prompts, n_samples,
+                                  max_new_tokens=CAT_MAX_NEW_TOKENS)
+
+    return [aggregate_samples([parse_response(t) for t in texts])
             for texts in per_report]
 """)
 
@@ -961,6 +997,62 @@ print("unzip into data/meta/gold_sweep/ and run tools/score_prompt_variants.py")
 try:
     from google.colab import files
     files.download(BUNDLE)
+except Exception:
+    pass
+""")
+
+    nb.md("""
+## 6b. Categorical mode at the gold 58 (Phase C lever 3)
+
+The shipped categorical corpus — the half of fusion that carries Medial
+Meniscus, ACL, PF OA, MCL, Lateral Meniscus and Baker's — is still from the
+**14B**. This cell runs the original categorical prompt on the gold 58 with
+the model section 1 picked (the 32B on an A100/L4), so the upgrade is
+measured for minutes before the ~1 h corpus re-extraction is even
+considered.
+
+Download the parquet, drop it into `data/meta/gold_sweep/`, and run
+`python3 tools/score_categorical_upgrade.py` locally — it swaps the 32B
+frame into the full fusion next to the shipped one and applies the same
+gate (fused macro > shipped + 0.005, no finding below 0.75). The corpus
+re-run is earned only by a PASS.
+""")
+
+    nb.code("""
+cat_gold_results = run_categorical(gold["Report"].tolist(), "(gold 58)")
+
+# Same schema as llm_labels_gold.parquet, so the local scorer can hand it
+# to the fusion unchanged: <name> (1/0/NaN), _severity, _confidence,
+# _evidence per finding.
+cat_rows = []
+for result in cat_gold_results:
+    row = {}
+    for name in LABELS:
+        entry = result[name]
+        row[name] = entry["present"]
+        row[f"{name}_severity"] = entry["severity"]
+        row[f"{name}_confidence"] = entry["confidence"]
+        row[f"{name}_evidence"] = entry["evidence"]
+    cat_rows.append(row)
+cat_dump = pd.DataFrame(cat_rows)
+cat_dump.insert(0, "StudyInstanceUID", gold["StudyInstanceUID"].values)
+
+CAT_PATH = "llm_labels_gold__32b.parquet"
+cat_dump.to_parquet(CAT_PATH, index=False)
+
+# A quick parse-health screen; the verdict itself is the local fused score.
+unparsed = sum(1 for r in cat_gold_results
+               if all(r[n]["present"] is None for n in LABELS))
+print(f"wrote {CAT_PATH}: {len(cat_dump)} studies, "
+      f"{unparsed} with nothing parsed")
+for name in LABELS:
+    calls = [r[name]["present"] for r in cat_gold_results]
+    print(f"  {name:18s} yes {calls.count(1):2d}  no {calls.count(0):2d}  "
+          f"silent {calls.count(None):2d}")
+
+try:
+    from google.colab import files
+    files.download(CAT_PATH)
 except Exception:
     pass
 """)
@@ -2497,14 +2589,13 @@ REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
 
 # Which fold this session trains.
 #
-# 1, not 0, and deliberately: the 0.889 result was fold 1, so every capacity
-# rung is measured against it on the same split. Changing the fold and the
-# configuration together makes the delta uninterpretable, which has already
-# cost this project one ambiguous run. Leave it at 1 for ladder experiments.
-#
-# The five-fold ensemble is the one time this sweeps: run 0 through 4, one
-# per session, producing convnext_fold0.pt through convnext_fold4.pt.
-FOLD = 1
+# The fold-ensemble phase is on (2026-08-26): sweep 0 through 4, one per
+# session, editing only this line, producing convnext_fold0.pt through
+# convnext_fold4.pt. Fold 1 already exists (the 16 x 5 reference,
+# LB 0.889). For single-config experiments, return to 1 -- the only split
+# with a measured baseline; changing the fold and the configuration
+# together has already cost this project one ambiguous run.
+FOLD = 3
 CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
 
 keyed = folded.set_index("StudyInstanceUID")
