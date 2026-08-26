@@ -2582,7 +2582,7 @@ LR = 1e-4
 # target embeds, so the val gain was partly circular, and gold's +0.006 sat
 # inside its noise floor. Both lambdas therefore ship at 0.0; the code
 # stays for any later phase that reaches for more capacity.
-LAMBDA_REPORT = 0.0
+LAMBDA_REPORT = 1.0 if reports is not None else 0.0
 LAMBDA_RANK = 0.0
 
 # AUX_MODE selects how the lambdas above are applied.
@@ -2603,20 +2603,29 @@ LAMBDA_RANK = 0.0
 # unaffected. The run to make first is the diagnostic one: LAMBDA_REPORT = 1.0
 # and AUX_MODE = "cosine" logs `report_cosine` and `report_gate` per epoch,
 # which say whether C2's report loss was ever aligned with the main task.
-AUX_MODE = "fixed"
+AUX_MODE = "cosine"
 AUX_GATE = "binary"   # "weighted" uses max(0, cos) instead of an on/off gate
 REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
               if reports is not None else None)
 
 # Which fold this session trains.
 #
-# The fold-ensemble phase is on (2026-08-26): sweep 0 through 4, one per
-# session, editing only this line, producing convnext_fold0.pt through
-# convnext_fold4.pt. Fold 1 already exists (the 16 x 5 reference,
-# LB 0.889). For single-config experiments, return to 1 -- the only split
-# with a measured baseline; changing the fold and the configuration
-# together has already cost this project one ambiguous run.
-FOLD = 3
+# THE FOLD AND THE AUX SETTINGS MOVE TOGETHER. This notebook serves two runs
+# and they are mutually exclusive:
+#
+#   Ensemble fold   FOLD = 0 | 2 | 3 | 4, LAMBDA_REPORT = 0.0,
+#                   AUX_MODE = "fixed". Fold 1 already exists (16 x 5
+#                   reference, LB 0.889), so the sweep is the other four.
+#   Aux experiment  FOLD = 1, LAMBDA_REPORT = 1.0, AUX_MODE = "cosine".
+#                   Fold 1 because it is the ONLY split with a measured
+#                   baseline (val 0.872 / gold 0.861 / LB 0.889); the same
+#                   run on any other fold has nothing to be compared against.
+#
+# Changing the fold and the configuration together has already cost this
+# project one ambiguous run, and an ensemble fold trained with an auxiliary
+# loss is worse than useless -- it silently makes one member of the average
+# a different model. The banner printed below states which run this is.
+FOLD = 1
 CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
 
 keyed = folded.set_index("StudyInstanceUID")
@@ -2645,6 +2654,26 @@ module = knee_lightning.KneeLitModule(
 print(f"aux losses: report {LAMBDA_REPORT} (dim {REPORT_DIM})  "
       f"rank {LAMBDA_RANK}  mode {AUX_MODE}"
       + (f"/{AUX_GATE}" if AUX_MODE == "cosine" else ""))
+
+# Which of the notebook's two mutually exclusive runs this is. An ensemble
+# fold trained with an auxiliary loss makes one member of the average a
+# different model, and the averaging hides it -- so say it before the hours
+# are spent, not after the leaderboard disagrees.
+_aux_on = LAMBDA_REPORT > 0 or LAMBDA_RANK > 0
+print("=" * 68)
+if _aux_on and FOLD == 1:
+    print("  AUX EXPERIMENT: fold 1, the only split with a baseline")
+    print("  compare against val 0.872 / gold 0.861 / LB 0.889")
+    print("  read report_gate in metrics.csv; decide on the LB, not on val")
+elif not _aux_on:
+    print(f"  ENSEMBLE FOLD {FOLD}: reference config, no auxiliary loss")
+    print("  export convnext_fold{}.pt and keep it for the 5-fold run".format(FOLD))
+else:
+    print(f"  MISCONFIGURED: auxiliary loss on with FOLD = {FOLD}.")
+    print("  This is neither an ensemble fold (which needs the lambdas at")
+    print("  0.0) nor a readable experiment (which needs fold 1). Stop and")
+    print("  set one of the two configurations at the top of this notebook.")
+print("=" * 68)
 
 checkpointer = pl.callbacks.ModelCheckpoint(
     dirpath="/kaggle/working", filename=f"lit_fold{FOLD}",

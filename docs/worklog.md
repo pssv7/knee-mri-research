@@ -5,6 +5,29 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (g) — notebook 08 armed for the aux experiment, and made unable to hide a collision
+
+Notebook 08 now ships `AUX_MODE = "cosine"`, `LAMBDA_REPORT = 1.0` (guarded
+by `if reports is not None`, so a missing `report_embeddings.parquet` still
+disables it rather than lying in the hparams), `LAMBDA_RANK = 0.0`.
+
+**`FOLD` moved 3 → 1 with them, deliberately.** The notebook serves two
+mutually exclusive runs and the aux settings were about to be armed on the
+fold reserved for the ensemble. An ensemble fold trained with an auxiliary
+loss is worse than useless — it makes one member of the average a different
+model, and averaging hides it — while the same run on any fold but 1 has no
+baseline to be read against (fold 1: val 0.872 / gold 0.861 / LB 0.889).
+Both configurations are now written at the top of the notebook:
+
+| run | FOLD | LAMBDA_REPORT | AUX_MODE |
+|---|---|---|---|
+| ensemble fold | 0 / 2 / 3 / 4 | 0.0 | fixed |
+| aux experiment | 1 | 1.0 | cosine |
+
+A banner prints the run's identity before training: `AUX EXPERIMENT`,
+`ENSEMBLE FOLD n`, or `MISCONFIGURED` when the lambdas are on with any fold
+but 1. All three branches exercised against the generated notebook. 330 tests.
+
 ## 2026-08-26 (f) — gradient-similarity gating: the aux-loss weight is not a number
 
 **Du et al., "Adapting Auxiliary Losses Using Gradient Similarity"
