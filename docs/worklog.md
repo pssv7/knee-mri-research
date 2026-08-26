@@ -5,11 +5,77 @@ what happened, with numbers. Newest entry first.
 
 ---
 
-## 2026-08-26 (c) — the sweep ran; raw macro is a misleading screen
+## 2026-08-26 (d) — Phase C prompt levers all fail the gate
 
-**The gold sweep ran on Colab. Verdict pending: four of the five dumps never
-reached the laptop, so the fused gate has not been applied.** What the raw
-table and one local measurement already establish:
+**All five dumps scored. Nothing passes; every variant fuses at or below the
+shipped 0.891.** Prompt iteration (lever 1), more self-consistency samples
+(lever 2) and prompt ensembling (lever 4) are closed.
+
+| configuration | raw macro | **fused macro** | vs shipped |
+|---|---|---|---|
+| shipped labels | 0.860 | **0.891** | — |
+| baseline@3 (re-draw) | 0.860 | 0.890 | −0.001 |
+| baseline@5 | 0.853 | 0.885 | −0.006 |
+| correlates@5 | 0.856 | 0.884 | −0.007 |
+| granular@5 | 0.870 | 0.888 | −0.003 |
+| reason_first@5 | **0.877** | **0.882** | −0.009 |
+
+- **The raw screen inverted against the fused truth**, exactly as the
+  leverage table predicted the day it was measured. `reason_first` led the
+  raw table by +0.017 and finished *last* fused — and it is the only
+  configuration to breach the 0.75 floor (Synovitis 0.732). Its raw wins
+  were in MCL and Medial Meniscus, where the probability mode contributes
+  +0.007 and +0.001 to fusion; its losses were in Synovitis, Lateral OA and
+  Effusion, three of the six findings that carry the mode's whole value.
+  **Standing rule: never rank a prompt candidate on raw macro.**
+- The prediction recorded in (c) before the dumps arrived — reason_first at
+  or below baseline, granular the best of the three, none clearing +0.005 —
+  held on all three counts.
+- `correlates` again moved its targets and paid for them elsewhere
+  (fused PF OA 0.862 → 0.883, Synovitis 0.792 → 0.783, Lateral OA
+  0.862 → 0.830).
+
+**Lever 4 tested for free** (`tools/score_prompt_ensembles.py`, seconds
+locally — the five frames are all an ensemble needs). Four combinations
+fixed by structure before scoring, never selected on score:
+
+| ensemble | fused macro | jackknife win rate |
+|---|---|---|
+| baseline_pair | 0.889 | 0.00 |
+| **phrasings3** (correlates+granular+reason_first) | **0.893** | **0.76** |
+| all_n5 | 0.890 | 0.00 |
+| all5 | 0.891 | 0.01 |
+
+- Ensembling works in the textbook way — three individually *worse* frames
+  (0.884, 0.888, 0.882) average to 0.893, above any member and above
+  shipped — and it survives the delete-8 jackknife 76% of 200 draws against
+  shipped's 23%. It is nonetheless **+0.002, less than half the gate**, and
+  it costs 3× the corpus extraction (~3 h of Colab) to produce. Declined on
+  the trade, not on the sign.
+- Adding baseline back to the ensemble erases the gain (all_n5 0.890,
+  all5 0.891), which is the tell that all of this sits inside the noise the
+  gate exists to ignore.
+
+**Phase C's remaining lever is 3: the categorical mode is still the 14B.**
+The leverage measurement points straight at it — the six findings the
+probability mode cannot improve (Medial Meniscus +0.001, ACL +0.002, PF OA
++0.004, MCL +0.007, Lateral Meniscus +0.011, Baker's +0.013) are exactly the
+ones the categorical extractor carries, and that extractor has never been
+re-run on the 32B. Prompt work cannot reach that half of the label space;
+only re-extraction can.
+
+**But the premise deserves re-checking before the spend.** Phase A closed
+with labels moving 0.854 → 0.891 on gold (+0.037) while the LB moved −0.002,
+and C2 has since added a second case of a gold gain that the LB refused. The
+open question is not "can labels get better" — it is whether label gold has
+ever bought leaderboard. Recorded for the next decision rather than answered
+here.
+
+## 2026-08-26 (c) — the sweep's screen, and why raw macro misleads
+
+**The gold sweep ran on Colab. Four of the five dumps were lost in transit
+(see the defect below); the fused verdict landed the same day in (d).** What
+the raw table and one local measurement established first:
 
 Raw macro per configuration (58 gold studies, from the Colab table):
 
@@ -60,9 +126,8 @@ that. Verified end to end by `tools/check_notebook.py`, which executes the
 real cell and produced a five-dump archive. Section 6's markdown now carries
 the leverage table so the raw screen is not read as a verdict.
 
-Next (user, Colab — the session still holds the parquets): zip and download
-them, unzip into `data/meta/gold_sweep/`, run
-`python3 tools/score_prompt_variants.py`. That applies the gate.
+Resolved in (d) above: the dumps were recovered from the live session and
+scored.
 
 ## 2026-08-26 (b) — Phase C harness: prompt-variant gold sweep, fused gate
 

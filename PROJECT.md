@@ -5,12 +5,14 @@ the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
 Last updated: 2026-08-26 (capacity ladder complete at 0.845 -> 0.869 -> 0.889 ->
-0.891; the slice axis is exhausted. **Phase C2 closed: the report loss won on
-val (0.881) and gold (0.867) but scored LB 0.880 against the aux-free 0.889 —
-the val gain was circular (val labels are mined from the reports the loss
-embeds) and both lambdas ship at 0.0 again.** The gold-forecasts-LB rule
-broke for the first time on this run. Phase C extraction is the lever. See
-`docs/plan.md` and worklog 2026-08-26).
+0.891; the slice axis is exhausted. **Phase C2 closed** — the report loss won
+val 0.881 / gold 0.867 but scored LB 0.880 against the aux-free 0.889, so both
+lambdas ship at 0.0. **Phase C levers 1, 2 and 4 closed the same day** — three
+prompt variants, a 3->5 sample bump and four ensembles all fused at or below
+the shipped 0.891. Lever 3, re-extracting the categorical mode with the 32B,
+is what remains, and `docs/plan.md` holds the question to settle before
+spending on it: no label gain has ever moved the LB. See worklog 2026-08-26
+(c) and (d)).
 
 ---
 
@@ -242,6 +244,16 @@ requires signal reaching an articular surface — rather than tested. Macro 0.83
 under leave-one-out, worse than the better single source. Replaced with a fixed
 0.30/0.70 blend chosen from a plateau. **This lesson recurs: 58 studies cannot
 support per-finding fitting.**
+
+**Prompt iteration, more samples, and prompt ensembling (Phase C, levers
+1/2/4).** Three one-idea prompt variants, a 3→5 sample bump, and four fixed
+ensembles, all scored on the gold 58 through the full fusion: nothing beat
+the shipped 0.891 by the required 0.005. Best variant `granular` 0.888, best
+ensemble `phrasings3` 0.893 (+0.002 at 3× the extraction cost). Two lessons
+worth more than the runs: **raw extractor macro ranks candidates wrongly** —
+`reason_first` led raw by +0.017 and fused last — because fusion needs the
+probability mode for only six of twelve findings; and the other six are held
+by the **14B** categorical extractor, which is where the remaining room is.
 
 **Report-embedding auxiliary loss (Phase C2).** Best fold-1 val (0.881) and
 gold (0.867) ever measured at 16 slices, and LB **0.880** against the aux-free

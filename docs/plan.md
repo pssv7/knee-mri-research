@@ -146,18 +146,47 @@ before any corpus run — two prompt changes reasoned from domain knowledge
 both measured worse, so nothing ships without a gold measurement. This
 costs Colab minutes, not Kaggle hours, so it runs in parallel with C2.
 
-Candidate levers, in order of expected value per hour:
+Candidate levers, and where each now stands:
 
-1. **Prompt iteration on the probability prompt**, measured at the
-   checkpoint. Findings to target: Synovitis (labels 0.792, weakest) and
-   Lateral/PF OA.
-2. **More self-consistency samples** (`N_SAMPLES` 3 → 5–7) — pure compute,
-   no new failure modes.
-3. **Categorical re-extraction with the 32B.** The categorical corpus is
-   still from the 14B; the fusion currently mixes 14B-categorical with
+1. ~~**Prompt iteration on the probability prompt.**~~ **CLOSED 2026-08-26,
+   measured.** Three one-idea variants, all fused below the shipped 0.891
+   (correlates 0.884, granular 0.888, reason_first 0.882).
+2. ~~**More self-consistency samples** (3 → 5).~~ **CLOSED 2026-08-26**:
+   fused 0.885, *below* 3 samples. More compute, slightly worse labels.
+3. **Categorical re-extraction with the 32B** — the one lever left, and the
+   leverage measurement points straight at it. The categorical corpus is
+   still from the 14B; fusion currently mixes 14B-categorical with
    32B-probability. Requires restoring the categorical cells in notebook 03.
-4. **Prompt ensembling** — two or three phrasings averaged, if single-prompt
-   iteration plateaus.
+4. ~~**Prompt ensembling.**~~ **CLOSED 2026-08-26**, tested free on the
+   sweep's own dumps: the three phrasings averaged fuse to 0.893 (+0.002,
+   jackknife 0.76) — a real but sub-gate gain costing 3× the corpus
+   extraction. Declined on the trade.
+
+**The measurement that reframes Phase C** (2026-08-26): how much fused gold
+AUC the probability mode adds over categorical-only, per finding —
+
+| leverage | findings |
+|---|---|
+| high (+0.04 to +0.11) | Fracture, Effusion, Synovitis, Contusion, Medial OA, Lateral OA |
+| none (+0.00 to +0.01) | Medial Meniscus, ACL, PF OA, MCL, Lateral Meniscus, Baker's |
+
+Half the label space is carried by the **14B** categorical extractor and is
+untouchable by any amount of probability-prompt work — which is both why
+levers 1/2/4 could not move the macro, and why lever 3 is the only remaining
+one with room. **Standing rule from the same day: never rank a prompt
+candidate on raw macro** — the raw screen ranked `reason_first` first and it
+fused last.
+
+### The question to settle before spending on lever 3
+
+Phase A closed with labels moving 0.854 → 0.891 on gold (+0.037) while the
+LB moved −0.002. C2 then added a second case of a gold gain the LB refused
+(+0.006 gold → −0.009 LB). **No label-quality gain this project has measured
+has ever produced a leaderboard gain.** Lever 3 costs a Colab corpus run
+(~1 h), a retrain (~1.8 h) and a submission (~2 h) to test the same premise a
+third time. The alternatives for that budget are Phase D's fold ensembling
+(historically +0.005–0.010, on a config that already scores 0.891) and the
+efficiency entry. Decide deliberately rather than by momentum.
 
 **The harness for levers 1–2 is built (2026-08-26).** Notebook 03's gold
 checkpoint is now a five-configuration sweep — baseline at n=3 and n=5, then
