@@ -202,20 +202,34 @@ Candidate levers, and where each now stands:
    (correlates 0.884, granular 0.888, reason_first 0.882).
 2. ~~**More self-consistency samples** (3 → 5).~~ **CLOSED 2026-08-26**:
    fused 0.885, *below* 3 samples. More compute, slightly worse labels.
-3. **Categorical re-extraction with the 32B** — the one lever left, and the
-   leverage measurement points straight at it. The categorical corpus is
-   still from the 14B; fusion currently mixes 14B-categorical with
-   32B-probability. **Harness built 2026-08-26:** notebook 03 §6b runs the
-   original categorical prompt on the gold 58 (minutes on Colab);
-   `tools/score_categorical_upgrade.py` applies the fused gate locally.
-   Only a PASS earns the ~1 h corpus re-run — the cheap measurement first,
-   so this no longer competes with Phase D for budget.
+3. ~~**Categorical re-extraction with the 32B.**~~ **CLOSED 2026-08-26,
+   measured.** Fused 0.885 against the shipped 0.891, and Synovitis fell
+   below the 0.75 floor. The 32B is *worse* at categorical extraction than
+   the 14B (cat-only 0.824 vs 0.838), losing MCL and Medial Meniscus — the
+   ground it had to win. Confounded by a possible prompt-revision difference
+   in the 14B corpus; recorded in worklog (h), and it does not change the
+   verdict.
 4. ~~**Prompt ensembling.**~~ **CLOSED 2026-08-26**, tested free on the
    sweep's own dumps: the three phrasings averaged fuse to 0.893 (+0.002,
    jackknife 0.76) — a real but sub-gate gain costing 3× the corpus
    extraction. Declined on the trade.
 
-**The measurement that reframes Phase C** (2026-08-26): how much fused gold
+**PHASE C IS CLOSED (2026-08-26). All four levers measured, none passed.**
+The finding that outlives them: a replication of the whole sweep put the
+run-to-run sd of the fused gold macro at **~0.004, with identical
+configurations differing by 0.005 and the entire between-config spread only
+0.007** — the 58-study gold set cannot resolve a label change smaller than
+about 0.01, while the gate asks for 0.005. **The instrument is less precise
+than the decision.** Two consequences for anyone reopening this:
+
+- Never compare two extractions on a single draw each. Average over draws or
+  resample the extraction; the delete-8 jackknife resamples *studies* and is
+  blind to this noise entirely — it gave 0.76 confidence to a winner that
+  scored 0.00 on the next draw.
+- A label change worth shipping must clear ~0.01 on gold, not 0.005, and
+  even then the standing history says gold gains have never moved the LB.
+
+**The measurement that reframed Phase C** (2026-08-26): how much fused gold
 AUC the probability mode adds over categorical-only, per finding —
 
 | leverage | findings |
@@ -248,9 +262,10 @@ history when the LB entry is spent.
   Before it: `knee-convnxt` must hold exactly the five `convnext_fold*.pt`
   exports — the 0.880 report-loss ckpt leaves, and no fold may be present
   as both `.pt` and `.ckpt`.
-- **Colab → notebook 03 §6b**, then `tools/score_categorical_upgrade.py`
-  locally. PASS → corpus re-run, re-fuse, retrain gates on gold as usual;
-  fail → Phase C closes with every extraction lever measured.
+- ~~**Colab → notebook 03 §6b.**~~ Ran 2026-08-26: fused 0.885, failed.
+  **Phase C is closed; the Colab track is done and the budget is Phase D's.**
+- **Kaggle → the aux experiment** (fold 1, `AUX_MODE = "cosine"`,
+  `LAMBDA_REPORT = 1.0`), queued behind the ensemble folds.
 
 **The harness for levers 1–2 is built (2026-08-26).** Notebook 03's gold
 checkpoint is now a five-configuration sweep — baseline at n=3 and n=5, then

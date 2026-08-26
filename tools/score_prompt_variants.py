@@ -29,7 +29,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from src import config                                    # noqa: E402
 from src.labels import calibrate, eval_fusion, fuse, mode_fusion  # noqa: E402
 
-SWEEP_DIR = config.META_DIR / "gold_sweep"
+SWEEP_DIR = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else \
+    config.META_DIR / "gold_sweep"
 STRATEGY = "score_average"      # frozen 2026-08-24; see docs/worklog.md
 GATE_MARGIN = 0.005
 GATE_FLOOR = 0.75

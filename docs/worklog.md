@@ -5,6 +5,89 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (h) — Phase C closes: the 32B fails, and a replication shows the sweep was measuring noise
+
+**Two results arrived together, and the second one retracts a claim I made
+in (d).**
+
+### The 32B categorical upgrade fails (lever 3)
+
+`llm_labels_gold__32b.parquet`, scored through the identical fusion against
+the shipped 14B frame:
+
+| | cat-only macro | fused macro |
+|---|---|---|
+| 14B (shipped) | **0.838** | **0.891** |
+| 32B | 0.824 | 0.885 |
+
+**The bigger model extracts categorically *worse*, not better** — and the
+fused frame breaks the Synovitis floor (0.749 < 0.75). It wins ACL
+(0.935 → 0.963), Lateral Meniscus, Medial OA and Lateral OA; it loses MCL
+(0.959 → 0.902), Medial Meniscus (0.944 → 0.894), Effusion, Synovitis,
+Contusion and Fracture. On the categorical ground — the six findings the
+probability mode cannot reach — the fused deltas are Medial Meniscus −0.044,
+MCL −0.011, PF OA −0.003 against ACL +0.016 and Baker's +0.009. It loses
+where it had to win.
+
+*Unresolved confound, recorded rather than hand-waved:* the shipped 14B
+corpus was extracted 2026-08-22 and the prompt has been edited since (the
+MCL/meniscus definitions were sharpened, measured worse, and reverted). If
+the 14B ran under a different prompt revision, this compares model size and
+prompt version together. It does not change the decision — swapping the 32B
+frame in makes the labels worse either way — but it is not clean evidence
+that 32B < 14B at extraction.
+
+### The replication: the sweep's differences were sampling noise
+
+A second, independent draw of all five probability configurations
+(`data/meta/gold_sweep_latest/`) reshuffles the ordering completely:
+
+| config | draw 1 | draw 2 | delta |
+|---|---|---|---|
+| baseline_n3 | 0.890 | 0.886 | −0.004 |
+| baseline_n5 | 0.885 | 0.889 | +0.005 |
+| correlates_n5 | 0.884 | 0.890 | +0.006 |
+| granular_n5 | 0.888 | 0.883 | −0.005 |
+| reason_first_n5 | 0.882 | 0.886 | +0.005 |
+
+**Mean |delta| between *identical* configurations is 0.005; the entire
+spread *between different* configurations within one draw is 0.007–0.008.**
+The between-config signal is the same size as the within-config noise. Draw
+1's best variant (`granular`) is draw 2's worst; draw 2's best
+(`correlates`) was draw 1's worst.
+
+**Retraction of (d).** That entry concluded "sampling noise on the fused
+macro is small, so the deltas above are mostly real rather than resampling
+luck", inferred from a single pair (shipped 0.891 vs a re-draw 0.890). One
+pair agreeing to 0.001 was luck, not evidence. Per-run sd is ~0.004.
+
+**And the jackknife was measuring the wrong noise source.** Ensembles, draw
+1 → draw 2: `phrasings3` 0.893 (jackknife win rate **0.76**) → 0.892
+(**0.00**); `all_n5` 0.890 (**0.00**) → 0.895 (**0.96**). The delete-8
+jackknife resamples *studies* while holding one extraction fixed, so it
+reports high confidence about a difference that evaporates when the
+*extraction* is redrawn. Any future gold-set comparison of two extractions
+must average over draws, or resample the extraction, or it is measuring
+nothing.
+
+### Verdict
+
+**Phase C closes on all four levers.** The deeper finding is not that each
+lever failed but that **the 58-study gold set cannot resolve a label change
+smaller than ~0.01, while the gate asks for 0.005** — the instrument is less
+precise than the decision it was built to make. Combined with the standing
+history (labels +0.037 gold → −0.002 LB; C2 +0.006 gold → −0.009 LB), label
+quality is done as a lever until either the gold set grows or a change is
+large enough to clear the noise. Budget goes to Phase D.
+
+*Tooling:* both scorers now take a sweep directory as `argv[1]`, so two
+draws can be compared without moving files. `tools/check_notebook.py` runs
+the notebook's logic cells in a temporary directory — it had been writing
+`llm_labels_gold__32b.parquet` and friends into the repo root, and one such
+stub was nearly scored as the real 32B result. Its tell: every confidence
+exactly 1.0, which three identical stub samples produce and real 3-sample
+voting cannot. 330 tests.
+
 ## 2026-08-26 (g) — notebook 08 armed for the aux experiment, and made unable to hide a collision
 
 Notebook 08 now ships `AUX_MODE = "cosine"`, `LAMBDA_REPORT = 1.0` (guarded

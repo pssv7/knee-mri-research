@@ -14,6 +14,7 @@ load cannot be verified without a GPU and are reported as such.
 import json
 import os
 import sys
+import tempfile
 import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -114,9 +115,16 @@ def check_logic_cells(cells):
     namespace = {"__name__": "__main__"}
 
     print("cell 6 -- data loading (real train.csv)")
+    # Absolute, because the cells below run from a scratch directory: they
+    # write the same filenames the real Colab run downloads, and a stub dump
+    # left in the repo is a loaded gun. One did survive here, and its
+    # lexicon-derived contents were close enough to real 32B output to be
+    # scored by mistake -- the giveaway was every confidence being exactly
+    # 1.0, which three identical stub samples produce and real voting cannot.
+    train_csv = os.path.join(ROOT, "data", "meta", "train.csv")
     source = cells[6].replace(
         'for candidate in ["/content/drive/MyDrive/knee/train.csv", "/content/train.csv"]:',
-        'for candidate in ["data/meta/train.csv"]:',
+        f'for candidate in [{train_csv!r}]:',
     )
     exec(source, namespace)  # noqa: S102
 
@@ -201,7 +209,15 @@ def main():
 
     check_gpu_cell(cells)
     check_model_cell(cells)
-    check_logic_cells(cells)
+    # The logic cells write parquets and a zip under whatever the working
+    # directory is. Run them somewhere disposable so the repo never holds a
+    # file that looks like a real extraction dump.
+    with tempfile.TemporaryDirectory() as scratch:
+        os.chdir(scratch)
+        try:
+            check_logic_cells(cells)
+        finally:
+            os.chdir(ROOT)
 
     print("\nnot verifiable without a GPU:")
     print("      cell 4  -- pip install vllm")

@@ -245,8 +245,21 @@ under leave-one-out, worse than the better single source. Replaced with a fixed
 0.30/0.70 blend chosen from a plateau. **This lesson recurs: 58 studies cannot
 support per-finding fitting.**
 
+**The whole of Phase C — extraction v3 (levers 1-4).** Prompt variants, more
+self-consistency samples, prompt ensembling, and a 32B categorical
+re-extraction: none beat the shipped labels' 0.891 fused gold. The 32B was
+*worse* at categorical extraction than the 14B (0.824 vs 0.838 cat-only).
+**The lasting result is about the instrument, not the levers:** an
+independent replication of the sweep put the run-to-run sd of fused gold
+macro at ~0.004, with identical configurations differing by 0.005 while the
+entire spread between different configurations was 0.007. The 58-study gold
+set cannot resolve a label change smaller than ~0.01; the gate asked for
+0.005. Every ranking inside the sweep was noise, and the delete-8 jackknife
+could not see it because it resamples studies while holding the extraction
+fixed.
+
 **Prompt iteration, more samples, and prompt ensembling (Phase C, levers
-1/2/4).** Three one-idea prompt variants, a 3→5 sample bump, and four fixed
+1/2/4), in detail.** Three one-idea prompt variants, a 3→5 sample bump, and four fixed
 ensembles, all scored on the gold 58 through the full fusion: nothing beat
 the shipped 0.891 by the required 0.005. Best variant `granular` 0.888, best
 ensemble `phrasings3` 0.893 (+0.002 at 3× the extraction cost). Two lessons
