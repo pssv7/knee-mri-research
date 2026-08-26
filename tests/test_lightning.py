@@ -548,3 +548,65 @@ class TestAuxiliaryLosses:
         fresh = net.KneeNet(self.ConvBackbone(self.FEATURE_DIM),
                             self.FEATURE_DIM)
         fresh.load_state_dict(exported)
+
+    # -- Gradient-similarity gating (arXiv:1812.02224, Algorithm 1) --------
+
+    def test_cosine_mode_is_inert_when_no_auxiliary_is_configured(self):
+        # The fold ensemble trains with both lambdas at 0. Turning the mode
+        # on must not change a single number there, or an unrelated flag
+        # would silently alter the runs the leaderboard is built on.
+        for mode in ("fixed", "cosine"):
+            module = self._module(aux_mode=mode)
+            module.eval()
+            batch = self._batch(with_report=False)
+            loss = module.training_step(batch, 0)
+            with torch.no_grad():
+                logits = module(batch["volumes"], batch["meta"], batch["mask"])
+            from src.model import net
+            expected = net.weighted_bce(logits, batch["targets"],
+                                        batch["weights"])
+            assert torch.allclose(loss.detach(), expected), mode
+
+    def test_aligned_auxiliary_is_applied_and_opposed_is_blocked(self):
+        # The gate is the whole point, so drive both branches directly: an
+        # auxiliary that is the main loss (cosine +1) must pass, and its
+        # negation (cosine -1) must be blocked to exactly zero weight.
+        module = self._module(report_dim=self.REPORT_DIM, lambda_report=1.0,
+                              aux_mode="cosine")
+        batch = self._batch()
+        logits, pooled = module.model.forward_pooled(
+            batch["volumes"], batch["meta"], batch["mask"])
+        from src.model import net
+        main = net.weighted_bce(logits, batch["targets"], batch["weights"])
+
+        aligned = module._aux_cosine(main, main * 2.0, pooled)
+        opposed = module._aux_cosine(main, -main, pooled)
+        assert aligned.item() == pytest.approx(1.0, abs=1e-3)
+        assert opposed.item() == pytest.approx(-1.0, abs=1e-3)
+        assert module._aux_weight(aligned).item() == 1.0
+        assert module._aux_weight(opposed).item() == 0.0
+
+    def test_weighted_gate_scales_rather_than_switches(self):
+        module = self._module(report_dim=self.REPORT_DIM, lambda_report=1.0,
+                              aux_mode="cosine", aux_gate="weighted")
+        assert module._aux_weight(torch.tensor(0.4)).item() == pytest.approx(0.4)
+        # Negative transfer is clipped, never negated -- flipping the sign
+        # would *maximise* the auxiliary loss rather than ignore it.
+        assert module._aux_weight(torch.tensor(-0.4)).item() == 0.0
+
+    def test_gating_does_not_break_the_real_backward(self):
+        # autograd.grad probes run before Lightning's backward over the same
+        # graph; without retain_graph the real backward would raise.
+        module = self._module(report_dim=self.REPORT_DIM, lambda_report=0.5,
+                              lambda_rank=0.5, aux_mode="cosine")
+        module.training_step(self._batch(seed=1), 0)
+        loss = module.training_step(self._batch(seed=2), 1)
+        loss.backward()
+        assert module.report_head[1].weight.grad is not None
+        assert module.model.head[2].weight.grad is not None
+
+    def test_invalid_mode_is_rejected_at_construction(self):
+        with pytest.raises(ValueError, match="aux_mode"):
+            self._module(aux_mode="adaptive")
+        with pytest.raises(ValueError, match="aux_gate"):
+            self._module(aux_gate="soft")

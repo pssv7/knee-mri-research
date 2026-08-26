@@ -176,8 +176,13 @@ class KneeLitModule(pl.LightningModule):
                  total_steps: int = 1000, max_lr_multiplier: float = 3.0,
                  report_dim: Optional[int] = None,
                  lambda_report: float = 0.0, lambda_rank: float = 0.0,
-                 rank_queue_size: int = 256, rank_min_gap: float = 0.25):
+                 rank_queue_size: int = 256, rank_min_gap: float = 0.25,
+                 aux_mode: str = "fixed", aux_gate: str = "binary"):
         super().__init__()
+        if aux_mode not in ("fixed", "cosine"):
+            raise ValueError(f"aux_mode must be fixed|cosine, got {aux_mode!r}")
+        if aux_gate not in ("binary", "weighted"):
+            raise ValueError(f"aux_gate must be binary|weighted, got {aux_gate!r}")
         self.save_hyperparameters(ignore=["backbone"])
         self.model = net.KneeNet(backbone, feature_dim)
         self.lr = lr
@@ -188,6 +193,8 @@ class KneeLitModule(pl.LightningModule):
         self.lambda_rank = lambda_rank
         self.rank_queue_size = rank_queue_size
         self.rank_min_gap = rank_min_gap
+        self.aux_mode = aux_mode
+        self.aux_gate = aux_gate
 
         # The report head is an attribute of the *wrapper*, deliberately: the
         # exported state dict keeps only `model.`-prefixed keys, so auxiliary
@@ -256,22 +263,98 @@ class KneeLitModule(pl.LightningModule):
             self._rank_queue.pop(0)
         return loss
 
+    def _aux_cosine(self, main_loss: torch.Tensor, aux_loss: torch.Tensor,
+                    pooled: torch.Tensor) -> torch.Tensor:
+        """cos between the two losses' gradients at the shared bottleneck.
+
+        Du et al., "Adapting Auxiliary Losses Using Gradient Similarity"
+        (arXiv:1812.02224), Algorithm 1: apply the auxiliary gradient to the
+        shared parameters only while it points into the same half-space as
+        the main gradient, which guarantees convergence to the main task's
+        critical points and blocks negative transfer.
+
+        The paper measures that cosine over the shared parameters theta.
+        Here every shared parameter is reached *only* through `pooled` --
+        `forward_pooled` returns `head(pooled), pooled`, and both losses hang
+        off that one tensor -- so the shared gradients are J^T a and J^T b for
+        the same Jacobian J = d pooled/d theta. Taking the cosine at the
+        bottleneck asks the same question ("does the auxiliary want to move
+        the shared representation the way the main task does?") for the price
+        of two backward passes through the two small heads instead of two
+        through ConvNeXt. It is a proxy, not an identity: J^T can rotate the
+        pair, so agreement here is not arithmetically agreement at theta.
+        The sign is what Algorithm 1 consumes, and the paper itself keeps
+        only the sign because minibatch cosines are too noisy to trust
+        beyond it.
+
+        retain_graph is required: the real backward still has to run
+        afterwards over the same graph.
+
+        Both losses are scaled by a constant first. Training runs in
+        `16-mixed`, and these probe gradients bypass Lightning's GradScaler,
+        so an unscaled fp16 backward can flush small values to zero -- which
+        reads as cosine 0, i.e. "aligned", i.e. silently back to a fixed
+        lambda. Cosine is scale-invariant, so scaling both sides costs
+        nothing and keeps the values off the floor.
+        """
+        scale = 1024.0
+        grad_main, = torch.autograd.grad(main_loss * scale, pooled,
+                                         retain_graph=True)
+        grad_aux, = torch.autograd.grad(aux_loss * scale, pooled,
+                                        retain_graph=True)
+        cosine = torch.nn.functional.cosine_similarity(
+            grad_main.flatten().float(), grad_aux.flatten().float(), dim=0)
+        # Ranks must agree, or the "binary" gate is silently a soft one: DDP
+        # averages the two ranks' gradients, so a per-rank decision would
+        # apply the auxiliary at half strength whenever they disagreed.
+        # torch.distributed rather than self.all_gather, which requires an
+        # attached Trainer and would make this untestable in isolation.
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            cosine = cosine.clone()
+            torch.distributed.all_reduce(cosine, op=torch.distributed.ReduceOp.SUM)
+            cosine = cosine / torch.distributed.get_world_size()
+        return cosine
+
+    def _aux_weight(self, cosine: torch.Tensor) -> torch.Tensor:
+        """Algorithm 1 (binary) or Algorithm 2 (cosine-weighted)."""
+        if self.aux_gate == "weighted":
+            return cosine.clamp(min=0.0)
+        return (cosine >= 0).to(cosine.dtype)
+
     def training_step(self, batch, batch_idx):
         logits, pooled = self.model.forward_pooled(
             batch["volumes"], batch["meta"], batch["mask"])
         loss = net.weighted_bce(logits, batch["targets"], batch["weights"])
         self.log("bce_loss", loss, on_step=False, on_epoch=True,
                  sync_dist=True, batch_size=len(logits))
+        main_loss = loss
 
         if self.report_head is not None:
             report_loss = self._report_loss(pooled, batch)
-            loss = loss + self.lambda_report * report_loss
+            weight = self.lambda_report
+            if self.aux_mode == "cosine":
+                cosine = self._aux_cosine(main_loss, report_loss, pooled)
+                weight = weight * self._aux_weight(cosine)
+                # The diagnostic worth having even when the gate never fires:
+                # a report loss that is mostly anti-aligned explains a fixed
+                # lambda hurting the leaderboard while helping validation.
+                self.log("report_cosine", cosine, on_step=False, on_epoch=True,
+                         sync_dist=True, batch_size=len(logits))
+                self.log("report_gate", (cosine >= 0).float(), on_step=False,
+                         on_epoch=True, sync_dist=True, batch_size=len(logits))
+            loss = loss + weight * report_loss
             self.log("report_loss", report_loss, on_step=False, on_epoch=True,
                      sync_dist=True, batch_size=len(logits))
 
         if self.lambda_rank > 0:
             rank_loss = self._rank_loss(logits, batch)
-            loss = loss + self.lambda_rank * rank_loss
+            weight = self.lambda_rank
+            if self.aux_mode == "cosine":
+                cosine = self._aux_cosine(main_loss, rank_loss, pooled)
+                weight = weight * self._aux_weight(cosine)
+                self.log("rank_cosine", cosine, on_step=False, on_epoch=True,
+                         sync_dist=True, batch_size=len(logits))
+            loss = loss + weight * rank_loss
             self.log("rank_loss", rank_loss, on_step=False, on_epoch=True,
                      sync_dist=True, batch_size=len(logits))
 

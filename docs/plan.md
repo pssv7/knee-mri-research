@@ -79,7 +79,19 @@ the aux target embeds) and the gold gain was inside the 58-study floor.
 See worklog 2026-08-26 for the full verification that this was the model
 and not the plumbing.
 
-**Both lambdas ship at 0.0 again.** The "24 slices + report loss" follow-up
+**Reopened 2026-08-26 on a method, not a hunch.** Du et al.
+(arXiv:1812.02224) argue the constant λ *is* the bug — an auxiliary task's
+usefulness changes during training, so a fixed weight keeps pushing after it
+starts to hurt, and their Figure 3(c) (fixed-λ multi-task below single-task
+throughout, gating recovers it) is C2's result exactly. Implemented as
+`aux_mode="cosine"`: apply the auxiliary gradient only while its cosine with
+the main gradient is non-negative. **Queued behind the fold ensemble as one
+fold-1 run at 16 × 5 with `LAMBDA_REPORT = 1.0`** — read `report_gate`, and
+gate the decision on the LB, never on val, which is circular for this loss.
+Expect no-worse-than-baseline rather than a win: the paper promises blocked
+negative transfer, not positive transfer.
+
+**Both lambdas ship at 0.0 meanwhile.** The "24 slices + report loss" follow-up
 was gated on the LB confirming; the gate failed and the run is cancelled.
 What survives: the code, and the measured reduced-overfitting signature
 (val flat through epoch 12 where the plain 24-slice run decayed) — if a

@@ -5,6 +5,79 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (f) — gradient-similarity gating: the aux-loss weight is not a number
+
+**Du et al., "Adapting Auxiliary Losses Using Gradient Similarity"
+(arXiv:1812.02224), read and implemented. Its thesis is that C2 asked the
+wrong question: there is no best fixed `LAMBDA_REPORT`, because a constant
+weight is itself the failure mode.**
+
+The paper's argument, and how exactly it matches what we measured:
+
+- Section 2 names two problems with `L_main + λ·L_aux`: (i) λ is constant
+  and cannot adapt when the auxiliary's usefulness changes during training,
+  and (ii) task relatedness is ambiguous to quantify up front. C2 tuned λ
+  (0.2 → 0.5) and read the improvement as "more of a good thing", which is
+  precisely the reading the paper says the constant hides.
+- Their fix (Algorithm 1, the *unweighted* variant they use throughout):
+  apply the auxiliary gradient to the shared parameters **only while
+  `cos(∇θL_main, ∇θL_aux) ≥ 0`** — only while it is a descent direction for
+  the main task. Propositions 1–2 prove convergence to the main task's
+  critical points. They keep only the *sign* of the cosine because minibatch
+  estimates are too noisy to trust further.
+- **Figure 3(c) is our result.** With unrelated tasks, the fixed-λ multi-task
+  baseline sits *below* single-task for the whole run while the gated version
+  blocks the transfer and recovers single-task performance. Our report loss
+  at a fixed 0.5: val 0.881 / gold 0.867 but **LB 0.880 against the aux-free
+  0.889**. The rank loss collapsing to 0.026 by memorising its own queue is
+  the same disease with the weight stuck on.
+- The honest limit, in their words: the method "is not a silver bullet that
+  guarantees positive transfer, but it can drop the worst-case scenarios."
+  It promises no-worse-than-baseline, not better.
+
+**Implemented in `src/model/lightning.py`** as `aux_mode="cosine"`
+(`aux_gate="binary"` = Algorithm 1, `"weighted"` = Algorithm 2's max(0,cos)).
+
+- **The gate is nearly free here because of an architectural accident.**
+  `forward_pooled` returns `head(pooled), pooled`, so *every* shared
+  parameter is reached only through `pooled` — both shared gradients are
+  `Jᵀa` and `Jᵀb` for the same Jacobian. Taking the cosine at that
+  bottleneck asks the same question for two backward passes through the two
+  small heads instead of two through ConvNeXt. Recorded as a proxy, not an
+  identity: `Jᵀ` can rotate the pair, so this is sign-agreement in
+  representation space rather than arithmetically the paper's θ-space cosine.
+- Probe gradients bypass Lightning's GradScaler, so both losses are scaled by
+  1024 before `autograd.grad` — under `16-mixed` an unscaled fp16 probe can
+  flush to zero, which reads as cosine 0, reads as "aligned", and silently
+  restores a fixed λ.
+- The cosine is all-reduced across ranks (via `torch.distributed`, not
+  `self.all_gather`, which needs an attached Trainer): DDP averages the two
+  ranks' gradients, so a per-rank binary decision would quietly become a
+  half-strength one whenever the ranks disagreed.
+- `report_cosine` and `report_gate` are logged per epoch — the diagnostic is
+  worth more than the gate, because it says whether C2's report loss was ever
+  aligned at all.
+- Six tests, both gate directions driven directly (aux = +main → cos +1,
+  applied; aux = −main → cos −1, blocked to exactly zero). 330 tests.
+  **`aux_mode` changes nothing while the lambdas are 0**, so the fold
+  ensemble is untouched — that is a test, not a hope.
+
+Mechanism check on the toy fixture (12 batches): an auxiliary target
+unrelated to the labels gives mean cosine −0.001 with the gate firing 6/12 —
+correctly coin-flip, blocking half the harmful updates — while a
+label-bearing target gives +0.045 firing 8/12. Live and non-degenerate; the
+real distribution needs a real run.
+
+**The answer to "what is the best value": `AUX_MODE = "cosine"` with
+`LAMBDA_REPORT = 1.0`** (which reproduces Algorithm 1 exactly — the paper
+applies the auxiliary at full strength when it applies it at all), rank
+still 0.0. One fold-1 run at 16 × 5, ~1.8 h, the probes costing under a
+percent. Read `report_gate` first: mostly-1 means the fixed λ was not the
+problem and C2's failure was the circular validation; oscillating or
+mostly-0 means the fixed λ really was applying a harmful gradient and this
+is the fix. **Gate on the LB regardless** — val labels are mined from the
+same reports the loss embeds, so validation will flatter it again.
+
 ## 2026-08-26 (e) — two tracks armed: fold sweep on Kaggle, 32B categorical on Colab
 
 **The decision from (d) resolved into a plan that does not force the

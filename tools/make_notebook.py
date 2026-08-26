@@ -2584,6 +2584,27 @@ LR = 1e-4
 # stays for any later phase that reaches for more capacity.
 LAMBDA_REPORT = 0.0
 LAMBDA_RANK = 0.0
+
+# AUX_MODE selects how the lambdas above are applied.
+#
+#   "fixed"  -- the weight is the constant above, every step. What C2 ran.
+#   "cosine" -- Du et al., "Adapting Auxiliary Losses Using Gradient
+#               Similarity" (arXiv:1812.02224), Algorithm 1: apply the
+#               auxiliary gradient only while its cosine against the main
+#               gradient is non-negative, i.e. only while it is a descent
+#               direction for the main task. The paper's whole argument is
+#               that a *constant* lambda is the bug -- an auxiliary task's
+#               usefulness changes during training, so a fixed weight keeps
+#               pushing after it has started to hurt. Set LAMBDA_REPORT = 1.0
+#               with this mode to reproduce the paper exactly; the lambda
+#               then scales the auxiliary only on the steps it is switched on.
+#
+# Even with the lambdas at 0 this changes nothing, so the fold ensemble is
+# unaffected. The run to make first is the diagnostic one: LAMBDA_REPORT = 1.0
+# and AUX_MODE = "cosine" logs `report_cosine` and `report_gate` per epoch,
+# which say whether C2's report loss was ever aligned with the main task.
+AUX_MODE = "fixed"
+AUX_GATE = "binary"   # "weighted" uses max(0, cos) instead of an on/off gate
 REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
               if reports is not None else None)
 
@@ -2620,9 +2641,10 @@ module = knee_lightning.KneeLitModule(
                                in_chans=3),
     feature_dim=FEATURE_DIM, lr=LR, total_steps=TOTAL_STEPS,
     report_dim=REPORT_DIM, lambda_report=LAMBDA_REPORT,
-    lambda_rank=LAMBDA_RANK)
+    lambda_rank=LAMBDA_RANK, aux_mode=AUX_MODE, aux_gate=AUX_GATE)
 print(f"aux losses: report {LAMBDA_REPORT} (dim {REPORT_DIM})  "
-      f"rank {LAMBDA_RANK}")
+      f"rank {LAMBDA_RANK}  mode {AUX_MODE}"
+      + (f"/{AUX_GATE}" if AUX_MODE == "cosine" else ""))
 
 checkpointer = pl.callbacks.ModelCheckpoint(
     dirpath="/kaggle/working", filename=f"lit_fold{FOLD}",
