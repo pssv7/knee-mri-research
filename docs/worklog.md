@@ -5,6 +5,70 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (i) — reading the 14B's actual mistakes: most "errors" are reports that never said it
+
+`tools/inspect_extraction_errors.py` prints every disagreement between the
+14B categorical extractor and the gold 58 with the model's own evidence
+span, the sentences the lexicon's anatomy patterns flag, and the 32B's call
+on the same study. First pass over all twelve findings:
+
+| finding | n+ | AUC | positives mentioned in report | unreachable | miss in-text | said no | false pos |
+|---|---|---|---|---|---|---|---|
+| Synovitis | 27 | 0.706 | **37%** | 11 | 0 | 0 | 5 |
+| Fracture | 18 | 0.752 | 67% | 4 | 2 | 1 | 4 |
+| Effusion | 35 | 0.757 | 80% | 0 | 0 | 0 | 14 |
+| Contusion | 19 | 0.760 | 68% | 1 | 1 | 0 | 18 |
+| Lateral Meniscus | 23 | 0.804 | 78% | 0 | 1 | 3 | 8 |
+| PF OA | 21 | 0.826 | 67% | 4 | 2 | 0 | 5 |
+| Lateral OA | 11 | 0.828 | 73% | 2 | 0 | 0 | 11 |
+| Medial OA | 15 | 0.869 | 80% | 1 | 1 | 1 | 8 |
+| Baker's | 12 | 0.911 | 75% | 1 | 0 | 0 | 5 |
+| ACL | 24 | 0.935 | 88% | 0 | 0 | 0 | 4 |
+| Medial Meniscus | 26 | 0.944 | 69% | 1 | 0 | 0 | 5 |
+| MCL | 9 | 0.959 | 89% | 0 | 0 | 0 | 10 |
+| **total** | | | **73%** | **25** | **7** | **5** | **97** |
+
+**Of 37 missed positives, 25 (68%) were never written down.** The
+radiologist marked the finding from the images and the report never
+discusses the anatomy at all. **Report coverage predicts extraction AUC at
+r = +0.65** (Spearman +0.62): findings whose positives are mentioned <72% of
+the time average AUC 0.797, those above average 0.866. Synovitis is the
+extreme and explains its long-standing weakness — **only 37% of synovitis
+positives are mentioned in their report**, so its 0.706 is close to a
+text ceiling, not a prompt failure. Caveat kept in the tool's docstring:
+coverage is measured with the lexicon's anatomy patterns, so it is a lower
+bound — unusual phrasing counts as unmentioned.
+
+**The `said no` misses are mostly the report contradicting the gold**, not
+misreading. Read one by one, three of the five cite explicit normality:
+"Lateral menisküs normal." (Turkish), "Normaal voorkomen menisci." (Dutch),
+"δεν σημειώνονται παθολογικά ευρήματα" (Greek) — each against a *positive*
+gold label, each extracted at confidence 1.0. The extractor read the
+sentence correctly; the text and the radiologist disagree.
+
+**So the genuinely fixable misses number about seven, not thirty-seven** —
+in-text silences, and the 32B caught several of them (e.g. "small horizontal
+tear at the anterior horn of the lateral meniscus", which the 14B missed
+entirely and the 32B called at 0.17).
+
+**The dominant error is over-assertion: 97 false positives**, and Contusion
+shows the mechanism cleanly. Its definition says bone marrow oedema
+"excluding oedema that is purely degenerative subchondral change", yet the
+extractor fires on: `subchondral bone edema is detected` (the excluded case
+verbatim), `aumento de señal de la inserción distal del tendón cuadricipital`
+(tendon, not bone), and `edema along the inferior margin of the popliteal
+cyst` (soft tissue). Every one of them is scored at severity 0.35
+("minimal"), which is why AUC absorbs them better than the count suggests —
+the extractor hedges correctly even when it fires wrongly.
+
+**What this does and does not license.** It is the clearest account yet of
+*why* label quality plateaued: roughly a quarter of positive labels are not
+recoverable from text at all, which caps any extractor and explains why four
+levers of Phase C moved nothing. It does **not** license another prompt
+round — (h) established that the 58-study gold set cannot resolve a change
+below ~0.01, and tightening Contusion's oedema scope would move a 19-positive
+finding by less than that. Recorded as understanding, not as a queued run.
+
 ## 2026-08-26 (h) — Phase C closes: the 32B fails, and a replication shows the sweep was measuring noise
 
 **Two results arrived together, and the second one retracts a claim I made

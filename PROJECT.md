@@ -82,6 +82,18 @@ is no longer the first lever. `docs/plan.md` holds the remaining ladder —
 series count (3 of ~5.5) is the next rung, and its per-finding case is
 recorded there.
 
+**The label ceiling is the reports themselves (measured 2026-08-26).** Across
+the gold 58, only **73% of positive labels are mentioned in their report at
+all** — the radiologist marked the rest from the images and the text never
+discusses the anatomy. Report coverage predicts extraction AUC at r = +0.65.
+Synovitis is the extreme: **37% coverage, AUC 0.706**, its weakness since the
+beginning. Of the 14B extractor's 37 missed positives, 25 were never written
+down and a further 5 are the report explicitly contradicting the gold
+("Lateral menisküs normal." against a positive label); only ~7 are genuinely
+fixable misses. Its dominant error is over-assertion — 97 false positives,
+all hedged at minimal severity. Inspect any of it with
+`python3 tools/inspect_extraction_errors.py [finding]`.
+
 **The mechanism was diagnosed and is concrete.** The categorical extractor ties
 **369 of 696 label slots** on a single value:
 
