@@ -57,3 +57,59 @@ class TestReportReading:
 
     def test_anatomy_hits_are_empty_when_the_finding_is_unmentioned(self):
         assert anatomy_hits("The ACL is intact.", "Baker's") == []
+
+
+class TestCategoricalMerges:
+    """The merge rules in tools/score_categorical_merge.py.
+
+    These produce the numbers quoted in the worklog, so their semantics are
+    pinned rather than assumed.
+    """
+
+    FINDING = "ACL"
+
+    def _frame(self, present, severity=0.85, confidence=1.0):
+        import pandas as pd
+        from src import config
+        row = {config.ID_COL: ["s1"]}
+        for name in config.LABELS:
+            row[name] = [present if name == self.FINDING else float("nan")]
+            row[f"{name}_severity"] = [severity]
+            row[f"{name}_confidence"] = [confidence]
+            row[f"{name}_evidence"] = [None]
+        return pd.DataFrame(row)
+
+    def test_fill_silence_takes_the_other_model_only_when_silent(self):
+        import pandas as pd
+        from score_categorical_merge import merge_fill_silence
+        silent = self._frame(float("nan"))
+        speaks = self._frame(1.0, severity=0.5)
+        filled = merge_fill_silence(silent, speaks)
+        assert filled[self.FINDING].iloc[0] == 1.0
+        assert filled[f"{self.FINDING}_severity"].iloc[0] == 0.5
+
+        # A model that already spoke is never overridden.
+        spoke = self._frame(0.0, severity=0.0)
+        kept = merge_fill_silence(spoke, speaks)
+        assert kept[self.FINDING].iloc[0] == 0.0
+
+    def test_both_agree_demotes_a_lone_positive(self):
+        from score_categorical_merge import merge_both_agree
+        asserted = self._frame(1.0)
+        disagrees = self._frame(0.0, severity=0.0)
+        merged = merge_both_agree(asserted, disagrees)
+        assert merged[self.FINDING].iloc[0] == 0.0
+
+        agrees = self._frame(1.0)
+        kept = merge_both_agree(asserted, agrees)
+        assert kept[self.FINDING].iloc[0] == 1.0
+
+    def test_perfect_oracle_reproduces_the_gold_column(self):
+        import pandas as pd
+        from src import config
+        from score_categorical_merge import perfect
+        base = self._frame(float("nan"))
+        gold = pd.DataFrame({config.ID_COL: ["s1"], "Report": ["x"],
+                             **{n: [1] for n in config.LABELS}})
+        out = perfect(base, gold)
+        assert out[self.FINDING].iloc[0] == 1.0

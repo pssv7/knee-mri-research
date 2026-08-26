@@ -5,6 +5,70 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (j) — costing the fix: the 32B cannot make it, and the ceiling is unreachable
+
+**Asked what fixing the extractor's errors would be worth, and whether the
+32B could do the fixing. Answers: +0.004 and no.**
+`tools/score_categorical_merge.py` computes both — gold-blind merge rules
+that could ship, and gold-using ceilings that only say whether the work is
+worth starting.
+
+| configuration | cat-only | fused | delta | |
+|---|---|---|---|---|
+| 14B (shipped) | 0.838 | 0.891 | — | baseline |
+| 32B | 0.824 | 0.885 | −0.006 | measured |
+| merge: fill_silence (32B fills 14B's silences) | 0.842 | 0.892 | **+0.000** | noise |
+| merge: mean_severity | 0.856 | 0.893 | +0.002 | noise |
+| merge: both_agree (assert only when both do) | 0.817 | 0.881 | **−0.010** | hurts |
+| CEILING: fix in-text silences | 0.855 | 0.895 | +0.004 | bound |
+| CEILING: fix said-no | 0.850 | 0.902 | +0.011 | bound |
+| CEILING: fix false positives | 0.916 | 0.934 | **+0.043** | bound |
+| CEILING: fix all reachable | 0.942 | 0.950 | +0.059 | bound |
+| CEILING: perfect extraction | 1.000 | 0.997 | +0.106 | bound |
+
+**The 32B cannot fix the 14B, because it makes the same mistakes.** 78 of the
+14B's 97 false positives are also the 32B's (**80% shared**); it calls YES on
+only 7 of the 14B's 32 silent positives. Every gold-blind merge lands inside
+the ±0.005 noise floor, and demanding agreement *hurts* by 0.010 — it removes
+true positives along with false ones.
+
+**The one big ceiling is false positives (+0.043), and it is not reachable.**
+Three findings, on reading the actual cases:
+
+- **It is concentrated nowhere.** Per finding, fixing *every* false positive
+  perfectly is worth at most **+0.008** (Contusion, 18 cases), then Effusion
+  +0.008, Synovitis +0.004, Lateral OA +0.004, MCL +0.003. The +0.043 exists
+  only if all twelve are fixed at once, using gold to know which they are.
+  Even an oracle-grade fix of the single best finding is below the 0.01
+  measurability bar.
+- **Most of them are not errors.** For Effusion the *same phrase appears on
+  both sides of the gold*: "Geringer Gelenkerguss" (slight joint effusion)
+  under a positive label, "Begleitend geringer Gelenkerguss" under a
+  negative one; likewise "Leve derrame articular" and "Mild effusion" among
+  the negatives. The text does not distinguish them, so no extractor can.
+  These are the gold's own severity threshold, not extraction defects.
+- **Where a threshold *is* legible, severity already handles it.** MCL's
+  positives are complete ruptures, grade-2 sprains and loss of continuity;
+  its false positives are "grade I sprain", "low-grade partial-thickness
+  tear", periligamentous oedema. That pattern is learnable — and MCL already
+  scores **0.959**, because the extractor grades those at severity 0.35 and
+  AUC ranks them below the real tears. Nothing left to win.
+
+Supporting measurement: among all YES calls, precision by stored severity
+rises monotonically — minimal (≤0.35) 56% over 134 calls, higher (>0.35) 77%
+over 166. Severity is genuinely informative, which is why fusion absorbs the
+false positives; but the two classes overlap far too much for any threshold
+to separate them (suppressing all minimal calls would destroy 75 true
+positives to remove 59 false ones).
+
+**Decision: not attempted.** The proposal was to fix the misses with the 32B;
+that is worth +0.004 against a ±0.005 floor. The larger prize is a class that
+is partly irreducible, partly already handled, and nowhere concentrated
+enough to measure. Phase C stays closed. Note also that the previous attempt
+to sharpen definitions from radiological reasoning cost 0.020 macro and 0.152
+on MCL and was reverted — the precedent for editing definitions on inspection
+is bad, and this inspection does not overturn it.
+
 ## 2026-08-26 (i) — reading the 14B's actual mistakes: most "errors" are reports that never said it
 
 `tools/inspect_extraction_errors.py` prints every disagreement between the

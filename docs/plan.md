@@ -229,6 +229,17 @@ than the decision.** Two consequences for anyone reopening this:
 - A label change worth shipping must clear ~0.01 on gold, not 0.005, and
   even then the standing history says gold gains have never moved the LB.
 
+**Costed 2026-08-26 and declined** (`tools/score_categorical_merge.py`):
+merging the 32B into the 14B to repair its misses is worth **+0.000 to
++0.002**, inside the noise — the two models share **80% of their false
+positives** and the 32B recovers only 7 of 32 silent positives. The one large
+ceiling, removing every false positive, is +0.043 but is worth at most
+**+0.008 for any single finding** and is largely irreducible: for Effusion
+the identical phrase ("geringer Gelenkerguss") carries both gold answers,
+and where a threshold *is* legible (MCL grade 1 vs grade 2) severity already
+ranks it correctly at AUC 0.959. Do not reopen this without a larger gold
+set.
+
 **The measurement that reframed Phase C** (2026-08-26): how much fused gold
 AUC the probability mode adds over categorical-only, per finding —
 
