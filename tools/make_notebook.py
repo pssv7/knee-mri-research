@@ -2523,7 +2523,16 @@ import timm
 # Notebook 10's TUNED_BACKBONE must match this, along with the slice and
 # series counts. `net.build_backbone` handles the ViT-family input-size
 # argument, so a DINOv2 name works here unchanged.
-BACKBONE = "convnext_tiny.fb_in22k_ft_in1k"
+#
+# The incumbent is "convnext_tiny.fb_in22k_ft_in1k" (768 features, 27.8M
+# params) -- restore it to resume the fold ensemble.
+#
+# CURRENT RUN: the DINOv2-S probe. The FEATURE_DIM printed below is the check
+# that the swap took effect: 384 features and ~22M params means DINOv2, 768
+# and 27.8M means this edit did not reach the running notebook. The frozen
+# version of this same trunk is the retired 0.787 baseline; this run is
+# asking what it does fine-tuned, and the gate is fold 1's gold 0.861.
+BACKBONE = "vit_small_patch14_reg4_dinov2.lvd142m"
 
 # Built once here before the trainer spawns its workers. Each rank constructs
 # its own backbone, and two processes racing to download the same weights into
@@ -2625,16 +2634,22 @@ REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
 #                   Fold 3 done 2026-08-26 (val 0.869, verified aux-free);
 #                   fold 1 exists as lit_fold1_old.ckpt (16 x 5 reference,
 #                   LB 0.889). Outstanding: FOLD = 0, then 2, then 4.
-#   Aux experiment  FOLD = 1, LAMBDA_REPORT = 1.0, AUX_MODE = "cosine".
+#   Backbone probe  FOLD = 1, BACKBONE = a different trunk, lambdas 0.0.
 #                   Fold 1 because it is the ONLY split with a measured
 #                   baseline (val 0.872 / gold 0.861 / LB 0.889); the same
 #                   run on any other fold has nothing to be compared against.
+#                   Fold 3's LB 0.877 against fold 1's 0.889 on an identical
+#                   configuration is what that costs when ignored.
 #
 # Changing the fold and the configuration together has already cost this
 # project one ambiguous run, and an ensemble fold trained with an auxiliary
-# loss is worse than useless -- it silently makes one member of the average
-# a different model. The banner printed below states which run this is.
-FOLD = 0
+# loss or a different backbone is worse than useless -- it silently makes one
+# member of the average a different model. The banner below states which run
+# this is.
+#
+# CURRENT RUN: the DINOv2-S fine-tune probe. Restore FOLD = 0 and BACKBONE =
+# convnext_tiny to resume the ensemble if the probe fails its gate.
+FOLD = 1
 CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
 
 keyed = folded.set_index("StudyInstanceUID")

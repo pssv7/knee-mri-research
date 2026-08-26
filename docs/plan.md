@@ -347,10 +347,18 @@ cannot afford the run", no longer does for a *probe*.
   - **< 0.85** — closed like grid-4. Back to ConvNeXt folds 0/2/4, and the
     backbone question is settled by measurement rather than re-argued.
 
-  **Read the projected-runtime line in the same run.** DINOv2-S/14 at 224 is
-  ~261 tokens against ConvNeXt-T's convolutions; if inference is ~1.3× then
-  five DINOv2 folds do not fit under the 9 h cap and a mixed ensemble is the
-  only shape that can ship. Measure it, do not estimate it.
+  **Read the projected-runtime line in the same run.** An earlier guess here
+  that DINOv2 would cost ~1.3× ConvNeXt-T was wrong in sign: built locally,
+  the trunk is *smaller* (21.6M vs 27.8M parameters) and a 32-slice forward
+  ran 0.88 s against ConvNeXt-T's 3.03 s. That is fp32 on CPU, where
+  ConvNeXt's depthwise convolutions do badly and a ViT's dense matmuls do
+  well, so it is not a T4 fp16 prediction — but it removes the reason to
+  assume the 9 h cap rules out five DINOv2 folds. Take the number from the
+  notebook's projection, not from either estimate.
+
+  Verified locally before the run (346 tests): both trunks build through
+  `net.build_backbone` and produce (1, 12) logits through the full
+  aggregation at 16 × 5 — 384 features for DINOv2, 768 for ConvNeXt.
 
 - **Then folds 0/2/4** (~6.9 h), composition decided by the probe.
 - **Kaggle → Phase D fold ensemble, 2 of 5 in hand.** Fold 3 done
