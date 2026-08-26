@@ -79,17 +79,21 @@ the aux target embeds) and the gold gain was inside the 58-study floor.
 See worklog 2026-08-26 for the full verification that this was the model
 and not the plumbing.
 
-**Reopened 2026-08-26 on a method, not a hunch.** Du et al.
-(arXiv:1812.02224) argue the constant λ *is* the bug — an auxiliary task's
-usefulness changes during training, so a fixed weight keeps pushing after it
-starts to hurt, and their Figure 3(c) (fixed-λ multi-task below single-task
-throughout, gating recovers it) is C2's result exactly. Implemented as
-`aux_mode="cosine"`: apply the auxiliary gradient only while its cosine with
-the main gradient is non-negative. **Queued behind the fold ensemble as one
-fold-1 run at 16 × 5 with `LAMBDA_REPORT = 1.0`** — read `report_gate`, and
-gate the decision on the LB, never on val, which is circular for this loss.
-Expect no-worse-than-baseline rather than a win: the paper promises blocked
-negative transfer, not positive transfer.
+**Reopened on a method and closed on a measurement (2026-08-26).** Du et al.
+(arXiv:1812.02224) argue the constant λ *is* the bug, so `aux_mode="cosine"`
+applies the auxiliary gradient only while its cosine with the main gradient
+is non-negative. Run on fold 1 at 16 × 5 with `LAMBDA_REPORT = 1.0`:
+**val 0.874, gold 0.856** — third configuration, third failure against the
+reference's 0.861. The paper's guarantee held (no collapse) and delivered
+exactly what it promises (no gain).
+
+**The finding worth keeping is about validation, not about λ.** Inside that
+run val rose from 0.872 to 0.874 while gold fell from 0.870 to 0.856, and
+selection is on val — correctly, since gold selection is a fixed leak. So a
+report-derived auxiliary loss makes *correct* checkpoint selection choose a
+worse model, because the selection metric is mined from the same reports the
+loss trains on. That objection applies to the whole family regardless of
+weighting, and is why this stays closed.
 
 **Both lambdas ship at 0.0 meanwhile.** The "24 slices + report loss" follow-up
 was gated on the LB confirming; the gate failed and the run is cancelled.
@@ -114,10 +118,16 @@ every slice/series count — so identification is by Lightning's stored
 | `lit_fold1_old.ckpt` | 0.8718 | none | fold 1, 16 × 5 | 0.889 |
 | `lit_fold1_oldd.ckpt` | 0.8799 | none | fold 1, **24** × 5 | **0.891** |
 | `lit_fold1.ckpt` | 0.8814 | report 0.5 | fold 1, 16 × 5 | 0.880 |
-| `convnext_fold1.pt` | — | none | export of `lit_fold1_oldd` (220/220 tensors identical) | 0.891 |
+| `convnext_fold1.pt` (older) | — | none | export of `lit_fold1_oldd` (220/220 tensors identical) | 0.891 |
+| `convnext_fold1.pt` (2026-08-26) | 0.874 | report 1.0 cosine | fold 1, 16 × 5 | not submitted, gold 0.856 |
 
-Two consequences for the fold ensemble: **the only `.pt` export on hand is
-the 24-slice one**, so fold 1's 16 × 5 contribution must come from
+**Three different models have now been called `convnext_fold1.pt`** — the
+24-slice export, and the cosine-aux run of 2026-08-26. Notebook 10 globs
+that filename and would average whichever is present without complaint, so
+check the file, not the name.
+
+Two consequences for the fold ensemble: **no `.pt` export of the 16 × 5
+reference exists**, so fold 1's 16 × 5 contribution must come from
 `lit_fold1_old.ckpt` (exported, or attached as the `.ckpt` — notebook 10
 reads both); and **`lit_fold0.ckpt` is 16 × 3**, predating the five-series
 change, so fold 0 is a retrain like 2, 3 and 4 rather than a checkpoint

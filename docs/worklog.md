@@ -5,6 +5,57 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (k) — gradient gating measured: no collapse, no gain. C2 closes for good
+
+**`AUX_MODE = "cosine"`, `LAMBDA_REPORT = 1.0`, fold 1, 16 × 5: val 0.874,
+gold 0.856 at the selected epoch.** Third auxiliary-loss configuration, third
+failure to beat the aux-free reference.
+
+| config (fold 1, 16 × 5) | val peak | gold at selected | LB |
+|---|---|---|---|
+| **reference, no aux** | 0.872 | **0.861** | **0.889** |
+| report 0.2 + rank 0.2 | 0.868 | 0.854 | — |
+| report 0.5, fixed λ | 0.881 | 0.867 | 0.880 |
+| **report 1.0, cosine gate** | 0.874 | **0.856** | — |
+
+Du et al.'s guarantee held exactly as advertised and was worth exactly what
+it promised: **no collapse** — nothing like the screen's rank-loss
+degeneracy — and **no gain**. Propositions 1–2 promise convergence to the
+main task's critical points, not a better optimum, and that is what arrived.
+
+**The run also produced the cleanest evidence yet that validation is
+compromised for this loss family.** Within the run, val and gold move
+*apart*:
+
+| epoch | val | gold |
+|---|---|---|
+| 7 | 0.872 | **0.870** |
+| 9 (selected) | **0.874** | 0.856 |
+
+Val rose 0.002 while gold fell 0.014. Checkpoint selection is on val — which
+is correct and must stay that way, since selecting on gold is the leak fixed
+back in August — so **with a report-derived auxiliary loss, correct
+selection systematically picks a worse model.** The best gold epoch was 7,
+and val had no way to know. That is a structural objection to the whole
+family here, independent of how the loss is weighted: the metric used to
+choose the checkpoint is mined from the same reports the loss trains on.
+
+**C2 is closed for good.** Both lambdas revert to 0.0 and `AUX_MODE` to
+`"fixed"` in the generator, with the three results recorded at the switch so
+nobody re-runs them. The code stays: the reduced-overfitting signature was
+real, and if a future phase reaches for capacity again a small report lambda
+remains a candidate regulariser — gated on the LB, never on val.
+
+**Trap created by this run:** it wrote `/kaggle/working/convnext_fold1.pt`
+(220 tensors, aux head correctly stripped) — but that file is the **cosine
+aux model at gold 0.856**, not an ensemble member. The ensemble's fold-1
+entry is `lit_fold1_old.ckpt` (16 × 5 reference, val 0.8718, LB 0.889). Two
+different models now claim the name `convnext_fold1.pt`; notebook 10 globs
+that pattern and would average the wrong one without complaint.
+
+Notebook 08 is reset to the ensemble configuration: `FOLD = 3`,
+`LAMBDA_REPORT = 0.0`, `AUX_MODE = "fixed"`. 342 tests.
+
 ## 2026-08-26 (j) — costing the fix: the 32B cannot make it, and the ceiling is unreachable
 
 **Asked what fixing the extractor's errors would be worth, and whether the

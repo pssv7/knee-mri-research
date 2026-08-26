@@ -2582,7 +2582,7 @@ LR = 1e-4
 # target embeds, so the val gain was partly circular, and gold's +0.006 sat
 # inside its noise floor. Both lambdas therefore ship at 0.0; the code
 # stays for any later phase that reaches for more capacity.
-LAMBDA_REPORT = 1.0 if reports is not None else 0.0
+LAMBDA_REPORT = 0.0
 LAMBDA_RANK = 0.0
 
 # AUX_MODE selects how the lambdas above are applied.
@@ -2599,11 +2599,16 @@ LAMBDA_RANK = 0.0
 #               with this mode to reproduce the paper exactly; the lambda
 #               then scales the auxiliary only on the steps it is switched on.
 #
-# Even with the lambdas at 0 this changes nothing, so the fold ensemble is
-# unaffected. The run to make first is the diagnostic one: LAMBDA_REPORT = 1.0
-# and AUX_MODE = "cosine" logs `report_cosine` and `report_gate` per epoch,
-# which say whether C2's report loss was ever aligned with the main task.
-AUX_MODE = "cosine"
+# Measured 2026-08-26 and CLOSED. Three configurations on fold 1 at 16 x 5,
+# against the aux-free reference's gold 0.861:
+#   report 0.2 + rank 0.2   val 0.868  gold 0.854
+#   report 0.5, fixed       val 0.881  gold 0.867  -> LB 0.880 (aux-free 0.889)
+#   report 1.0, cosine gate val 0.874  gold 0.856
+# None beat the reference on gold, and the only one submitted lost 0.009 on
+# the leaderboard. The gating paper's promise held -- no collapse -- but there
+# was nothing to gain. Both lambdas ship at 0.0; the code stays for a future
+# capacity phase.
+AUX_MODE = "fixed"
 AUX_GATE = "binary"   # "weighted" uses max(0, cos) instead of an on/off gate
 REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
               if reports is not None else None)
@@ -2625,7 +2630,7 @@ REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
 # project one ambiguous run, and an ensemble fold trained with an auxiliary
 # loss is worse than useless -- it silently makes one member of the average
 # a different model. The banner printed below states which run this is.
-FOLD = 1
+FOLD = 3
 CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
 
 keyed = folded.set_index("StudyInstanceUID")
