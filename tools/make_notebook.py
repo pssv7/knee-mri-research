@@ -2385,9 +2385,16 @@ LR = 1e-4
 # targets differ by >= 0.25 so extraction noise is not what gets ranked.
 # Screen result (fold 1, both at 0.2): gold 0.854 vs the 0.861 reference.
 # Both losses trained (report 0.17->0.044, rank 0.65->0.026), but rank
-# collapsed to near-zero -- memorised its own queue -- and is the suspect
-# for the deficit. This run escalates report alone.
-LAMBDA_REPORT = 0.5 if reports is not None else 0.0
+# collapsed to near-zero -- memorised its own queue.
+#
+# LB verdict (2026-08-26): report 0.5 alone scored val 0.881 / gold 0.867
+# on fold 1 at 16 x 5 -- the best fold-1 numbers measured -- but the
+# submission came in at LB 0.880 against the aux-free twin's 0.889 on the
+# identical geometry. Val labels are mined from the same reports the aux
+# target embeds, so the val gain was partly circular, and gold's +0.006 sat
+# inside its noise floor. Both lambdas therefore ship at 0.0; the code
+# stays for any later phase that reaches for more capacity.
+LAMBDA_REPORT = 0.0
 LAMBDA_RANK = 0.0
 REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
               if reports is not None else None)

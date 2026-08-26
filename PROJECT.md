@@ -4,12 +4,13 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-25 (capacity ladder complete at 0.845 -> 0.869 -> 0.889 ->
-0.891; the slice axis is exhausted. The Phase C2 aux-loss screen ran: gold
-0.854 vs the 0.861 reference — both losses trained, rank memorised its queue.
-One escalation run remains (`LAMBDA_REPORT = 0.5`, `LAMBDA_RANK = 0.0`,
-shipped in notebook 08); if flat, C2 closes and Phase C extraction is the
-lever. See `docs/plan.md` and worklog 2026-08-25 (e)).
+Last updated: 2026-08-26 (capacity ladder complete at 0.845 -> 0.869 -> 0.889 ->
+0.891; the slice axis is exhausted. **Phase C2 closed: the report loss won on
+val (0.881) and gold (0.867) but scored LB 0.880 against the aux-free 0.889 —
+the val gain was circular (val labels are mined from the reports the loss
+embeds) and both lambdas ship at 0.0 again.** The gold-forecasts-LB rule
+broke for the first time on this run. Phase C extraction is the lever. See
+`docs/plan.md` and worklog 2026-08-26).
 
 ---
 
@@ -38,6 +39,7 @@ in train but **not** in test, so text is a training-time signal only.
 | ConvNeXt-T, 16 slices, 3 series | 0.869 |
 | ConvNeXt-T, 16 slices, 5 series | 0.889 |
 | **ConvNeXt-T, 24 slices, 5 series** | **0.891 ← best** |
+| ConvNeXt-T, 16 slices, 5 series + report loss 0.5 | 0.880 |
 | Leaderboard top | 0.952 |
 | Leaderboard 20th | 0.941 |
 
@@ -240,6 +242,15 @@ requires signal reaching an articular surface — rather than tested. Macro 0.83
 under leave-one-out, worse than the better single source. Replaced with a fixed
 0.30/0.70 blend chosen from a plateau. **This lesson recurs: 58 studies cannot
 support per-finding fitting.**
+
+**Report-embedding auxiliary loss (Phase C2).** Best fold-1 val (0.881) and
+gold (0.867) ever measured at 16 slices, and LB **0.880** against the aux-free
+0.889 on the identical setup. Val labels are mined from the same reports the
+loss embeds, so the val gain was partly the model learning to predict reports
+rather than findings; gold's +0.006 was inside the 58-study floor. Rank loss
+was worse still — it collapsed to 0.026 by memorising its own queue. Both
+lambdas ship at 0.0; the code remains as a capacity-phase regulariser
+candidate (its reduced-overfitting signature was real).
 
 ---
 

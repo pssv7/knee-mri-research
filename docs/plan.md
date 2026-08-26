@@ -4,7 +4,7 @@ State document: `PROJECT.md` (read it first; it holds what exists and what
 failed). This file holds only what happens next and the gates between steps.
 History and per-run numbers live in `docs/worklog.md`.
 
-Position as of 2026-08-25. **Best public LB 0.891** (ConvNeXt-T, 24 slices,
+Position as of 2026-08-26. **Best public LB 0.891** (ConvNeXt-T, 24 slices,
 5 series). Cluster: 0.941 at 20th, 0.952 at top.
 
 | configuration | honest gold | LB |
@@ -15,13 +15,16 @@ Position as of 2026-08-25. **Best public LB 0.891** (ConvNeXt-T, 24 slices,
 | 16 slices, 3 series | 0.840 | 0.869 |
 | **16 slices, 5 series** (fold 1) | **0.861** | **0.889** ← reference |
 | 24 slices, 5 series (fold 1) | 0.865 | 0.891 |
+| 16 slices, 5 series + report loss 0.5 | 0.867 | 0.880 |
 
 \* inflated by the gold-selection leak, since fixed.
 
-**Gold has forecast the LB three times running** (+0.023→+0.024,
-+0.021→+0.020, +0.004→+0.002). A small gold delta is a small real delta, not
-noise concealing a win. The gold 58's own noise floor is ~±0.02 per finding;
-macro deltas ≥ ~0.01 have been reliable.
+**Gold forecast the LB three times running, then missed** (+0.023→+0.024,
++0.021→+0.020, +0.004→+0.002, then +0.006→**−0.009** on the report-loss
+run). The rider from the miss: gold forecasts the LB when the change is
+label- or capacity-shaped; an auxiliary loss aimed at the same reports the
+val labels were mined from can move gold and val without moving the LB.
+The gold 58's own noise floor is ~±0.02 per finding.
 
 ## Closed: Phase A (labels) and Phase B (capacity)
 
@@ -44,7 +47,37 @@ overfitting, not headroom. What survives from Phase B as standing rules:
   historically +0.005–0.010, spent once at the end (see Phase D for the 9 h
   ceiling on fold count).
 
-## Phase C2 — auxiliary objectives (ACTIVE — the next Kaggle run)
+## Phase C2 — CLOSED 2026-08-26: the LB overruled gold
+
+Three runs settled it, the last one against the first two. The screen (both
+lambdas 0.2) came in at gold 0.854; the escalation (`LAMBDA_REPORT = 0.5`,
+`LAMBDA_RANK = 0.0`) reached val 0.881 / gold 0.867, the best fold-1
+numbers measured at 16 slices — and then **scored LB 0.880 against the
+aux-free twin's 0.889** on the identical geometry, fold, and notebook. The
+val gain was partly circular (val labels are mined from the same reports
+the aux target embeds) and the gold gain was inside the 58-study floor.
+See worklog 2026-08-26 for the full verification that this was the model
+and not the plumbing.
+
+**Both lambdas ship at 0.0 again.** The "24 slices + report loss" follow-up
+was gated on the LB confirming; the gate failed and the run is cancelled.
+What survives: the code, and the measured reduced-overfitting signature
+(val flat through epoch 12 where the plain 24-slice run decayed) — if a
+later phase reaches for capacity again, a small report lambda is a
+candidate regulariser there, gated on the LB and nothing softer. Phase C
+(extraction) is now the lever.
+
+**Standing trap until the next upload:** `knee-convnxt` holds the 0.880
+report-loss checkpoint and notebook 10 ships `TUNED_SLICES = 16`. The
+LB-best artefacts live on the Desktop: `lit_fold1_oldd.ckpt` (24 slices,
+LB 0.891, needs `TUNED_SLICES = 24`) and `lit_fold1_old.ckpt` (16-slice
+reference, LB 0.889, the efficiency candidate). Restore a matching
+checkpoint + slice-count pair before any future submission.
+
+The original screen design and its decision tree follow, kept because the
+branch conditions are the record of how this was called.
+
+## Phase C2 — auxiliary objectives (the screen, as designed)
 
 Two training-time-only losses in notebook 08, attacking what the pipeline
 structurally ignored. Both are dropped at export — the submission state dict

@@ -5,6 +5,93 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 — report loss on the LB: **0.880**, and the gold forecast breaks
+
+**The C2 winner submitted (fold 1, 16 × 5, `LAMBDA_REPORT = 0.5`): public LB
+0.880, against 0.889 for the aux-free twin on the identical geometry, fold,
+and notebook.** Gold said +0.006, val said +0.009, the forecast said ~0.895;
+the LB said −0.009. First miss after three hits.
+
+**It was not plumbing — each link was verified before believing the number:**
+
+- `knee-convnxt` held exactly one file, `lit_fold1.ckpt`, byte-identical in
+  size to the escalation checkpoint (uploaded 02:20, submitted 02:25, scored
+  0.880). Replaced, not joined — no two-model averaging.
+- The checkpoint's own stored hparams read `lambda_report: 0.5,
+  lambda_rank: 0.0`, selected epoch 8 — the escalation run, not the screen.
+  (The `metrics (1).csv` on the Desktop is the *screen's* log — its
+  hparams.yaml says 0.2/0.2 — a red herring; the submitted weights are the
+  right ones.)
+- Export is clean: the ckpt's 4 `report_head.*` keys sit outside the
+  `model.` prefix, `load_knee_state` drops them, and notebook 10's tuned
+  path loads strict — a key mismatch would have crashed, and the run scored.
+
+**Reading: the aux loss taught the model to predict reports, and the
+report-derived evaluations rewarded it for that.** Val labels are mined from
+the same reports the aux target embeds, so pulling the pooled embedding
+toward the report embedding buys val accuracy partly by circularity, not
+generalisation. Gold's +0.006 sits inside the 58-study ±0.02 floor. The
+public LB is the only large, report-independent evaluation in the loop, and
+it puts report 0.5 at −0.009 real AUC on this geometry. The forecast rule
+survives with a rider: **gold forecasts the LB when the training change is
+label- or capacity-shaped; a loss that points at the same text the val
+labels came from can move gold and val without moving the LB.**
+
+**Decisions:**
+
+- C2 closes with both lambdas at 0.0 as the shipped default (generator and
+  notebook 08 updated, 321 tests pass). The code stays — the
+  reduced-overfitting signature was real (val flat through epoch 12), so the
+  report loss may still earn a place if a later phase reaches for capacity,
+  e.g. a smaller lambda at 24 slices. Not at 16 slices, where it is measured
+  as a net loss.
+- The plan's "24 slices + report loss" follow-up was gated on the LB
+  confirming; the gate failed and the run is cancelled.
+- Phase C (extraction v3, Colab) is now the lever, as the plan already
+  ordered.
+- **Trap left standing: `knee-convnxt` currently holds the 0.880
+  checkpoint, and notebook 10 ships `TUNED_SLICES = 16`.** The LB-best
+  artefacts are the 24-slice fold-1 ckpt (Desktop `lit_fold1_oldd.ckpt`,
+  LB 0.891, needs `TUNED_SLICES = 24`) and the 16-slice reference (Desktop
+  `lit_fold1_old.ckpt`, LB 0.889, the efficiency-track candidate). Restore
+  the matching pair before any future best-config submission.
+
+## 2026-08-25 (f) — report loss alone: val 0.881, gold 0.867. C2 has a winner
+
+**`LAMBDA_REPORT = 0.5`, `LAMBDA_RANK = 0.0`, fold 1, 16 × 5. Selected epoch 8
+on val 0.881; gold there 0.867 — +0.009 val and +0.006 gold over the
+reference.** The rank loss was the problem, and dropping it is worth +0.013
+gold on its own:
+
+| config (fold 1, 16 × 5) | val peak | gold at selected |
+|---|---|---|
+| reference, no aux losses | 0.872 | 0.861 |
+| report 0.2 + rank 0.2 (the screen) | 0.868 | 0.854 |
+| **report 0.5 alone** | **0.881** | **0.867** |
+
+- The screen's net −0.007 was one loss helping and the other hurting, exactly
+  as the plan's borderline branch predicted. Rank's own loss had collapsed to
+  0.026 — it was ranking its own queue, not learning to rank studies.
+- **This matches the 24-slice run's numbers at 16-slice cost** (that run:
+  val 0.880, gold 0.865, LB 0.891). Same accuracy for ~30% less training and
+  ~33% less inference — strictly better on the efficiency track, where the
+  aux loss costs nothing because it is dropped at export.
+- **The overfitting signature is gone.** At 24 slices val peaked at epoch 7
+  and fell to 0.871 while gold fell 0.865 → 0.842. Here val holds flat
+  (0.881, 0.880, 0.880, 0.879, 0.878) and gold *rises* late, reaching 0.884
+  at epoch 10. Read that rise as noise — +0.017 on 58 studies is inside the
+  ±0.02 floor — but the absence of decay is real, and it is what the
+  regression target was predicted to buy.
+- 12.2 min/epoch against ~11 for the reference: the report loss costs ~11% of
+  training time and nothing at inference.
+
+Next (user, Kaggle): submit this checkpoint (~2 h). Notebook 10 already ships
+`TUNED_SLICES = 16`, so the geometry matches with no edit — but
+`knee-convnxt` still holds the 24-slice `lit_fold1.ckpt`, which must be
+**replaced, not joined**, or notebook 10 globs both and averages two models
+at one geometry. Gold has forecast the LB three times running, so expect
+roughly 0.895.
+
 ## 2026-08-25 (e) — aux-loss screen: gold 0.854, below the 0.861 reference
 
 **The C2 screen (fold 1, 16 × 5, both lambdas 0.2) selected at gold 0.854 —
