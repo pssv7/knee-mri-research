@@ -13,9 +13,12 @@ re-extraction all fused at or below the shipped 0.891, and a replication
 showed the differences between them were sampling noise (run-to-run sd
 ~0.004 against a between-config spread of 0.007). **The 58-study gold set
 cannot resolve a label change smaller than ~0.01, and the gate asked for
-0.005** — label quality is done as a lever. Budget goes to Phase D: the
-five-fold ensemble, then the gradient-similarity aux experiment. See worklog
-2026-08-26 (c) through (h)).
+0.005** — label quality is done as a lever. The gradient-similarity aux run also
+measured flat (val 0.874 / gold 0.856) and C2 is closed for good. Budget
+goes to Phase D — the five-fold ensemble, with notebook 08 instrumented to
+dump out-of-fold predictions — and then Phase E, self-distillation on the
+OOF matrix, the one supervision channel not yet tried. See `docs/plan.md`
+and worklog 2026-08-26 (c) through (l)).
 
 ---
 
@@ -42,15 +45,26 @@ in train but **not** in test, so text is a training-time signal only.
 | Fine-tuned ConvNeXt-T, dual-mode soft labels | 0.827 |
 | Fine-tuned ConvNeXt-T, dual-mode sharpened | 0.843 |
 | ConvNeXt-T, 16 slices, 3 series | 0.869 |
-| ConvNeXt-T, 16 slices, 5 series | 0.889 |
-| **ConvNeXt-T, 24 slices, 5 series** | **0.891 ← best** |
-| ConvNeXt-T, 16 slices, 5 series + report loss 0.5 | 0.880 |
+| ConvNeXt-T, 16 slices, 5 series (fold 1) | 0.889 |
+| **ConvNeXt-T, 24 slices, 5 series** (fold 1) | **0.891 ← best** |
+| ConvNeXt-T, 16 slices, 5 series + report loss 0.5 (fold 1) | 0.880 |
+| ConvNeXt-T, 16 slices, 5 series (**fold 3**) | 0.877 |
 | Leaderboard top | 0.952 |
 | Leaderboard 20th | 0.941 |
 
 **We are ~0.05 behind a very tight cluster.** Twenty teams sit within 0.011 of
 each other at 0.94+, which means a known recipe exists and the gap is structural
 rather than a matter of tuning.
+
+**Two identical configurations land 0.012 apart on the LB (2026-08-26).** Folds
+1 and 3, same geometry, same labels, aux-free: 0.889 and 0.877. Nothing about
+the models differs but the split. Two consequences, both live: any single-fold
+LB comparison of ≲0.012 across *different* folds is uninterpretable (same-fold
+comparisons, like C2's 0.880 vs 0.889, are unaffected); and calling 0.891 "the
+best config" is partly a statement about which fold drew the friendlier public
+split, which is why the final entry should be the fold average rather than the
+luckiest member. Fold 3 also carried the *higher* gold (0.867 vs 0.861) with
+the lower LB.
 
 ### The leading hypothesis was wrong, and the replacement is measured
 

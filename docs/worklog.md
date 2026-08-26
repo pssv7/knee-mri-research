@@ -5,6 +5,74 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-26 (m) — fold 3 scores LB 0.877 solo: the first cross-split LB measurement
+
+**Fold 3, submitted alone, scored public LB 0.877** (submission 55801109,
+2026-08-26 18:27:48). The run was clean: one checkpoint, correct geometry.
+
+**Read from the kernel log, not from recollection — and the recollection was
+wrong.** The run was first reported as `tuned folds : 3` / `tuned:
+convnext_fold3.pt`, which would have meant the standing glob trap had fired
+and averaged three models. It had not. `kaggle kernels output
+pssv27/submission-2` returns the actual log:
+
+```
+  tuned: lit_fold3.ckpt
+frozen folds: 0 (pool grid 1)  [skipped, BLEND=1.0]
+tuned folds : 1
+```
+
+`kernel-metadata.json` lists exactly two dataset sources (`knee-convnxt`,
+`knee-labels`), and `knee-convnxt` holds exactly one file, `lit_fold3.ckpt`.
+The notebook shipped `TUNED_SLICES = 16` / `TUNED_MAX_SERIES = 5`, matching
+fold 3's training geometry on both axes. No stale checkpoint, no duplicate
+load, no geometry mismatch. **0.877 is fold 3, honestly.**
+
+*Method worth keeping:* the whole verification is local and takes seconds —
+`kaggle kernels output <ref>` for the log, `kaggle kernels get <ref> -m` for
+the attached sources, `kaggle datasets files <ref>` for what a dataset holds,
+`kaggle competitions submissions -c <slug>` to tie a score to a run. Never
+settle a "which checkpoint scored this?" question by recollection again.
+
+**What the number means: the first measurement of how much the LB moves
+between splits at a fixed configuration.**
+
+| fold | val | gold | LB |
+|---|---|---|---|
+| 1 (16 × 5, aux-free) | 0.872 | 0.861 | **0.889** |
+| 3 (16 × 5, aux-free) | 0.869 | 0.867 | **0.877** |
+
+Same configuration, same geometry, same labels, different split: **0.012
+apart**, mean 0.883. Two points, so treat 0.012 as an order of magnitude and
+not a variance estimate — but it is the only such measurement the project
+has, and it costs an LB entry to get another.
+
+**Gold anti-predicted it.** Fold 3 has the *higher* gold (0.867 vs 0.861) and
+the *lower* LB. This is not a new failure of gold — it is exactly why the
+standing rule says never to read one fold's gold against another's — but it
+is the first time the rule has been confirmed on the leaderboard rather than
+asserted.
+
+**The consequence for Phase D, which changes a number in the plan.**
+Ensembling lifts above the *mean* member, not above the *best* member. With
+members averaging ~0.883, five folds at the historical +0.005–0.010 land at
+**~0.888–0.893** — straddling the current best of 0.891 rather than clearing
+it. The plan's stated expectation ("+0.005–0.010 on 0.889") was anchored to
+the best member and is too optimistic; it is corrected in `docs/plan.md`.
+
+**This does not cancel the ensemble, it changes its justification.** With
+equivalent models landing 0.012 apart on the public set, holding 0.891 as
+"the best config" is partly a bet on which fold drew the friendlier split —
+i.e. selection on the public LB, which is the one set that does not decide
+the competition. The five-fold average is the variance-reduction play for
+the **private** LB, and that is the reason to spend the remaining ~15.5 h,
+not a public-score climb. A five-fold result of ~0.890 should be recorded as
+the expected outcome, not read as a failure and not used to reopen anything.
+
+**Unchanged by this:** the C2 verdict. That comparison (0.880 vs 0.889) held
+the split fixed and varied only the loss, so cross-split spread does not
+apply to it.
+
 ## 2026-08-26 (l) — fold 3 banked: the ensemble's first new member
 
 **Fold 3, 16 × 5, aux-free: val 0.869, gold 0.867 at epoch 7. Verified from
