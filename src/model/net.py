@@ -49,6 +49,37 @@ def stack_2p5d(volumes: torch.Tensor) -> torch.Tensor:
     return stacked.reshape(n * depth, SLICE_CONTEXT, height, width)
 
 
+# The statistics DINOv2 was pretrained under. `embed.py` has always applied
+# these on the frozen path; the end-to-end path fed raw [0,1] and ConvNeXt
+# absorbed the shift into its first layer over twelve epochs. A pre-norm ViT
+# is far less forgiving, so the same trunk was being fed a distribution it
+# never saw during pretraining.
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+# How far below the head's learning rate a pretrained trunk should sit. The
+# optimiser puts every parameter in one group at OneCycle's peak of
+# `lr * max_lr_multiplier` = 3e-4, which a supervised ConvNeXt survives and a
+# self-supervised ViT does not: it loses its pretrained features during warmup
+# and then relearns them from 4,349 studies, which is the one regime ViTs are
+# worst in. Measured symptom: gold 0.6 at epoch 4 where ConvNeXt reached
+# 0.729, and *below* the same trunk frozen (0.770).
+VIT_BACKBONE_LR_SCALE = 0.1
+
+
+def backbone_defaults(name: str) -> dict:
+    """Input normalisation and trunk learning-rate scale for a backbone family.
+
+    Returns ConvNeXt's existing behaviour unchanged -- no normalisation, one
+    learning rate -- so the 0.861 fold-1 reference stays comparable.
+    """
+    lowered = name.lower()
+    if "vit" in lowered or "dinov2" in lowered:
+        return {"input_mean": IMAGENET_MEAN, "input_std": IMAGENET_STD,
+                "backbone_lr_scale": VIT_BACKBONE_LR_SCALE}
+    return {"input_mean": None, "input_std": None, "backbone_lr_scale": 1.0}
+
+
 def build_backbone(name: str, pretrained: bool = True,
                    image_size: Optional[int] = None):
     """Create a timm trunk mapping (N, 3, H, W) -> (N, num_features).
@@ -126,7 +157,8 @@ class KneeNet(nn.Module):
                  n_labels: int = None, series_layers: int = 2,
                  n_heads: int = 8, dropout: float = 0.2,
                  freeze_backbone: bool = False,
-                 input_dim: Optional[int] = None):
+                 input_dim: Optional[int] = None,
+                 input_mean=None, input_std=None):
         super().__init__()
         # None is valid on the frozen path, where the trunk ran offline.
         self.backbone = backbone if backbone is not None else nn.Identity()
@@ -143,6 +175,20 @@ class KneeNet(nn.Module):
         self.project = (nn.Linear(input_dim, feature_dim)
                         if input_dim and input_dim != feature_dim
                         else nn.Identity())
+
+        # Registered non-persistently: these are constants of the backbone
+        # family, not learned state, and adding them to the state dict would
+        # break the strict load of every checkpoint written before this.
+        if input_mean is not None:
+            self.register_buffer(
+                "input_mean",
+                torch.tensor(input_mean).view(1, -1, 1, 1), persistent=False)
+            self.register_buffer(
+                "input_std",
+                torch.tensor(input_std).view(1, -1, 1, 1), persistent=False)
+        else:
+            self.input_mean = None
+            self.input_std = None
 
         self.slice_pool = AttentionPool(feature_dim)
         self.film = FiLM(feature_dim)
@@ -166,6 +212,8 @@ class KneeNet(nn.Module):
             volumes = volumes.float().div_(255.0)
 
         slices = stack_2p5d(volumes)
+        if self.input_mean is not None:
+            slices = (slices - self.input_mean) / self.input_std
         features = self.backbone(slices)
         features = features.reshape(count, depth, self.feature_dim)
         return self.slice_pool(features)

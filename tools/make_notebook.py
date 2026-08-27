@@ -2544,6 +2544,12 @@ print(f"{BACKBONE}: {FEATURE_DIM} features, "
       f"{sum(p.numel() for p in _warm.parameters()) / 1e6:.1f}M params")
 del _warm
 
+# A pretrained ViT needs the statistics it was trained under and a slower rate
+# on the trunk than on the from-scratch aggregation; a ConvNeXt needs neither
+# and gets {} back, so its results stay comparable. See net.backbone_defaults.
+BACKBONE_DEFAULTS = net.backbone_defaults(BACKBONE)
+print("backbone defaults:", BACKBONE_DEFAULTS)
+
 auc = knee_lightning.auc
 """)
 
@@ -2673,7 +2679,11 @@ module = knee_lightning.KneeLitModule(
     backbone=net.build_backbone(BACKBONE),
     feature_dim=FEATURE_DIM, lr=LR, total_steps=TOTAL_STEPS,
     report_dim=REPORT_DIM, lambda_report=LAMBDA_REPORT,
-    lambda_rank=LAMBDA_RANK, aux_mode=AUX_MODE, aux_gate=AUX_GATE)
+    lambda_rank=LAMBDA_RANK, aux_mode=AUX_MODE, aux_gate=AUX_GATE,
+    **BACKBONE_DEFAULTS)
+print(f"trunk lr: {LR * BACKBONE_DEFAULTS['backbone_lr_scale']:.1e}  "
+      f"head lr: {LR:.1e}  "
+      f"input norm: {'on' if BACKBONE_DEFAULTS['input_mean'] else 'off'}")
 print(f"aux losses: report {LAMBDA_REPORT} (dim {REPORT_DIM})  "
       f"rank {LAMBDA_RANK}  mode {AUX_MODE}"
       + (f"/{AUX_GATE}" if AUX_MODE == "cosine" else ""))

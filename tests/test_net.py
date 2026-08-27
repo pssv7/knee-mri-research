@@ -448,3 +448,44 @@ class TestBuildBackbone:
         # 224 = 16 x 14. A cache size that did not divide by 14 would make the
         # position-embedding interpolation silently lossy rather than exact.
         assert config.CACHE_SIZE % 14 == 0
+
+
+class TestBackboneDefaults:
+    """ConvNeXt must keep the exact behaviour its 0.861 reference was trained
+    under, while a ViT gets the normalisation and trunk rate it needs."""
+
+    def test_convnext_keeps_the_original_behaviour(self):
+        d = net.backbone_defaults("convnext_tiny.fb_in22k_ft_in1k")
+        assert d["input_mean"] is None and d["input_std"] is None
+        assert d["backbone_lr_scale"] == 1.0
+
+    def test_a_dinov2_trunk_asks_for_normalisation_and_a_slower_rate(self):
+        d = net.backbone_defaults("vit_small_patch14_reg4_dinov2.lvd142m")
+        assert d["input_mean"] == net.IMAGENET_MEAN
+        assert d["backbone_lr_scale"] < 1.0
+
+    def test_normalisation_changes_the_input_the_backbone_sees(self):
+        seen = {}
+
+        class Spy(nn.Module):
+            def forward(self, x):
+                seen["mean"] = float(x.mean())
+                return torch.zeros(x.shape[0], 8)
+
+        volumes = torch.full((1, 2, 4, 8, 8), 255, dtype=torch.uint8)
+        plain = net.KneeNet(Spy(), 8)
+        plain.encode_series(volumes.reshape(2, 4, 8, 8))
+        raw = seen["mean"]
+
+        normed = net.KneeNet(Spy(), 8, input_mean=net.IMAGENET_MEAN,
+                             input_std=net.IMAGENET_STD)
+        normed.encode_series(volumes.reshape(2, 4, 8, 8))
+        assert abs(seen["mean"] - raw) > 0.5
+
+    def test_normalisation_buffers_stay_out_of_the_state_dict(self):
+        # Every checkpoint written before this must still load strictly.
+        normed = net.KneeNet(nn.Linear(4, 8), 8, input_mean=net.IMAGENET_MEAN,
+                             input_std=net.IMAGENET_STD)
+        plain = net.KneeNet(nn.Linear(4, 8), 8)
+        assert set(normed.state_dict()) == set(plain.state_dict())
+        plain.load_state_dict(normed.state_dict())

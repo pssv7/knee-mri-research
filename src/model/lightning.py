@@ -177,14 +177,18 @@ class KneeLitModule(pl.LightningModule):
                  report_dim: Optional[int] = None,
                  lambda_report: float = 0.0, lambda_rank: float = 0.0,
                  rank_queue_size: int = 256, rank_min_gap: float = 0.25,
-                 aux_mode: str = "fixed", aux_gate: str = "binary"):
+                 aux_mode: str = "fixed", aux_gate: str = "binary",
+                 backbone_lr_scale: float = 1.0,
+                 input_mean=None, input_std=None):
         super().__init__()
         if aux_mode not in ("fixed", "cosine"):
             raise ValueError(f"aux_mode must be fixed|cosine, got {aux_mode!r}")
         if aux_gate not in ("binary", "weighted"):
             raise ValueError(f"aux_gate must be binary|weighted, got {aux_gate!r}")
         self.save_hyperparameters(ignore=["backbone"])
-        self.model = net.KneeNet(backbone, feature_dim)
+        self.model = net.KneeNet(backbone, feature_dim,
+                                 input_mean=input_mean, input_std=input_std)
+        self.backbone_lr_scale = backbone_lr_scale
         self.lr = lr
         self.weight_decay = weight_decay
         self.total_steps = total_steps
@@ -403,11 +407,29 @@ class KneeLitModule(pl.LightningModule):
         self._val_outputs = {0: [], 1: []}
 
     def configure_optimizers(self):
-        optimiser = torch.optim.AdamW(self.parameters(), lr=self.lr,
-                                      weight_decay=self.weight_decay)
+        # One group unless a trunk asks for a slower one. The aggregation is
+        # trained from scratch and wants the full rate; a pretrained trunk at
+        # the same rate is fine for a supervised convnet and destroys a
+        # self-supervised ViT's features during OneCycle's warmup. Scale 1.0
+        # takes the original single-group path unchanged, so every ConvNeXt
+        # result stays comparable.
+        if self.backbone_lr_scale == 1.0:
+            optimiser = torch.optim.AdamW(self.parameters(), lr=self.lr,
+                                          weight_decay=self.weight_decay)
+            max_lr = self.lr * self.max_lr_multiplier
+        else:
+            trunk_ids = {id(p) for p in self.model.backbone.parameters()}
+            trunk = [p for p in self.parameters() if id(p) in trunk_ids]
+            rest = [p for p in self.parameters() if id(p) not in trunk_ids]
+            trunk_lr = self.lr * self.backbone_lr_scale
+            optimiser = torch.optim.AdamW(
+                [{"params": trunk, "lr": trunk_lr},
+                 {"params": rest, "lr": self.lr}],
+                lr=self.lr, weight_decay=self.weight_decay)
+            max_lr = [trunk_lr * self.max_lr_multiplier,
+                      self.lr * self.max_lr_multiplier]
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimiser, max_lr=self.lr * self.max_lr_multiplier,
-            total_steps=self.total_steps)
+            optimiser, max_lr=max_lr, total_steps=self.total_steps)
         return {
             "optimizer": optimiser,
             # Stepped per optimiser step, so accumulation is already folded in.

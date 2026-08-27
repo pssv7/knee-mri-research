@@ -610,3 +610,42 @@ class TestAuxiliaryLosses:
             self._module(aux_mode="adaptive")
         with pytest.raises(ValueError, match="aux_gate"):
             self._module(aux_gate="soft")
+
+
+class TestBackboneLearningRateGroups:
+    """A pretrained trunk can be given a slower rate than the head it feeds.
+
+    Scale 1.0 must take the original single-group path, because every
+    ConvNeXt result on record was trained through it.
+    """
+
+    def _module(self, scale):
+        import torch.nn as nn
+        return knee_lightning.KneeLitModule(
+            backbone=nn.Linear(4, 8), feature_dim=8, lr=1e-4,
+            total_steps=100, backbone_lr_scale=scale)
+
+    def test_default_keeps_one_group(self):
+        cfg = self._module(1.0).configure_optimizers()
+        assert len(cfg["optimizer"].param_groups) == 1
+
+    def test_a_scaled_trunk_gets_its_own_slower_group(self):
+        # OneCycleLR rewrites every group's `lr` to max_lr/div_factor as soon
+        # as it is constructed, so the peak it will reach -- stored on the
+        # group as `max_lr` -- is the honest thing to assert.
+        module = self._module(0.1)
+        groups = module.configure_optimizers()["optimizer"].param_groups
+        assert len(groups) == 2
+        assert groups[0]["max_lr"] == pytest.approx(3e-5)
+        assert groups[1]["max_lr"] == pytest.approx(3e-4)
+
+    def test_every_parameter_lands_in_exactly_one_group(self):
+        module = self._module(0.1)
+        groups = module.configure_optimizers()["optimizer"].param_groups
+        assigned = [id(p) for g in groups for p in g["params"]]
+        assert sorted(assigned) == sorted(id(p) for p in module.parameters())
+        assert len(assigned) == len(set(assigned))
+
+    def test_one_group_still_peaks_where_it_always_did(self):
+        groups = self._module(1.0).configure_optimizers()["optimizer"].param_groups
+        assert groups[0]["max_lr"] == pytest.approx(3e-4)
