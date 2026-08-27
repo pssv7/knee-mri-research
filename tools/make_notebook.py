@@ -2493,7 +2493,20 @@ def fetch_shard(dataset_handle, notebook_handle):
 
 
 for dataset_handle, notebook_handle in CACHE_DATASETS:
-    stage(*fetch_shard(dataset_handle, notebook_handle))
+    staged_path, staged_name = fetch_shard(dataset_handle, notebook_handle)
+    # The shards are opened with np.load(..., mmap_mode="r") and read by
+    # random access from several dataloader workers. That is a local-disk
+    # access pattern: over the Drive FUSE mount each page fault becomes a
+    # round trip, and the client's answer to random reads is to pull the whole
+    # 9.7 GB file into its local cache anyway -- paying the transfer twice and
+    # filling the VM disk while doing it. Storing the cache on Drive to skip
+    # the per-session download therefore does not work; only the small outputs
+    # belong there.
+    if staged_path.startswith("/content/drive"):
+        raise SystemExit(
+            f"{staged_name} resolved to {staged_path}, which is on Drive. "
+            "Training memmaps these files -- keep them on local disk.")
+    stage(staged_path, staged_name)
 
 print("pssv27/knee-labels ->",
       stage(kagglehub.dataset_download("pssv27/knee-labels"), "knee-labels"))
