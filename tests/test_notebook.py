@@ -337,3 +337,28 @@ class TestColabFinetuneNotebook:
                      "notebook_output_download("):
             assert staging.index(call) > check, (
                 f"{call} runs before the credential check")
+
+    def test_drive_is_copied_to_local_disk_not_read_in_place(self):
+        staging = [c for c in self._code("08_finetune_colab.ipynb")
+                   if "CACHE_DATASETS" in c][0]
+        assert "DRIVE_CACHE" in staging and "copy_from_drive" in staging
+        # shutil.copy2 onto LOCAL, which must not itself be on Drive.
+        assert "shutil.copy2(source, target)" in staging
+        local = [l for l in staging.split("\n") if l.startswith("LOCAL = ")][0]
+        assert "/content/drive" not in local, (
+            "training memmaps these files; the staging target must be local")
+
+    def test_a_short_copy_is_detected(self):
+        # A truncated .npy memmaps without complaint and trains on whatever
+        # bytes are present, so the copy is size-checked.
+        staging = [c for c in self._code("08_finetune_colab.ipynb")
+                   if "CACHE_DATASETS" in c][0]
+        assert "os.path.getsize(target) != size" in staging
+
+    def test_the_shard_count_is_reported(self):
+        # One shard instead of three trains on a third of the data and looks
+        # healthy doing it.
+        staging = [c for c in self._code("08_finetune_colab.ipynb")
+                   if "CACHE_DATASETS" in c][0]
+        assert "shards staged" in staging
+        assert "len(shards) < 3" in staging

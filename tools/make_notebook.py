@@ -2372,6 +2372,7 @@ result.
 # so the rest of this notebook is byte-identical to the Kaggle one.
 !pip install -q timm lightning kagglehub
 
+import glob
 import os
 import shutil
 
@@ -2492,42 +2493,113 @@ def fetch_shard(dataset_handle, notebook_handle):
         "Re-running this cell resumes from what already arrived.")
 
 
-for dataset_handle, notebook_handle in CACHE_DATASETS:
-    staged_path, staged_name = fetch_shard(dataset_handle, notebook_handle)
-    # The shards are opened with np.load(..., mmap_mode="r") and read by
-    # random access from several dataloader workers. That is a local-disk
-    # access pattern: over the Drive FUSE mount each page fault becomes a
-    # round trip, and the client's answer to random reads is to pull the whole
-    # 9.7 GB file into its local cache anyway -- paying the transfer twice and
-    # filling the VM disk while doing it. Storing the cache on Drive to skip
-    # the per-session download therefore does not work; only the small outputs
-    # belong there.
-    if staged_path.startswith("/content/drive"):
-        raise SystemExit(
-            f"{staged_name} resolved to {staged_path}, which is on Drive. "
-            "Training memmaps these files -- keep them on local disk.")
-    stage(staged_path, staged_name)
+# --- A Drive copy of the kagglehub cache, if a previous session left one ----
+# Copying from Drive beats fetching from Kaggle again, but it must be a COPY
+# on to local disk, never used in place: the shards are opened with
+# np.load(..., mmap_mode="r") and read by random access from several
+# dataloader workers, and over the Drive FUSE mount every page fault is a
+# round trip. The client's answer to random reads is to pull the whole 9.7 GB
+# file into its local cache anyway, so training in place pays the transfer
+# regardless while filling the VM disk -- the failure already seen once.
+#
+# Set to None to skip Drive entirely and go straight to Kaggle.
+DRIVE_CACHE = "/content/drive/MyDrive/kagglehub"
 
-print("pssv27/knee-labels ->",
-      stage(kagglehub.dataset_download("pssv27/knee-labels"), "knee-labels"))
+# What the notebook below actually opens, by the same patterns find_inputs
+# globs. Anything missing after this cell is fetched from Kaggle instead.
+REQUIRED = ("cache_train_series_*.npy", "manifest_train_series_*.parquet",
+            "train_labels.parquet", "side_predictions.parquet")
+OPTIONAL = ("report_embeddings.parquet",)   # report loss only; lambdas are 0.0
 
-# A notebook output, so this one downloads. It is small.
-stage(kagglehub.notebook_output_download("pssv27/knee-side-classifier"),
-      "knee-side-classifier")
+LOCAL = "/kaggle/input/from_drive"
+
+
+def copy_from_drive(root, patterns):
+    # Search by name rather than by cache layout: what matters is the file the
+    # notebook opens, not which handle it arrived under.
+    os.makedirs(LOCAL, exist_ok=True)
+    found = []
+    for pattern in patterns:
+        for source in sorted(glob.glob(f"{root}/**/{pattern}", recursive=True)):
+            name = os.path.basename(source)
+            target = os.path.join(LOCAL, name)
+            size = os.path.getsize(source)
+            if os.path.exists(target) and os.path.getsize(target) == size:
+                print(f"  already local  {name}")
+                found.append(name)
+                continue
+            print(f"  copying        {name}  ({size / 1e9:.2f} GB)", flush=True)
+            shutil.copy2(source, target)
+            # A truncated .npy memmaps without complaint and trains on
+            # whatever bytes are there, so compare sizes rather than trust it.
+            if os.path.getsize(target) != size:
+                raise SystemExit(f"{name} copied short -- delete {target} "
+                                 "and re-run this cell")
+            found.append(name)
+    return found
+
+
+if DRIVE_CACHE and not os.path.isdir("/content/drive/MyDrive"):
+    from google.colab import drive
+
+    drive.mount("/content/drive")
+
+if DRIVE_CACHE and os.path.isdir(DRIVE_CACHE):
+    print(f"Drive cache found at {DRIVE_CACHE}; copying to local disk")
+    copy_from_drive(DRIVE_CACHE, REQUIRED + OPTIONAL)
+elif DRIVE_CACHE:
+    print(f"no Drive cache at {DRIVE_CACHE} (mount Drive first if you have "
+          "one); falling back to Kaggle")
+
+
+def missing(patterns):
+    absent = []
+    for pattern in patterns:
+        if not glob.glob(f"/kaggle/input/**/{pattern}", recursive=True):
+            absent.append(pattern)
+    return absent
+
+
+# --- Whatever Drive did not supply, fetch from Kaggle -----------------------
+if missing(("cache_train_series_*.npy",)):
+    for dataset_handle, notebook_handle in CACHE_DATASETS:
+        stage(*fetch_shard(dataset_handle, notebook_handle))
+
+if missing(("train_labels.parquet",)):
+    stage(kagglehub.dataset_download("pssv27/knee-labels"), "knee-labels")
+
+if missing(("side_predictions.parquet",)):
+    # A notebook output, so this one downloads. It is small.
+    stage(kagglehub.notebook_output_download("pssv27/knee-side-classifier"),
+          "knee-side-classifier")
 
 # find_competition_file checks data/<name> first. `path=` fetches one file;
 # without it, competition_download pulls the entire 570 GB DICOM archive.
 os.makedirs("data", exist_ok=True)
 for name in ("train.csv", "train_series.csv"):
-    source = kagglehub.competition_download(
+    if os.path.exists(f"data/{name}"):
+        continue
+    local = glob.glob(f"{DRIVE_CACHE}/**/{name}", recursive=True) if DRIVE_CACHE else []
+    source = local[0] if local else kagglehub.competition_download(
         "rsna-knee-abnormality-detection", path=name)
     shutil.copy(source, f"data/{name}")
-    print(name, os.path.getsize(f"data/{name}") // 1024, "KB")
+for name in ("train.csv", "train_series.csv"):
+    print(f"  {name}: {os.path.getsize(f'data/{name}') // 1024} KB")
 
-# One shard mounted instead of three trains on a third of the data and looks
-# entirely healthy while doing it, so say the count out loud.
-print("\\ncache datasets mounted:", len(CACHE_DATASETS),
-      "-- the assemble cell must report 4,349 studies")
+# --- Verify, because every failure mode here is silent ----------------------
+still_absent = missing(REQUIRED)
+if still_absent:
+    raise SystemExit(f"not staged: {still_absent}")
+
+shards = sorted(glob.glob("/kaggle/input/**/cache_train_series_*.npy",
+                          recursive=True))
+print(f"\\nshards staged: {len(shards)}")
+for path in shards:
+    print(f"  {os.path.basename(path)}  {os.path.getsize(path) / 1e9:.1f} GB")
+if len(shards) < 3:
+    print("WARNING: fewer than three shards. A short run looks entirely "
+          "healthy and trains on part of the data -- the assemble cell must "
+          "report 4,349 studies.")
 """)
 
     setup_source = """
