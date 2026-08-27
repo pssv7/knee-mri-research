@@ -2402,15 +2402,21 @@ from kagglehub.config import get_kaggle_credentials
 # enough; a classic username/key pair is not required.
 if get_kaggle_credentials() is None:
     print("No Kaggle credentials found.\\n"
-          "Preferred: add a Colab secret named KAGGLE_API_TOKEN and enable "
-          "notebook access, then re-run this cell.\\n"
-          "Falling back to an interactive login.")
+          "Best: add a Colab secret named KAGGLE_API_TOKEN holding the "
+          "KGAT_... value and enable notebook access -- then re-running this "
+          "cell needs no typing at all.\\n"
+          "Otherwise paste a token into the widget below and click Login.")
     kagglehub.login()
-    if get_kaggle_credentials() is None:
-        raise SystemExit(
-            "still unauthenticated -- the private shards and the competition "
-            "would both fail below, and not in a way that names this as the "
-            "cause")
+    # In a notebook, login() only DISPLAYS a widget and returns: the token is
+    # stored by the button's on_click callback, which cannot fire until this
+    # cell has finished running. So there is nothing to re-check here -- a
+    # credential test on the next line always fails, however well the login
+    # went, which is exactly the false alarm this comment replaces. Stop, and
+    # let the next execution of this cell read what the callback stored.
+    raise SystemExit(
+        "NOT AN ERROR: paste the token into the widget above, click Login, "
+        "then re-run this cell. The widget's callback runs after this cell "
+        "ends, so the credentials cannot be visible until the next run.")
 print("kaggle credentials: resolved")
 
 # Leave the cache on local disk. Pointed at Drive, the FUSE layer stages every
