@@ -2377,7 +2377,7 @@ import shutil
 
 import kagglehub
 
-from kagglehub.config import get_kaggle_credentials
+from kagglehub.config import get_kaggle_credentials, set_kaggle_api_token
 
 # --- Authentication ---------------------------------------------------------
 # Every source below needs it: the shards and knee-labels are private, and the
@@ -2401,23 +2401,33 @@ from kagglehub.config import get_kaggle_credentials
 # -> switch "Notebook access" on for this notebook. The bearer token is
 # enough; a classic username/key pair is not required.
 if get_kaggle_credentials() is None:
-    print("No Kaggle credentials found.\\n"
-          "Best: add a Colab secret named KAGGLE_API_TOKEN holding the "
-          "KGAT_... value and enable notebook access -- then re-running this "
-          "cell needs no typing at all.\\n"
-          "Otherwise paste a token into the widget below and click Login.")
-    kagglehub.login()
-    # In a notebook, login() only DISPLAYS a widget and returns: the token is
-    # stored by the button's on_click callback, which cannot fire until this
-    # cell has finished running. So there is nothing to re-check here -- a
-    # credential test on the next line always fails, however well the login
-    # went, which is exactly the false alarm this comment replaces. Stop, and
-    # let the next execution of this cell read what the callback stored.
-    raise SystemExit(
-        "NOT AN ERROR: paste the token into the widget above, click Login, "
-        "then re-run this cell. The widget's callback runs after this cell "
-        "ends, so the credentials cannot be visible until the next run.")
-print("kaggle credentials: resolved")
+    # getpass, NOT kagglehub.login(). Inside a notebook, login() renders an
+    # ipywidgets form and returns immediately; the token is stored by the
+    # button's on_click callback, which cannot run until this cell has already
+    # finished. So the login appears to succeed while this cell sees nothing,
+    # and the credential it stored lives only in a module global that a
+    # runtime restart discards -- which is how the same widget can be filled
+    # in twice and still leave the next run unauthenticated. getpass blocks
+    # until the token is in hand, so everything below is synchronous.
+    import getpass
+
+    token = getpass.getpass(
+        "Kaggle API token (KGAT_...), input hidden; Enter to abort: ").strip()
+    if not token:
+        raise SystemExit(
+            "No token entered. The durable fix is a Colab secret named "
+            "KAGGLE_API_TOKEN with notebook access enabled -- kagglehub reads "
+            "it automatically, so a reconnected runtime needs no typing.")
+
+    # Both on purpose. set_kaggle_api_token fills the module global this
+    # process reads; the environment variable is what survives kagglehub being
+    # re-imported, and is checked before Colab secrets.
+    os.environ["KAGGLE_API_TOKEN"] = token
+    set_kaggle_api_token(token)
+
+# Synchronous, and it fails loudly on a bad token rather than at the first
+# mount, where the error is a bare 404 on a handle that plainly exists.
+print("authenticated as:", kagglehub.whoami()["username"])
 
 # Leave the cache on local disk. Pointed at Drive, the FUSE layer stages every
 # byte on the VM's disk first and fills it long before Drive notices.

@@ -319,13 +319,19 @@ class TestColabFinetuneNotebook:
         staging = [c for c in self._code("08_finetune_colab.ipynb")
                    if "CACHE_DATASETS" in c][0]
         assert "get_kaggle_credentials()" in staging
-        # login() in a notebook only displays a widget and returns; the token
-        # is stored by a callback that cannot run until the cell ends, so a
-        # credential re-check after login() always fails and must not exist.
-        # rindex: the credential-order comment above also names login().
-        after_login = staging[staging.rindex("kagglehub.login()"):]
-        assert "get_kaggle_credentials()" not in after_login, (
-            "re-checking credentials after login() is a guaranteed false alarm")
+        # kagglehub.login() must not be called: in a notebook it renders an
+        # ipywidgets form and returns, storing the token from a callback that
+        # cannot run until the cell has finished, so the cell never sees it.
+        # Compare code lines only: the comment documenting kagglehub's
+        # credential order legitimately names login().
+        code = "\n".join(line for line in staging.split("\n")
+                         if not line.strip().startswith("#"))
+        assert "kagglehub.login()" not in code, (
+            "login() is asynchronous in a notebook; use getpass instead")
+        assert "getpass" in staging
+        # The token must reach the environment too, or a re-import loses it.
+        assert 'os.environ["KAGGLE_API_TOKEN"]' in staging
+        assert "whoami()" in staging, "authentication is never verified"
         check = staging.index("get_kaggle_credentials() is None")
         for call in ("dataset_download(", "competition_download(",
                      "notebook_output_download("):
