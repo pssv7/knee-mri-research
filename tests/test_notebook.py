@@ -304,6 +304,9 @@ class TestColabFinetuneNotebook:
         assert "dataset_download" in staging
         for handle in ("shard-1", "shard-2", "shard-3"):
             assert handle in staging
+        # The mount is tried first; the download is the fallback, not the path.
+        assert staging.index("dataset_download(") < staging.index(
+            "notebook_output_download(")
 
     def test_the_cache_folder_is_not_pointed_at_drive(self):
         staging = [c for c in self._code("08_finetune_colab.ipynb")

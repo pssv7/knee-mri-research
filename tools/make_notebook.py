@@ -2431,16 +2431,56 @@ def stage(path, name):
     return destination
 
 
-# Mounted, not copied. These must be DATASETS -- a notebook output has no
-# Colab resolver and would download ~9.7 GB each.
+# Each shard is wanted as a DATASET, which Colab mounts without copying
+# anything. Until the one-time conversion has been run they exist only as
+# notebook outputs, which have no Colab resolver and must be downloaded --
+# ~9.7 GB each, once per session, because the VM is ephemeral.
+#
+# That download is survivable. kagglehub resumes a partial transfer with an
+# HTTP Range request and verifies the MD5 afterwards, so the ~5.5 GB
+# IncompleteRead ceiling recorded in PROJECT.md -- measured against the older
+# CLI, which had no resume -- costs retries rather than the whole file. Each
+# retry picks up where the last stopped.
 CACHE_DATASETS = (
-    "pssv27/knee-cache-shard-1",
-    "pssv27/knee-cache-shard-2",
-    "pssv27/knee-cache-shard-3",
+    ("pssv27/knee-cache-shard-1", "pssv27/knee-cache-224-01-shard-1"),
+    ("pssv27/knee-cache-shard-2", "pssv27/knee-cache-224-01-shard-2"),
+    ("pssv27/knee-cache-shard-3", "pssv27/knee-cache-224-01-shard-3"),
 )
-for handle in CACHE_DATASETS + ("pssv27/knee-labels",):
-    print(handle, "->", stage(kagglehub.dataset_download(handle),
-                              handle.split("/")[1]))
+DOWNLOAD_ATTEMPTS = 10
+
+free_gb = shutil.disk_usage("/").free / 1e9
+print(f"local disk free: {free_gb:.0f} GB "
+      f"({'mounts need almost none' if free_gb > 40 else 'TIGHT for downloads'})")
+
+
+def fetch_shard(dataset_handle, notebook_handle):
+    # Prefer the mount. Fall back to the copy, and keep resuming it.
+    try:
+        path = kagglehub.dataset_download(dataset_handle)
+        print(f"  mounted  {dataset_handle}")
+        return path, dataset_handle.split("/")[1]
+    except Exception as exc:  # noqa: BLE001 - any failure means "not a dataset yet"
+        print(f"  {dataset_handle}: {type(exc).__name__} -- "
+              f"downloading {notebook_handle} instead")
+
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            path = kagglehub.notebook_output_download(notebook_handle)
+            print(f"  downloaded {notebook_handle}")
+            return path, notebook_handle.split("/")[1]
+        except Exception as exc:  # noqa: BLE001 - resume and try again
+            print(f"    attempt {attempt}/{DOWNLOAD_ATTEMPTS} "
+                  f"{type(exc).__name__}: {exc}")
+    raise SystemExit(
+        f"{notebook_handle} did not complete in {DOWNLOAD_ATTEMPTS} attempts. "
+        "Re-running this cell resumes from what already arrived.")
+
+
+for dataset_handle, notebook_handle in CACHE_DATASETS:
+    stage(*fetch_shard(dataset_handle, notebook_handle))
+
+print("pssv27/knee-labels ->",
+      stage(kagglehub.dataset_download("pssv27/knee-labels"), "knee-labels"))
 
 # A notebook output, so this one downloads. It is small.
 stage(kagglehub.notebook_output_download("pssv27/knee-side-classifier"),
