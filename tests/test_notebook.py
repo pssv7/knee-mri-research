@@ -309,3 +309,15 @@ class TestColabFinetuneNotebook:
         staging = [c for c in self._code("08_finetune_colab.ipynb")
                    if "CACHE_DATASETS" in c][0]
         assert 'os.environ.pop("KAGGLEHUB_CACHE"' in staging
+
+    def test_credentials_are_checked_before_anything_is_fetched(self):
+        # Private shards and the competition both 401/404 without auth, and
+        # neither failure names authentication as the cause.
+        staging = [c for c in self._code("08_finetune_colab.ipynb")
+                   if "CACHE_DATASETS" in c][0]
+        assert "get_kaggle_credentials()" in staging
+        check = staging.index("get_kaggle_credentials() is None")
+        for call in ("dataset_download(", "competition_download(",
+                     "notebook_output_download("):
+            assert staging.index(call) > check, (
+                f"{call} runs before the credential check")

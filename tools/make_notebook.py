@@ -2298,6 +2298,16 @@ no such resolver for notebook *outputs* or for competitions, so:
   `path=`. Never call `competition_download` without it: the bare call pulls
   the full 570 GB DICOM archive.
 
+**Authentication is required and is checked first.** The shards and
+`knee-labels` are private, and the competition needs its rules accepted on
+this account; an unauthenticated call fails as a 401 or a bare 404 on a
+handle that plainly exists, which names nothing. Add a Colab secret called
+`KAGGLE_API_TOKEN` holding the `KGAT_...` bearer token (the key icon in the
+sidebar, with notebook access enabled) and the staging cell needs no edit.
+kagglehub checks Colab Secrets last, after `KAGGLE_API_TOKEN` in the
+environment, the legacy `KAGGLE_USERNAME`/`KAGGLE_KEY` pair, and
+`~/.kaggle/kaggle.json` -- the bearer token alone is enough at any of them.
+
 **Do not point `KAGGLEHUB_CACHE` at Drive.** Every byte written through the
 Drive FUSE mount is staged on the VM's local disk first, and kagglehub writes
 each archive twice (download, then extract beside it). That fills a ~100 GB
@@ -2366,6 +2376,42 @@ import os
 import shutil
 
 import kagglehub
+
+from kagglehub.config import get_kaggle_credentials
+
+# --- Authentication ---------------------------------------------------------
+# Every source below needs it: the shards and knee-labels are private, and the
+# competition additionally needs the rules accepted on this account. An
+# unauthenticated call does not say so -- it fails inside the resolver as a
+# 401 or a bare 404 on a handle that plainly exists -- so credentials are
+# resolved and checked here, before anything touches the network.
+#
+# kagglehub reads, in order (kagglehub/config.py, get_kaggle_credentials):
+#   1. kagglehub.login() or set_kaggle_api_token() earlier in this session
+#   2. env KAGGLE_API_TOKEN  -- the KGAT_... bearer token, or a path to a file
+#      holding it
+#   3. env KAGGLE_USERNAME + KAGGLE_KEY   (legacy pair)
+#   4. ~/.kaggle/kaggle.json              (legacy pair)
+#   5. Colab Secrets, checked last: a secret named KAGGLE_API_TOKEN first,
+#      then KAGGLE_USERNAME + KAGGLE_KEY
+#
+# EASIEST ON COLAB, and no code to edit: the key icon in the left sidebar ->
+# "Add new secret" -> name it KAGGLE_API_TOKEN, paste the KGAT_... string
+# (it is in ~/.kaggle/access_token on the machine that runs the Kaggle CLI)
+# -> switch "Notebook access" on for this notebook. The bearer token is
+# enough; a classic username/key pair is not required.
+if get_kaggle_credentials() is None:
+    print("No Kaggle credentials found.\\n"
+          "Preferred: add a Colab secret named KAGGLE_API_TOKEN and enable "
+          "notebook access, then re-run this cell.\\n"
+          "Falling back to an interactive login.")
+    kagglehub.login()
+    if get_kaggle_credentials() is None:
+        raise SystemExit(
+            "still unauthenticated -- the private shards and the competition "
+            "would both fail below, and not in a way that names this as the "
+            "cause")
+print("kaggle credentials: resolved")
 
 # Leave the cache on local disk. Pointed at Drive, the FUSE layer stages every
 # byte on the VM's disk first and fills it long before Drive notices.
