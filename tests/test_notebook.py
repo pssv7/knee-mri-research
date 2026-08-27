@@ -248,3 +248,64 @@ class TestSubmissionGuardsTheActivePath:
         guard_at = ensemble.index("no predictions to write")
         frame_at = ensemble.index("submission = pd.DataFrame(blended")
         assert guard_at < frame_at
+
+
+class TestColabFinetuneNotebook:
+    """The Colab copy of notebook 08 is generated from the same source.
+
+    Its whole value is that a result from it is comparable with a Kaggle run,
+    which holds only while the cells that decide the numbers are identical.
+    """
+
+    def _code(self, name):
+        path = os.path.join(ROOT, "notebooks", name)
+        with open(path) as handle:
+            cells = json.load(handle)["cells"]
+        return ["".join(c["source"]) for c in cells if c["cell_type"] == "code"]
+
+    def test_both_notebooks_exist(self):
+        for name in ("08_finetune.ipynb", "08_finetune_colab.ipynb"):
+            assert os.path.exists(os.path.join(ROOT, "notebooks", name))
+
+    def test_the_training_cell_is_identical(self):
+        # The bootstrap cell embeds lightning.py, which also defines the
+        # class, so match the construction call rather than the name.
+        kaggle = [c for c in self._code("08_finetune.ipynb")
+                  if "knee_lightning.KneeLitModule(" in c]
+        colab = [c for c in self._code("08_finetune_colab.ipynb")
+                 if "knee_lightning.KneeLitModule(" in c]
+        assert len(kaggle) == 1 and len(colab) == 1
+        assert kaggle[0] == colab[0], (
+            "the Colab copy's training cell has drifted -- its results are no "
+            "longer comparable with a Kaggle run")
+
+    def test_the_oof_dump_is_identical(self):
+        kaggle = [c for c in self._code("08_finetune.ipynb")
+                  if "oof_fold" in c]
+        colab = [c for c in self._code("08_finetune_colab.ipynb")
+                 if "oof_fold" in c and "drive" not in c]
+        assert kaggle[0] == colab[0]
+
+    def test_the_competition_is_never_downloaded_whole(self):
+        # A bare competition_download pulls the 570 GB DICOM archive; only the
+        # two CSVs are needed and `path=` is what fetches one file.
+        for cell in self._code("08_finetune_colab.ipynb"):
+            for line in cell.split("\n"):
+                if "competition_download(" in line and "def " not in line:
+                    call = cell[cell.index("competition_download("):]
+                    assert "path=" in call.split(")")[0] + call.split(")")[1], (
+                        "competition_download without path= downloads 570 GB")
+
+    def test_the_cache_comes_from_datasets_not_notebook_outputs(self):
+        # notebook_output_download has no Colab resolver and would copy
+        # ~9.7 GB per shard instead of mounting it.
+        staging = [c for c in self._code("08_finetune_colab.ipynb")
+                   if "CACHE_DATASETS" in c][0]
+        assert "dataset_download" in staging
+        for handle in ("shard-1", "shard-2", "shard-3"):
+            assert handle in staging
+
+    def test_the_cache_folder_is_not_pointed_at_drive(self):
+        staging = [c for c in self._code("08_finetune_colab.ipynb")
+                   if "CACHE_DATASETS" in c][0]
+        assert 'os.environ.pop("KAGGLEHUB_CACHE"' in staging

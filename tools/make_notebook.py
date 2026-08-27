@@ -2259,7 +2259,7 @@ worth measuring even when the budget is not at risk.
 # 08 -- end-to-end fine-tuning (Colab)
 # ---------------------------------------------------------------------------
 
-def build_finetune_notebook():
+def build_finetune_notebook(colab=False):
     nb = Notebook(gpu=True)
 
     nb.md("""
@@ -2269,18 +2269,67 @@ Trains a ConvNeXt-T end to end instead of reading frozen DINOv2 features. Prior
 RSNA competitions were won by fine-tuned ImageNet CNNs, so this is the arm most
 likely to top the leaderboard, and the one the frozen path exists to be
 measured against.
+""")
 
-**Runs on Kaggle, not Colab.** Fine-tuning needs raw volumes, and one cache
-shard is 9.7 GB. Pulling that to Colab failed twice at ~5.5 GB with
+    if colab:
+        nb.md("""
+**This is the Colab copy of notebook 08.** Generated from the same source as
+`08_finetune.ipynb` -- edit `tools/make_notebook.py` and regenerate, never
+this file. Everything below the staging cell is identical to the Kaggle
+notebook, so a result from either is comparable with the other.
+
+**Why a copy exists at all.** The Kaggle GPU quota is 25 h/week and one
+session at a time; when it is spent, Colab is the only GPU left. The blocker
+was never compute, it was the 29 GB cache -- and pulling that over HTTP fails
+at ~5.5 GB with IncompleteRead, consistently.
+
+**The route that works is a mount, not a download.** `kagglehub` resolves a
+Kaggle *dataset* on Colab by asking Colab's backend to mount it at
+`/kaggle/input/<slug>` -- no copy, no Drive, no transfer. That is the same
+path Kaggle itself uses, which is why `find_inputs` needs no change. There is
+no such resolver for notebook *outputs* or for competitions, so:
+
+- the three cache shards must exist as **datasets** (one-time conversion, run
+  `kagglehub.dataset_upload()` from a Kaggle **CPU** notebook -- CPU sessions
+  do not touch the GPU quota),
+- `knee-side-classifier` is a notebook output and downloads, which is fine at
+  its size,
+- the competition contributes exactly two CSVs, fetched per-file with
+  `path=`. Never call `competition_download` without it: the bare call pulls
+  the full 570 GB DICOM archive.
+
+**Do not point `KAGGLEHUB_CACHE` at Drive.** Every byte written through the
+Drive FUSE mount is staged on the VM's local disk first, and kagglehub writes
+each archive twice (download, then extract beside it). That fills a ~100 GB
+VM regardless of how much Drive quota exists.
+
+**One GPU is expected here**, so `STRATEGY` resolves to `"auto"` rather than
+`ddp_notebook`: there is no fork, and the CUDA-poisoning trap that governs
+the Kaggle run does not apply. `ACCUM_STEPS` adapts to hold the effective
+batch constant, so the run stays numerically comparable to a two-GPU one.
+
+**`/kaggle/working` is ephemeral on Colab.** The last cell copies the
+checkpoint, `metrics.csv` and the OOF dump to Drive; those are small. Run it.
+""")
+    else:
+        nb.md("""
+**Runs on Kaggle.** Fine-tuning needs raw volumes, and one cache shard is
+9.7 GB. Pulling that to Colab over HTTP failed twice at ~5.5 GB with
 IncompleteRead -- a consistent ceiling rather than a flaky connection. On
 Kaggle the cache is already mounted and nothing transfers. A T4 is slower than
 an A100, but not slower than a download that never finishes.
+
+If the GPU quota is spent, `08_finetune_colab.ipynb` is the same notebook with
+a staging cell that *mounts* the shards on Colab instead of copying them.
 
 **Attach:** one cache dataset, `knee-labels`, `knee_side_classifier`, and the
 competition data. GPU on. The auxiliary report loss additionally wants
 `report_embeddings.parquet` (built locally by `src/labels/report_embed.py`)
 in the `knee-labels` dataset; without it that loss silently disables, which
 the assemble cell prints.
+""")
+
+    nb.md("""
 
 **This run measures before it commits.** One study is ~5.5 series x 24 slices
 = ~130 slice-forwards, so a full epoch over 4,349 studies is ~570,000. The
@@ -2305,10 +2354,70 @@ result.
 
     nb.md("## 1. Setup")
 
-    nb.code("""
-!pip install -q timm
+    if colab:
+        nb.code("""
+# --- Colab staging: mount the Kaggle data, then run the cells below unchanged.
+# Nothing here writes to Drive. dataset_download MOUNTS on Colab (no copy) and
+# lands under /kaggle/input/<slug>, which is exactly where find_inputs looks,
+# so the rest of this notebook is byte-identical to the Kaggle one.
+!pip install -q timm lightning kagglehub
 
 import os
+import shutil
+
+import kagglehub
+
+# Leave the cache on local disk. Pointed at Drive, the FUSE layer stages every
+# byte on the VM's disk first and fills it long before Drive notices.
+os.environ.pop("KAGGLEHUB_CACHE", None)
+
+# Notebook 08 writes the checkpoint, metrics.csv and the OOF dump here.
+os.makedirs("/kaggle/working", exist_ok=True)
+os.makedirs("/kaggle/input", exist_ok=True)
+
+
+def stage(path, name):
+    # Make anything that had to be downloaded look like a mount, so the one
+    # find_inputs implementation works on both platforms.
+    destination = f"/kaggle/input/{name}"
+    if not os.path.exists(destination):
+        os.symlink(path, destination)
+    return destination
+
+
+# Mounted, not copied. These must be DATASETS -- a notebook output has no
+# Colab resolver and would download ~9.7 GB each.
+CACHE_DATASETS = (
+    "pssv27/knee-cache-shard-1",
+    "pssv27/knee-cache-shard-2",
+    "pssv27/knee-cache-shard-3",
+)
+for handle in CACHE_DATASETS + ("pssv27/knee-labels",):
+    print(handle, "->", stage(kagglehub.dataset_download(handle),
+                              handle.split("/")[1]))
+
+# A notebook output, so this one downloads. It is small.
+stage(kagglehub.notebook_output_download("pssv27/knee-side-classifier"),
+      "knee-side-classifier")
+
+# find_competition_file checks data/<name> first. `path=` fetches one file;
+# without it, competition_download pulls the entire 570 GB DICOM archive.
+os.makedirs("data", exist_ok=True)
+for name in ("train.csv", "train_series.csv"):
+    source = kagglehub.competition_download(
+        "rsna-knee-abnormality-detection", path=name)
+    shutil.copy(source, f"data/{name}")
+    print(name, os.path.getsize(f"data/{name}") // 1024, "KB")
+
+# One shard mounted instead of three trains on a third of the data and looks
+# entirely healthy while doing it, so say the count out loud.
+print("\\ncache datasets mounted:", len(CACHE_DATASETS),
+      "-- the assemble cell must report 4,349 studies")
+""")
+
+    setup_source = """
+!pip install -q timm
+
 import os
 import subprocess
 
@@ -2353,7 +2462,24 @@ except ImportError:
     except ImportError:
         raise SystemExit("pip install lightning, then re-run this cell")
 print("lightning:", pl.__version__)
-""")
+"""
+
+    if colab:
+        # One GPU is the expected shape on Colab, so the two-GPU advice would
+        # be noise; and the accelerator lives in a different menu.
+        setup_source = setup_source.replace(
+            'raise SystemExit("Settings -> Accelerator -> GPU T4 x2")',
+            'raise SystemExit("Runtime -> Change runtime type -> GPU")')
+        setup_source = setup_source.replace(
+            '''if DEVICES < 2:
+    print("NOTE: one GPU visible. Settings -> Accelerator -> GPU T4 x2 "
+          "roughly halves wall-clock. The run is correct either way -- "
+          "ACCUM_STEPS below adapts to hold the effective batch constant.")''',
+            '''if DEVICES < 2:
+    print("one GPU: STRATEGY resolves to 'auto', so there is no fork and no "
+          "CUDA-poisoning trap here. ACCUM_STEPS adapts to hold the effective "
+          "batch constant, so this stays comparable to a two-GPU run.")''')
+    nb.code(setup_source)
 
     nb.md("## 2. Repo modules")
     nb.code(bootstrap_cell(FINETUNE_MODULES, require_raw_dicom=False))
@@ -2950,6 +3076,41 @@ if float(_spread.min()) < 0.01:
           "check before using this dump for label work")
 """)
 
+    if colab:
+        nb.md("""
+## 10. Save the artefacts off the VM
+
+`/kaggle/working` disappears with the runtime, and a reclaimed session takes
+the checkpoint with it. These three files are small.
+""")
+
+        nb.code("""
+from google.colab import drive
+
+drive.mount("/content/drive")
+
+DRIVE_OUT = "/content/drive/MyDrive/knee_runs"
+os.makedirs(DRIVE_OUT, exist_ok=True)
+
+saved = []
+for pattern in (f"convnext_fold{FOLD}.pt", f"lit_fold{FOLD}*.ckpt",
+                f"oof_fold{FOLD}.parquet"):
+    for path in glob.glob(f"/kaggle/working/{pattern}"):
+        shutil.copy(path, DRIVE_OUT)
+        saved.append(os.path.basename(path))
+
+metrics = os.path.join(csv_logger.log_dir, "metrics.csv")
+if os.path.exists(metrics):
+    shutil.copy(metrics, os.path.join(DRIVE_OUT, f"metrics_fold{FOLD}.csv"))
+    saved.append(f"metrics_fold{FOLD}.csv")
+
+print("saved to", DRIVE_OUT)
+for name in saved:
+    print("  ", name)
+if not saved:
+    print("  NOTHING SAVED -- the training cell did not complete")
+""")
+
     nb.md("""
 ## Next
 
@@ -2966,7 +3127,8 @@ If they do not move, the limit is elsewhere: the mined labels, or 224px
 resolution against the size of the structures.
 """)
 
-    nb.write(NOTEBOOKS / "08_finetune.ipynb")
+    nb.write(NOTEBOOKS / ("08_finetune_colab.ipynb" if colab
+                          else "08_finetune.ipynb"))
 
 
 # ---------------------------------------------------------------------------
@@ -3526,6 +3688,7 @@ def main():
     build_train_notebook()
     build_submit_notebook()
     build_finetune_notebook()
+    build_finetune_notebook(colab=True)
     build_export_notebook()
     build_ensemble_notebook()
 
