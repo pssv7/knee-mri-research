@@ -23,6 +23,27 @@ At the selected epoch (7, best mined val macro 0.8734):
 named: pooled drifts up while conditional drifts down, which is a residual head
 hard-coding the coupling it was given and `g` learning nothing beyond it.
 
+Paired on the same 58 studies, same resamples, which is the test the standing
+rules require:
+
+    conditional  -0.024   95% CI [-0.130, +0.079]   P(not better) = 0.667
+    pooled       +0.006   95% CI [-0.072, +0.086]   P(not better) = 0.458
+
+The interval is centred just below zero and covers it comfortably. Nothing
+happened, and the paired test is narrow enough to say so: +/-0.10 against the
++/-0.17 an unpaired reading carries here.
+
+(The 0.617 in `metrics.csv` and the 0.606 above are the same model. The
+training loop logs conditional AUC stratified on *predicted* effusion, since no
+gold effusion label exists in the mined validation fold; the tool defaults to
+the gold label. The baseline shows the same offset -- 0.630 gold, 0.617
+predicted -- so the comparison is like for like either way.)
+
+The error moved the wrong way inside the strata, too. The within-stratum share
+of total error rose from 55.6% to 60.4%, and the Eff=1 vs Eff=1 cell -- the one
+carrying most of the metric -- went from 38.8% misranked to 41.6%. Same
+direction the frozen path took in Stage 0a: slightly more gated, not less.
+
 The mined validation fold is the reading that settles it. `val_Synovitis_
 conditional` sits between 0.77 and 0.81 for **all twelve epochs** and lands at
 0.803 against the out-of-fold baseline's 0.801. That instrument carries ~870
