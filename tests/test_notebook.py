@@ -411,6 +411,40 @@ class TestGeneratorHasNoDocstringsInCells:
                         f"{name} cell {i} does not parse: {exc}") from None
 
 
+class TestTheArchivedReferenceStaysAtReference:
+    """The fallback copy has to stay a fallback.
+
+    `notebooks/archive/` holds notebook 08 at the configuration behind every
+    measured result on this project. Its whole value is that it is the thing
+    to go back to when an experiment goes badly, so a lever silently switched
+    on there -- by a regeneration landing in the wrong directory, say -- would
+    remove the only copy that is known to work.
+    """
+
+    LEVERS = {"LAMBDA_REPORT": "0.0", "LAMBDA_RANK": "0.0",
+              "LAMBDA_STRATIFIED_RANK": "0.0", "LAMBDA_COUPLING": "0.0",
+              "RESIDUAL_BETA": "None", "SILENCE_REWEIGHT": "False"}
+    GEOMETRY = {"SLICES_PER_SERIES": "16", "MAX_SERIES": "5", "EPOCHS": "12"}
+
+    def sources(self, name):
+        path = os.path.join(ROOT, "notebooks", "archive", name)
+        with open(path) as handle:
+            notebook = json.load(handle)
+        return "\n".join("".join(c["source"]) for c in notebook["cells"]
+                          if c["cell_type"] == "code")
+
+    @pytest.mark.parametrize("name", ("08_finetune_reference.ipynb",
+                                      "08_finetune_colab_reference.ipynb"))
+    def test_every_lever_is_off_and_the_geometry_is_the_reference_one(self, name):
+        source = self.sources(name)
+        for constant, expected in {**self.LEVERS, **self.GEOMETRY}.items():
+            assignments = [l.strip() for l in source.splitlines()
+                           if l.startswith(f"{constant} = ")]
+            assert assignments, f"{name}: {constant} is not set at all"
+            assert assignments[0].split(" = ")[1].split("#")[0].strip() == expected, \
+                f"{name}: {assignments[0]}"
+
+
 class TestTheFrozenPathEmitsTheGateArtifact:
     """Stage 0a is blocked on one file, so notebook 06 has to write it.
 
