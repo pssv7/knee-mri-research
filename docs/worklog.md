@@ -5,6 +5,105 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-31 (b) — Stage 0a ran: the frozen path is not better, it is more gated
+
+The frozen aggregation stack, five folds, 24.8 min, pool grid 4 (6,528 dims
+per slice projected to 512). Two runs of the identical configuration exist --
+the interactive session and the committed one -- and both are recorded here
+because their difference is itself a number worth having.
+
+    gold 58                        conditional            pooled   eff-as-syn
+    frozen, run A            0.609 [0.434, 0.778]  P=0.110  0.711     0.746
+    frozen, run B (logged)   0.620 [0.443, 0.790]  P=0.089  0.723     0.750
+    fine-tuned, fold 1       0.630 [0.457, 0.791]  P=0.071  0.701     0.722
+
+**Run-to-run spread on conditional AUC is 0.011** between two runs of the same
+config, against a sampling CI of +/-0.17. Stage 1's target (0.630 -> 0.75) is
+eleven times the jitter, so it is readable; anything under ~0.02 conditional is
+not, even paired.
+
+### §2.2 is closed: do not ship the frozen path for this finding
+
+Pre-registered rule -- ship only if it wins on *both* the paired pooled
+comparison and conditional. Paired on the same 58 studies, same resamples:
+
+    conditional  -0.011   95% CI [-0.144, +0.124]   P(not better) = 0.560
+    pooled       +0.022   95% CI [-0.075, +0.120]   P(not better) = 0.344
+
+It loses the half that matters. And the plan's premise for the comparison does
+not reproduce: the +0.045 pooled gap it was built on (0.746 vs 0.701) is
++0.010 to +0.022 here. Note where 0.746 actually turns up in this run -- it is
+where the frozen path's **effusion** head lands as a synovitis classifier.
+
+### The story about fine-tuning destroying synovitis signal is not supported
+
+That reading has stood since 2026-08-29: "frozen beats tuned on Synovitis
+across all three runs (0.746 vs 0.682, 0.694) -- that is what fitting label
+noise looks like." On the metric that measures the finding, frozen does **not**
+beat tuned. Its advantage is entirely in cross-stratum pairs:
+
+    pos/neg cell        frozen misranked    fine-tuned misranked
+    Eff=1 vs Eff=1           43.4%                38.8%
+    Eff=1 vs Eff=0           12.4%                18.9%
+    Eff=0 vs Eff=1           61.5%                55.4%
+    Eff=0 vs Eff=0           21.1%                31.1%
+
+The frozen path is *worse inside* the effusion strata and *better across* them.
+It is more gated, not less -- which is exactly what §2.2 warned a pooled-only
+comparison would hide, and it is why 61.6% of its error is within-stratum
+against the fine-tuned model's 55.6%.
+
+### The finding that changes what Stage 1 is for
+
+**In both paths the effusion head outscores the synovitis head as a synovitis
+classifier** -- frozen 0.750 against 0.723, fine-tuned 0.722 against 0.701. A
+model with a fixed trunk and a small head, which cannot chase the mined labels
+the way a fine-tune can, reproduces the gating anyway and slightly harder.
+
+So the coupling is **not an overfitting artefact**. It survives removing the
+capacity that was supposed to be causing it. What that does *not* settle is
+whether it comes from the labels (mined synovitis is largely effusion talk) or
+from the features (synovitis is genuinely hard to separate from fluid without
+contrast, which 0c says this collection does not have). Either way, a better
+trunk or a shorter schedule will not undo it: it has to be attacked by
+construction, which is what Stage 1's residual parameterisation does.
+
+### The gate, and the high-power second reading
+
+Gold reads **AMBIGUOUS** for both paths -- two semi-independent architectures
+landing at 0.609/0.620 and 0.630, each with P(<= 0.5) near 0.07-0.11. Neither
+clears significance and both point the same way, which is more consistent with
+weak-but-real signal than with one broken model, but n=58 cannot say so.
+
+The free by-product of the run, out-of-fold over all 4,349 mined studies:
+
+    frozen       conditional 0.820 [0.791, 0.848]   pooled 0.900
+    fine-tuned   conditional 0.801 [0.773, 0.829]   pooled 0.899
+    paired       +0.019 [-0.005, +0.044]  P(not better) = 0.062
+
+Both **CLEAR**, on 484,654 within-stratum pairs. Against extractor agreement
+rather than truth, and its positives are the report-mentioned severe cases --
+but general-purpose features with a small head *do* order synovitis within an
+effusion stratum. §2.4's worry, that the residual task is unlearnable because
+the labels are 82.2% silent, is not what this shows; the silent studies are
+what the proxy drops, so it stays open on exactly the studies that matter.
+
+### Where that leaves the plan
+
+Per §4's ambiguous row: **Stage 1 at reduced confidence, and prioritise Stage
+2.** Nothing here sends us to Stage 4 -- the descope branch needed the frozen
+conditional at chance, and it is not, in either run. Stage 3 is not indicated
+first either: crops address within-stratum discrimination, which is the right
+target, but the plan itself files it as a literature-motivated bet and the
+gate did not fail.
+
+Stage 2 is now the binding constraint and it is measured, not asserted: the
+conditional CI is +/-0.17 on this set, so a Stage 1 run that genuinely reaches
+0.75 will still be reported as ambiguous against 0.630. More gold labels are
+what makes the next experiment readable.
+
+---
+
 ## 2026-08-31 — the synovitis plan: metric, Stage 0, and the Stage 1 code
 
 `plan.md` implemented. Every §1 figure re-derived from the local artifacts
