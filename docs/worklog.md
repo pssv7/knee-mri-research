@@ -5,6 +5,68 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-31 (c) — Stage 1 configured and pre-registered
+
+Notebook 08 is set for the run: **fold 1, 16 x 5, 12 epochs, ConvNeXt-T,
+`LAMBDA_STRATIFIED_RANK = 0.1`, caliper 0.15, findings `("Synovitis",)`**,
+residual coupling and the decorrelation penalty both off, everything else at
+the reference config. One lever, not three.
+
+**Fold 1 is not a free choice.** The 0.630 being beaten is a fold-1 model's
+number and per-finding scores move more across splits than the treatment does.
+The ensemble is complete (folds 0-4 all trained aux-free, fold 4 at val 0.8697,
+read from its own metrics.csv), so nothing is waiting on this slot.
+
+### Why 0.1 and not the 0.2 the ranking term was screened at
+
+That 0.2 spread across all twelve findings. This loss touches one head, so the
+same lambda puts roughly twelve times the pressure on it. The 0.2 configuration
+is also the one that **collapsed** -- the rank term fell to near-zero within a
+few epochs, having memorised its own queue, and gold went 0.861 -> 0.854. At
+0.1 the term sits at about parity with the synovitis column's share of the BCE
+(~1/12 of it). A judgment call; the plan does not specify a weight.
+
+### Why caliper 0.15 on the probability, checked before spending the session
+
+The setting that can silently make the run a no-op. Measured on the 4,349
+out-of-fold effusion predictions, against the pairs that already survive the
+`min_gap = 0.25` target filter (25.9% of all pairs):
+
+    caliper   of gapped pairs kept    both-high    both-low
+      0.05           8.4%               65.3%       27.5%
+      0.15          23.7%               64.0%       23.7%
+      0.30          46.3%               58.1%       13.4%
+    percentile band 0.15
+                    23.9%               80.6%       13.3%
+
+At 0.15 the loss sees roughly 16-32 usable pairs per step against a 256-study
+queue -- a real gradient, not a no-op. And the **stratum composition is why the
+probability caliper wins over percentile matching**: the gold conditional AUC
+is 76% high-effusion pairs and 24% low, and the probability caliper reproduces
+that mix (64/24, the rest straddling) where percentile matching skews to
+80.6/13.3 and would train a stratum the metric barely weighs.
+
+### Pre-registered, before the run
+
+- **Primary:** conditional AUC on the gold 58, paired against the aux-free
+  fold-1 baseline (`failures/gold_predictions.parquet`, 0.630). **Pass at
+  >= 0.75.** Notebook 08 now writes `gold_predictions_fold{FOLD}.parquet` and
+  prints the reading and the paired difference itself.
+- **Higher-power secondary:** out-of-fold conditional on mined labels against
+  the current 0.801, paired. 484,654 within-stratum pairs there against 376 on
+  gold, so this is what will actually resolve a move of 0.02.
+- **Void condition, checked before the AUC:** if `stratified_rank_loss` falls
+  to near-zero in the first few epochs the term memorised its queue, and the
+  run says nothing about the objective either way.
+- **Guard:** macro below the fold-1 reference by more than 0.02 kills it
+  regardless of synovitis. One finding is 1/12 of the metric being scored.
+- **Known in advance:** the gold interval is +/-0.17, so even a pass will not be
+  significant on 58 studies, and two runs of one configuration differ by 0.011.
+  Gold is the sanity check; the mined proxy is the discriminator. This is the
+  cost of Stage 2 not having happened yet.
+
+---
+
 ## 2026-08-31 (b) — Stage 0a ran: the frozen path is not better, it is more gated
 
 The frozen aggregation stack, five folds, 24.8 min, pool grid 4 (6,528 dims

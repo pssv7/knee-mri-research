@@ -3323,7 +3323,14 @@ LAMBDA_RANK = 0.0
 # Pre-registered success criterion, before any of this is run: conditional
 # AUC 0.630 -> >= 0.75 on the gold 58, tested by paired bootstrap
 # (tools/synovitis_gate.py). That is pooled ~0.755 on the same studies.
-LAMBDA_STRATIFIED_RANK = 0.0
+# Set to 0.1 for the Stage 1 experiment, and 0.1 rather than the 0.2 the
+# plain ranking term was screened at: this loss touches ONE head, so the same
+# lambda puts twelve times the pressure on it that 0.2-across-all-findings did,
+# and that configuration collapsed -- the rank term fell to near-zero within a
+# few epochs, having memorised its own queue, and gold went 0.861 -> 0.854.
+# At 0.1 the term sits at roughly parity with the synovitis column's share of
+# the BCE (about 1/12 of it). Return this to 0.0 for any ensemble member.
+LAMBDA_STRATIFIED_RANK = 0.1
 STRATIFIED_FINDINGS = ("Synovitis",)
 STRATIFY_BY = "Effusion"
 STRATIFIED_CALIPER = 0.15
@@ -3394,7 +3401,13 @@ REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
 # NOTHING ELSE CHANGES BETWEEN THESE THREE RUNS. Seven single-variable
 # experiments have now measured null against a gold set whose macro SE is
 # 0.015-0.025; the instrument cannot read them, so do not slip one in here.
-FOLD = 4
+#
+# **Fold 1 for the Stage 1 experiment, and the fold is not free to choose.**
+# The conditional AUC being beaten -- 0.630 -- is a fold-1 model's number, and
+# per-finding scores move by more than the treatment across splits. A Stage 1
+# run on another fold cannot be compared to it at all. The ensemble is
+# complete (folds 0-4 all trained, aux-free), so nothing is waiting on this.
+FOLD = 1
 CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
 
 # Where the EMA and SWA weights land. Deliberately NOT convnext_fold*_ema.pt:
@@ -3470,7 +3483,8 @@ print(f"synovitis: stratified rank {LAMBDA_STRATIFIED_RANK} "
 ENSEMBLE_DONE = {0: "2026-08-30, 12 ep, val 0.8814",
                  1: "2026-08-30, 12 ep, val 0.8726",
                  2: "2026-08-30, 12 ep, val 0.8675",
-                 3: "2026-08-26, 12 ep, val 0.8686 (LB 0.877 solo)"}
+                 3: "2026-08-26, 12 ep, val 0.8686 (LB 0.877 solo)",
+                 4: "2026-08-30, 12 ep, val 0.8697"}
 ENSEMBLE_TODO = [f for f in range(5) if f not in ENSEMBLE_DONE]
 
 # The reference config, spelled out. Every member of an average must be the
@@ -3822,6 +3836,84 @@ if AVERAGES:
               f"({_macro - macro:+.3f} vs selected)")
     print("  gold's macro SE on 58 studies is ~0.02; treat anything under "
           "that as a tie and decide on the leaderboard.")
+
+# The predictions themselves, keyed by UID. Every synovitis comparison in the
+# plan is paired on these 58 studies, and a paired test needs both models'
+# predictions rather than two printed macros -- which is what made the frozen
+# path's apparent +0.045 unreadable for a week.
+GOLD_PREDICTIONS = f"/kaggle/working/gold_predictions_fold{FOLD}.parquet"
+pd.DataFrame(gold_probs, columns=config.LABELS).assign(
+    **{config.ID_COL: gold_ids})[config.SUBMISSION_COLUMNS].to_parquet(
+        GOLD_PREDICTIONS, index=False)
+print("\\nwrote", GOLD_PREDICTIONS)
+""")
+
+    nb.md("""
+## 8b. Synovitis, on the metric that can measure it
+
+Macro cannot read this run and neither can pooled AUC on the finding itself:
+the gold effusion label alone scores 0.698 as a synovitis classifier against
+the fine-tuned head's 0.701. If `LAMBDA_STRATIFIED_RANK` or `RESIDUAL_BETA` is
+set, **this is the cell the run is judged on** — everything above is context.
+
+Pre-registered before the run: conditional AUC 0.630 → **≥ 0.75**, paired
+bootstrap on the same 58 studies, which is pooled ≈ 0.755. Two runs of an
+identical configuration differ by about 0.011 here, so the target is roughly
+eleven times the run-to-run jitter; the sampling interval is ±0.17, which is
+why a pass will still not be *significant* on this set.
+
+Also watch `stratified_rank_loss` in the epoch table. The previous ranking
+term collapsed to near-zero within a few epochs — it memorised its own queue
+rather than learning an ordering — and that is the failure mode to catch here
+before reading the AUC at all.
+""")
+
+    nb.code("""
+FINDING, STRATIFY_BY = "Synovitis", "Effusion"
+BASELINE_CONDITIONAL = 0.630   # fold 1, 16 x 5, aux-free -- the thing to beat
+TARGET_CONDITIONAL = 0.75      # pre-registered, not chosen after the fact
+
+y = truth[FINDING].to_numpy().astype(int)
+scores_syn = gold_probs[:, config.LABELS.index(FINDING)]
+strata = truth[STRATIFY_BY].to_numpy().astype(int)
+
+stats = conditional.bootstrap_conditional(y, scores_syn, strata, draws=4000)
+print(f"conditional  {stats['auc']:.3f}  "
+      f"95% CI [{stats['lo']:.3f}, {stats['hi']:.3f}]  "
+      f"P(<= 0.5) = {stats['p_at_or_below_chance']:.3f}")
+print(f"pooled       {conditional.auc(y, scores_syn):.3f}")
+print(f"the {STRATIFY_BY} head as a {FINDING} classifier: "
+      f"{conditional.auc(y, gold_probs[:, config.LABELS.index(STRATIFY_BY)]):.3f}"
+      "   <- if this is higher, the head is still gated")
+print()
+print(f"vs the {BASELINE_CONDITIONAL:.3f} baseline: "
+      f"{stats['auc'] - BASELINE_CONDITIONAL:+.3f}   "
+      f"target was {TARGET_CONDITIONAL:.2f} "
+      f"({'MET' if stats['auc'] >= TARGET_CONDITIONAL else 'not met'})")
+
+# Paired against the baseline run's predictions, if they are attached. This is
+# the comparison the plan's standing rules require: the same studies, the same
+# resamples, so between-study variance cancels instead of hiding the effect.
+baseline_paths = [p for p in find_inputs("gold_predictions*.parquet")
+                  if "frozen" not in os.path.basename(p)
+                  and os.path.abspath(p) != os.path.abspath(GOLD_PREDICTIONS)]
+if not baseline_paths:
+    print("\\nno baseline gold_predictions*.parquet attached -- attach the "
+          "aux-free fold-1 run's to get the paired comparison")
+else:
+    base = pd.read_parquet(baseline_paths[0]).set_index(config.ID_COL)
+    keep = [i for i, s in enumerate(gold_ids) if s in base.index]
+    shared = [gold_ids[i] for i in keep]
+    print(f"\\npaired against {os.path.basename(baseline_paths[0])} "
+          f"({len(shared)} shared studies)")
+    for label, kwargs in (("conditional", {"strata": strata[keep]}),
+                          ("pooled", {"strata": None})):
+        delta = conditional.paired_bootstrap(
+            y[keep], scores_syn[keep],
+            base.loc[shared, FINDING].to_numpy(), draws=4000, **kwargs)
+        print(f"  {label:12s} {delta['delta']:+.3f}  "
+              f"95% CI [{delta['lo']:+.3f}, {delta['hi']:+.3f}]  "
+              f"P(not better) = {delta['p_a_not_better']:.3f}")
 """)
 
     nb.md("""
