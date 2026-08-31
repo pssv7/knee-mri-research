@@ -368,3 +368,40 @@ def calibrate_coupling(labels, parent_logits, iterations: int = 50) -> dict:
     separated = bool(np.max(np.abs(coefficients)) > 20)
     return {"beta": float(coefficients[1]), "intercept": float(coefficients[0]),
             "n": int(y.size), "separated": separated}
+
+
+# ---------------------------------------------------------------------------
+# The Stage 0 gate
+# ---------------------------------------------------------------------------
+#
+# The plan says "clearly > 0.5", "= 0.5" and "ambiguous" without giving
+# numbers. They are fixed here, once, in code, so they cannot be chosen after
+# seeing a result -- and here rather than in the tool because the training
+# notebooks read the same gate and two copies would drift.
+
+GATE_ACTIONS = {
+    "clear": ("synovitis-specific signal survives conditioning on effusion",
+              "Stage 1 -- train the conditional task directly"),
+    "chance": ("the score is a better effusion proxy, nothing more",
+               "Stage 3 (plan §4) or Stage 4 descope (plan §10) -- the plan "
+               "gives both; decide before running either"),
+    "ambiguous": ("expected at n=58; the CI straddles chance",
+                  "Stage 1 at reduced confidence, and prioritise Stage 2 "
+                  "(expand the gold set)"),
+}
+
+
+def gate_reading(stats: dict) -> str:
+    """clear | chance | ambiguous, from a `bootstrap_conditional` result.
+
+        clear      2.5th percentile above 0.5, and P(AUC <= 0.5) < 0.05
+        chance     point estimate <= 0.55 and P(AUC <= 0.5) >= 0.25
+        ambiguous  anything else -- the expected outcome at n=58
+    """
+    if not np.isfinite(stats.get("auc", float("nan"))):
+        return "ambiguous"
+    if stats["lo"] > 0.5 and stats["p_at_or_below_chance"] < 0.05:
+        return "clear"
+    if stats["auc"] <= 0.55 and stats["p_at_or_below_chance"] >= 0.25:
+        return "chance"
+    return "ambiguous"

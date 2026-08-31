@@ -73,27 +73,12 @@ CONVERSION_TARGETS = (0.70, 0.75, 0.80, 0.85, 1.00)
 # The gate
 # ---------------------------------------------------------------------------
 
-def gate_reading(stats: dict) -> str:
-    """clear | chance | ambiguous, by the cutoffs pre-registered above."""
-    if not np.isfinite(stats.get("auc", float("nan"))):
-        return "ambiguous"
-    if stats["lo"] > 0.5 and stats["p_at_or_below_chance"] < 0.05:
-        return "clear"
-    if stats["auc"] <= 0.55 and stats["p_at_or_below_chance"] >= 0.25:
-        return "chance"
-    return "ambiguous"
-
-
-GATE_ACTIONS = {
-    "clear": ("synovitis-specific signal survives conditioning on effusion",
-              "Stage 1 -- train the conditional task directly"),
-    "chance": ("the score is a better effusion proxy, nothing more",
-               "Stage 3 (plan §4) or Stage 4 descope (plan §10) -- the plan "
-               "gives both; decide before running either"),
-    "ambiguous": ("expected at n=58; the CI straddles chance",
-                  "Stage 1 at reduced confidence, and prioritise Stage 2 "
-                  "(expand the gold set)"),
-}
+# One definition of the cutoffs and the actions they imply, imported rather
+# than restated: `src/model/conditional.py` is bootstrapped into the training
+# notebooks, which read the same gate at the end of a frozen-path run, and a
+# second copy here is how the two would come to disagree.
+gate_reading = cond.gate_reading
+GATE_ACTIONS = cond.GATE_ACTIONS
 
 
 # ---------------------------------------------------------------------------

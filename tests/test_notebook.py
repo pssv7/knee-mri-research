@@ -411,6 +411,44 @@ class TestGeneratorHasNoDocstringsInCells:
                         f"{name} cell {i} does not parse: {exc}") from None
 
 
+class TestTheFrozenPathEmitsTheGateArtifact:
+    """Stage 0a is blocked on one file, so notebook 06 has to write it.
+
+    The frozen path scored the gold 58 all along and printed AUCs from the
+    predictions, then dropped them. A printed macro cannot be compared to
+    another run's predictions paired, which is the only comparison that reads
+    at n=58, so the parquet is the deliverable and this keeps it there.
+    """
+
+    def sources(self, name="06_train.ipynb"):
+        with open(os.path.join(ROOT, "notebooks", name)) as handle:
+            notebook = json.load(handle)
+        return ["".join(c["source"]) for c in notebook["cells"]
+                if c["cell_type"] == "code"]
+
+    def test_the_gold_predictions_are_written_not_just_scored(self):
+        joined = "\n".join(self.sources())
+        assert "gold_predictions_frozen.parquet" in joined
+        assert "config.SUBMISSION_COLUMNS" in joined
+
+    def test_the_gate_is_read_on_conditional_auc(self):
+        joined = "\n".join(self.sources())
+        assert "conditional.bootstrap_conditional" in joined
+        assert "conditional.gate_reading" in joined
+
+    def test_the_comparison_against_the_tuned_path_is_paired(self):
+        joined = "\n".join(self.sources())
+        assert "conditional.paired_bootstrap" in joined
+
+    def test_the_cutoffs_live_in_one_place(self):
+        # The notebook, the tool and the training loop all read the same gate.
+        # A second copy of "clearly > 0.5" is how they come to disagree.
+        with open(os.path.join(ROOT, "tools", "synovitis_gate.py")) as handle:
+            tool = handle.read()
+        assert "gate_reading = cond.gate_reading" in tool
+        assert "def gate_reading" not in tool
+
+
 class TestTrainingAndSubmissionAgree:
     """The P0 correctness fixes, held in place.
 

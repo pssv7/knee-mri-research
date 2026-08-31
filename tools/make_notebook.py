@@ -1972,6 +1972,92 @@ print("\\nreference: fused label quality against gold was 0.854")
 np.save("/kaggle/working/oof_predictions.npy", oof_matrix)
 pd.DataFrame({"StudyInstanceUID": oof_ids}).to_parquet(
     "/kaggle/working/oof_ids.parquet", index=False)
+
+# The gold predictions themselves, keyed by UID, not just their AUCs. Stage 0a
+# of the synovitis plan needs this file and nothing else, and until it existed
+# the frozen path's numbers could not be compared to the fine-tuned path's on
+# anything but a printed macro. Small -- 58 rows.
+GOLD_PREDICTIONS = "/kaggle/working/gold_predictions_frozen.parquet"
+pd.DataFrame(gold_matrix, columns=config.LABELS).assign(
+    **{config.ID_COL: gold_ids})[config.SUBMISSION_COLUMNS].to_parquet(
+        GOLD_PREDICTIONS, index=False)
+print("wrote", GOLD_PREDICTIONS)
+
+pd.DataFrame(oof_matrix, columns=config.LABELS).assign(
+    **{config.ID_COL: oof_ids})[config.SUBMISSION_COLUMNS].to_parquet(
+        "/kaggle/working/oof_predictions_frozen.parquet", index=False)
+""")
+
+    nb.md("""
+## Stage 0a — the gate
+
+The frozen path is the decisive read on whether synovitis is in the pixels at
+all. It has only a small aggregation head, so it cannot have fit the mined
+label noise the way a fine-tuned trunk can: if its general-purpose features
+discriminate synovitis *within* an effusion stratum, the signal is there and
+the fine-tuned model is failing to use it. If they do not, the frozen path's
+higher pooled number (0.746 against 0.701) is a better effusion proxy and
+nothing more.
+
+**Pooled AUC cannot answer this.** On these 58 studies the gold effusion label
+alone scores 0.698 as a synovitis classifier. The number below is conditional
+AUC — concordance restricted to pairs from the same effusion stratum — with
+the cutoffs pre-registered in `conditional.gate_reading`, not chosen here.
+
+Attach the fine-tuned run's `gold_predictions.parquet` as well and the
+comparison is made paired, on the same studies, which is the only way a
+difference of this size is readable at n=58.
+""")
+
+    nb.code("""
+FINDING, STRATIFY_BY = "Synovitis", "Effusion"
+
+y = gold_truth[FINDING].to_numpy().astype(int)
+scores_syn = gold_matrix[:, config.LABELS.index(FINDING)]
+strata = gold_truth[STRATIFY_BY].to_numpy().astype(int)
+
+stats = conditional.bootstrap_conditional(y, scores_syn, strata, draws=4000)
+counts = conditional.pair_counts(y, strata)
+reading = conditional.gate_reading(stats)
+why, action = conditional.GATE_ACTIONS[reading]
+
+print(f"conditional  {stats['auc']:.3f}  "
+      f"95% CI [{stats['lo']:.3f}, {stats['hi']:.3f}]  "
+      f"P(<= 0.5) = {stats['p_at_or_below_chance']:.3f}  "
+      f"({counts['within']} within-stratum pairs)")
+print(f"pooled       {conditional.auc(y, scores_syn):.3f}")
+print(f"the effusion head, used directly as a {FINDING} classifier: "
+      f"{conditional.auc(y, gold_matrix[:, config.LABELS.index(STRATIFY_BY)]):.3f}")
+print()
+print(f"GATE: {reading.upper()} -- {why}")
+print(f"  -> {action}")
+print()
+
+# Paired against the fine-tuned path, if its predictions are attached. An
+# unpaired comparison of 0.746 and 0.701 is 0.66 of a standard deviation on
+# this set and settles nothing; the same 58 studies resampled together do.
+tuned_paths = find_inputs("gold_predictions.parquet")
+if not tuned_paths:
+    print("no fine-tuned gold_predictions.parquet attached -- attach one to "
+          "get the paired comparison the plan asks for (§2.2)")
+else:
+    tuned = pd.read_parquet(tuned_paths[0]).set_index(config.ID_COL)
+    shared = [s for s in gold_ids if s in tuned.index]
+    keep = [i for i, s in enumerate(gold_ids) if s in tuned.index]
+    tuned_syn = tuned.loc[shared, FINDING].to_numpy()
+    print(f"paired against {os.path.basename(tuned_paths[0])} "
+          f"({len(shared)} shared studies)")
+    for label, kwargs in (("conditional", {"strata": strata[keep]}),
+                          ("pooled", {"strata": None})):
+        delta = conditional.paired_bootstrap(
+            y[keep], scores_syn[keep], tuned_syn, draws=4000, **kwargs)
+        print(f"  {label:12s} {delta['delta']:+.3f}  "
+              f"95% CI [{delta['lo']:+.3f}, {delta['hi']:+.3f}]  "
+              f"P(frozen not better) = {delta['p_a_not_better']:.3f}")
+    print()
+    print("Ship the frozen path for this finding only if it wins on BOTH.")
+    print("A win on pooled alone is a better effusion proxy, not a better")
+    print("synovitis model.")
 """)
 
     nb.md("""

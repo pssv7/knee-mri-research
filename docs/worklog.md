@@ -71,12 +71,29 @@ The gold 58 gives +0.106 against the label's -0.073 and is not readable -- a
 correlation on 58 studies carries SE 0.13, and the tool now refuses to read one
 below 200 studies rather than printing an eye-catching verdict.
 
-### 0a and 0b — blocked, exactly as §9 said
+### 0a and 0b — blocked on a GPU session, and now one run each
 
 No frozen DINOv2 predictions on the 58 and no saved silence-reweighting
 predictions exist, here or in `models_train/`. No DINOv2 checkpoint either.
-Both checks are one notebook-11 run per checkpoint away -- point `CHECKPOINT`
-at it, take `gold_predictions.parquet`, then:
+
+**Why 0a could not simply be run:** notebook 06 scored the gold 58 on the
+frozen path and printed the per-finding AUCs *from predictions it then threw
+away*. A printed macro cannot be compared to another run's predictions paired,
+and paired is the only comparison that reads anything at n=58 -- the frozen
+path's +0.045 on pooled is 0.66 of a standard deviation unpaired. Notebook 06
+now writes `gold_predictions_frozen.parquet` in submission column order and
+ends with the gate itself: conditional AUC, its CI, `P(<= 0.5)`, the reading
+from `conditional.gate_reading`, and -- if the fine-tuned run's predictions are
+attached -- the paired difference on both metrics. The cutoffs moved into
+`src/model/conditional.py` so the notebook, the tool and the training loop read
+one definition; `tests/test_notebook.py::TestTheFrozenPathEmitsTheGateArtifact`
+holds the file in place.
+
+So 0a is one frozen-path run, which is minutes on the aggregation stack rather
+than hours, and 0b is one notebook-11 scoring of a `SILENCE_REWEIGHT = True`
+checkpoint if one survives -- a 1.9 h retrain if it does not. For a fine-tuned
+checkpoint the path is unchanged: point `CHECKPOINT` at it, take
+`gold_predictions.parquet`, then:
 
     python tools/synovitis_gate.py --predictions frozen_gold.parquet \
         --baseline failures/gold_predictions.parquet
