@@ -496,7 +496,8 @@ def pairwise_rank_loss(scores: torch.Tensor, targets: torch.Tensor,
                        weights: Optional[torch.Tensor] = None,
                        ref_weights: Optional[torch.Tensor] = None,
                        min_gap: float = 0.25,
-                       pair_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+                       pair_mask: Optional[torch.Tensor] = None,
+                       max_margin: Optional[float] = None) -> torch.Tensor:
     """Per-finding RankNet loss between a batch and a reference set.
 
     The metric is macro AUC -- a ranking statistic -- while BCE optimises
@@ -518,6 +519,19 @@ def pairwise_rank_loss(scores: torch.Tensor, targets: torch.Tensor,
     it can restrict which findings are ranked, which pairs are comparable, or
     both. `stratified_rank_loss` below builds one; at None every pair counts
     and this is the loss the reference runs used, unchanged.
+
+    `max_margin` clamps the logit difference before the softplus, and exists
+    because leaving it unbounded diverged a real run (2026-08-31). A satisfied
+    pair's loss decays to zero as its margin grows, but a **violated** pair's
+    grows linearly and forever, so when the pair constraints contradict each
+    other -- which is what within-stratum synovitis pairs do, since 90% of the
+    mined targets sit at zero and the surviving pairs are mostly "mentioned vs
+    silent" -- inflating the logit scale reduces loss on the majority faster
+    than it raises it on the minority. The head then saturates, every study
+    ties, AUC lands on exactly 0.5, and the shared trunk goes with it: that run
+    took BCE from 0.60 to 5.99 and macro from 0.86 to 0.71. Clamping caps what
+    any one pair can demand, so a contradictory set cannot pay for scale.
+    Default None leaves every earlier run bit-identical.
     """
     zero = scores.sum() * 0.0
     if ref_scores.numel() == 0:
@@ -536,6 +550,8 @@ def pairwise_rank_loss(scores: torch.Tensor, targets: torch.Tensor,
         return zero
 
     margin = scores.unsqueeze(1) - ref_scores.unsqueeze(0)     # (B, Q, L)
+    if max_margin is not None:
+        margin = margin.clamp(-max_margin, max_margin)
     loss = F.softplus(-torch.sign(gap) * margin)
     return (loss * pair_weight).sum() / total
 
@@ -574,7 +590,8 @@ def stratified_rank_loss(scores: torch.Tensor, targets: torch.Tensor,
                          findings: Sequence[str], caliper: float = 0.15,
                          weights: Optional[torch.Tensor] = None,
                          ref_weights: Optional[torch.Tensor] = None,
-                         min_gap: float = 0.25) -> torch.Tensor:
+                         min_gap: float = 0.25,
+                         max_margin: Optional[float] = 8.0) -> torch.Tensor:
     """RankNet restricted to pairs from the same effusion stratum.
 
     Conditional AUC *is* within-stratum pair concordance, so this is not an
@@ -591,12 +608,17 @@ def stratified_rank_loss(scores: torch.Tensor, targets: torch.Tensor,
 
     `strata` is the detached predicted effusion probability for the current
     batch and `ref_strata` the same for the queued reference studies.
+
+    `max_margin` defaults to a finite 8.0 here rather than to None, because
+    this is the loss whose pairs contradict each other -- see
+    `pairwise_rank_loss`. A margin of 8 logits is a probability ratio of about
+    3,000:1; a pair that wants more than that is not asking for an ordering.
     """
     mask = caliper_pairs(strata, ref_strata, caliper) * finding_mask(
         findings, scores.shape[-1], scores.device)
     return pairwise_rank_loss(scores, targets, ref_scores, ref_targets,
                               weights, ref_weights, min_gap=min_gap,
-                              pair_mask=mask)
+                              pair_mask=mask, max_margin=max_margin)
 
 
 def coupling_penalty(scores: torch.Tensor, ref_scores: torch.Tensor,

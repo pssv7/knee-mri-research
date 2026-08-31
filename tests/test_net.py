@@ -301,6 +301,54 @@ class TestStratifiedRankLoss:
         assert stratified == pytest.approx(float(plain))
 
 
+class TestTheMarginClamp:
+    """The guard for the failure that actually happened.
+
+    A satisfied pair's loss decays as its margin grows; a violated pair's grows
+    linearly and without bound. When the pairs contradict each other, inflating
+    the logit scale pays -- the majority's loss falls faster than the
+    minority's rises -- until the head saturates and every study ties. That run
+    is on record: BCE 0.60 -> 5.99, macro 0.86 -> 0.71, conditional AUC exactly
+    0.5000 from epoch 3 on.
+    """
+
+    def _violated(self, margin, **kwargs):
+        # target 1.0 scored BELOW target 0.0 by `margin`: a violated pair.
+        return net.pairwise_rank_loss(
+            torch.full((1, 1), -margin / 2), torch.ones(1, 1),
+            torch.full((1, 1), margin / 2), torch.zeros(1, 1), **kwargs)
+
+    def test_an_unclamped_violated_pair_grows_without_bound(self):
+        assert self._violated(40.0) > self._violated(20.0) > self._violated(10.0)
+
+    def test_a_clamped_one_stops_growing(self):
+        at_cap = self._violated(16.0, max_margin=8.0)
+        far_past = self._violated(400.0, max_margin=8.0)
+        assert at_cap == pytest.approx(float(far_past))
+
+    def test_the_gradient_vanishes_past_the_cap(self):
+        scores = torch.full((1, 1), -50.0, requires_grad=True)
+        net.pairwise_rank_loss(
+            scores, torch.ones(1, 1), torch.full((1, 1), 50.0),
+            torch.zeros(1, 1), max_margin=8.0).backward()
+        assert scores.grad.abs().max() == 0.0
+
+    def test_ordinary_margins_are_untouched(self):
+        # The clamp must not change the regime every earlier run trained in.
+        for margin in (0.5, 2.0, 6.0):
+            assert self._violated(margin, max_margin=8.0) == pytest.approx(
+                float(self._violated(margin)))
+
+    def test_the_stratified_loss_clamps_by_default(self):
+        # The reference losses default to None and stay bit-identical; the one
+        # whose pairs contradict each other does not get that default.
+        import inspect
+        assert inspect.signature(
+            net.pairwise_rank_loss).parameters["max_margin"].default is None
+        assert inspect.signature(
+            net.stratified_rank_loss).parameters["max_margin"].default == 8.0
+
+
 class TestCouplingPenalty:
     """The penalty must aim at the truth's coupling, not at independence."""
 

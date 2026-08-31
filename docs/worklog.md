@@ -5,6 +5,69 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-31 (d) — Stage 1 run 1 diverged; the loss is fixed, not just the weight
+
+    epoch  bce_loss  strat_rank  val_macro  gold_macro  gold_syn_conditional
+      0      0.598      0.538      0.763      0.706         0.560
+      1      0.688      0.559      0.756      0.724         0.612
+      2      0.945      0.731      0.653      0.652         0.559
+      3      1.376      0.983      0.659      0.646         0.5000
+      6      3.441      2.590      0.594      0.604         0.5000
+     11      5.987      6.166      0.538      0.550         0.5000
+
+Killed by the pre-registered macro guard on the first line that mattered:
+gold macro 0.706 against the fold-1 reference's 0.861, eight times the 0.02
+threshold. But the guard undersells it -- **BCE rose by a factor of ten**.
+This was not a model trading eleven findings for one, it was a training run
+that diverged, and the conditional 0.590 it printed measures nothing.
+
+The exact 0.5000 from epoch 3 onward is the tell: the synovitis head saturated,
+every study scored identically, and the tie-averaged AUC has nowhere to land
+but chance. The gold table agrees -- Effusion 0.934 and Synovitis 0.709 held
+while ACL fell 0.947 -> 0.625, MCL 0.900 -> 0.565, Baker's 0.964 -> 0.723. The
+two heads the objective touches survived; the trunk that served the other ten
+did not.
+
+### The mechanism, which is a property of the loss and not of the weight
+
+A **satisfied** pair's RankNet loss decays to zero as its margin grows. A
+**violated** pair's grows linearly, forever. So when the pair constraints
+contradict each other, inflating the logit scale is a bargain: the majority's
+loss falls faster than the minority's rises, and nothing stops it.
+
+Within-stratum synovitis pairs contradict each other by construction. The
+mined targets have a median of 0.010 and a mean of 0.087 -- 90% of studies sit
+at zero -- so the pairs surviving `min_gap = 0.25` are essentially "the report
+mentioned it" against "the report did not", and inside one effusion stratum
+that comparison is mostly silence, not synovitis. This is §2.4 of the plan,
+which named the risk exactly: the residual task is harder and the labels are
+noisier relative to what is left of the signal.
+
+### Three changes, because the weight alone was not the bug
+
+1. **`pairwise_rank_loss` takes `max_margin`**, and `stratified_rank_loss`
+   defaults it to 8.0 -- about a 3,000:1 probability ratio, past which a pair
+   is not asking for an ordering. A contradictory set can no longer buy scale.
+   Default `None` everywhere else, so every earlier run stays bit-identical.
+   `tests/test_net.py::TestTheMarginClamp` holds it.
+2. **Weight 0.1 -> 0.02.**
+3. **`AUX_MODE = "cosine"`.** The Du et al. gate applies the auxiliary
+   gradient only while it points downhill for the main task. It has been in
+   this repo since 2026-08-26 and would have switched this term off around
+   epoch 1. Leaving it at "fixed" while adding a far more lopsided auxiliary
+   than the one it was validated against was the error, and it was mine.
+
+### What the run is worth
+
+Not a measurement of the objective -- it never got a fair trial. But it is a
+measurement of the *instrument*: stratified pairwise ranking on mined synovitis
+labels is unstable for a reason that follows from the label distribution, and
+any future version of this idea has to answer it. The conditional-AUC logging
+earned its place here: the exact 0.5000 named the failure three epochs in,
+where macro alone would have looked like an ordinary bad run.
+
+---
+
 ## 2026-08-31 (c) — Stage 1 configured and pre-registered
 
 Notebook 08 is set for the run: **fold 1, 16 x 5, 12 epochs, ConvNeXt-T,
