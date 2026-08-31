@@ -5,6 +5,68 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-31 (f) — Stage 1 run 2: the residual head is a null, and the plan's own rule fires
+
+A clean run this time -- BCE falls monotonically 0.488 -> 0.234, nothing
+diverges. `hparams.yaml` confirms the configuration: `residual_beta 0.64`,
+`lambda_stratified_rank 0.0`, everything else at the reference.
+
+At the selected epoch (7, best mined val macro 0.8734):
+
+                          this run   baseline    delta
+    gold macro              0.865      0.861     +0.004   guard passes
+    Synovitis conditional   0.617      0.630     -0.013   target was 0.75
+    Synovitis pooled        0.707      0.701     +0.006
+    val conditional (mined) 0.803      0.801     +0.002
+
+**Null on every instrument**, and null in the exact shape the pre-registration
+named: pooled drifts up while conditional drifts down, which is a residual head
+hard-coding the coupling it was given and `g` learning nothing beyond it.
+
+The mined validation fold is the reading that settles it. `val_Synovitis_
+conditional` sits between 0.77 and 0.81 for **all twelve epochs** and lands at
+0.803 against the out-of-fold baseline's 0.801. That instrument carries ~870
+studies rather than 58 and can resolve about 0.02-0.03; it saw nothing at all.
+
+### One pattern examined and dropped
+
+Gold conditional averages 0.684 over epochs 0-6 and 0.618 over 7-11 -- a
+-0.066 decline as the model converges, which would have been a real finding:
+checkpoint selection on val macro actively selecting against synovitis, and
+the best gold conditional of the run (0.767, epoch 3) sitting where nothing
+can select it.
+
+**It does not hold.** The same quantity on the mined validation fold moves
++0.015 over the same epochs. The higher-power instrument shows no decline, so
+the gold trend is 58-study noise, and reading epoch 3's 0.767 as anything would
+be the gold-selection leak this project banned. Recorded because the hypothesis
+is attractive enough that someone will have it again.
+
+### Where the plan sends us
+
+§10's decision table, pre-registered and now firing:
+
+    Stage 1 conditional AUC < 0.70  ->  Stage 3 before further objective work
+
+0.617. Both Stage 1 levers are spent -- stratified ranking diverged on a
+property of the loss, the residual head measured null -- and neither failure
+was about tuning. Read together with Stage 0a, which showed the coupling
+survives removing the capacity that was supposed to cause it, the picture is
+consistent: **the coupling is not something the objective can be talked out of.**
+
+That is what Stage 3 is for. Crops centred on Hoffa's fat pad and the
+suprapatellar pouch change what the model can see rather than what it is asked
+to rank, and the literature result the plan cites (AUC 0.76, roughly senior-
+radiologist level) came from exactly that -- explicit segmentation of the
+synovial capsule and infrapatellar fat pad. The plan files it as a bet, and it
+still is. But it is now the only bet left that has not been measured, and the
+two that have were measured for reasons that will not change with a different
+lambda or a different beta.
+
+Stage 2 remains the binding constraint on reading any of it.
+
+---
+
 ## 2026-08-31 (e) — Stage 1 run 2 configured: the residual head, alone
 
     FOLD 1   RESIDUAL_BETA 0.64   everything else at the reference config
