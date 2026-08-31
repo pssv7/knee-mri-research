@@ -158,6 +158,47 @@ class TestWeightAverage:
         assert average.ema["linear.bias"][0].item() == pytest.approx(0.0)
 
 
+class TestTheResidualCouplingSurvivesAveraging:
+    """A run with the residual head ships three checkpoints, not one.
+
+    `residual_pairs` is a long tensor, so it is not averageable and travels in
+    `_fixed`; `residual_beta` is float and is averaged, which is harmless only
+    because it never changes during training. If either were dropped, the EMA
+    and SWA files would load into a bare KneeNet as an *uncoupled* model and
+    score as one -- silently, since nothing raises. That is the same shape of
+    failure the input-normalisation buffers already cost this project once.
+    """
+
+    CHILD, PARENT = 8, 7
+
+    def _model(self):
+        from src.model import net
+        return net.KneeNet(nn.Identity(), 8, input_dim=8,
+                           residual_pairs=[(self.CHILD, self.PARENT)],
+                           residual_beta=0.64)
+
+    def _averaged(self):
+        model = self._model()
+        average = averaging.WeightAverage(model, decay=0.9, swa_from=1)
+        for _ in range(5):
+            average.update(model)
+        return average
+
+    @pytest.mark.parametrize("kind", ("ema_state", "swa_state"))
+    def test_a_bare_knee_net_loads_the_average_still_coupled(self, kind):
+        from src.model import net
+        exported = getattr(self._averaged(), kind)()
+        bare = net.KneeNet(nn.Identity(), 8, input_dim=8)
+        bare.load_state_dict(exported)
+        assert bare.residual_pairs.tolist() == [[self.CHILD, self.PARENT]]
+        assert float(bare.residual_beta[0]) == pytest.approx(0.64, abs=1e-5)
+
+    def test_the_integer_buffer_is_not_averaged_into_a_float(self):
+        average = self._averaged()
+        assert "residual_pairs" in average._fixed
+        assert average._fixed["residual_pairs"].dtype == torch.long
+
+
 class TestGreedySoup:
     def _score_towards(self, target):
         """Higher when the state's value is nearer `target`."""

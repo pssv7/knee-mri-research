@@ -3338,11 +3338,19 @@ LAMBDA_RANK = 0.0
 #     points downhill for the main task. That gate exists in this project
 #     precisely for this and would have switched the term off around epoch 1.
 # Return this to 0.0 for any ensemble member.
-LAMBDA_STRATIFIED_RANK = 0.02
+LAMBDA_STRATIFIED_RANK = 0.0
 STRATIFIED_FINDINGS = ("Synovitis",)
 STRATIFY_BY = "Effusion"
 STRATIFIED_CALIPER = 0.15
-RESIDUAL_BETA = None        # e.g. 0.64 to switch the residual head on
+# 0.64 for the Stage 1 residual run: the coefficient of the gold synovitis
+# label on the predicted effusion logit, fitted by IRLS on the 58 --
+# 0.636 +/- 0.245, so a wide interval, and it is still the right number to
+# start from. The alternatives are worse on their face: 1.14 comes from the
+# mined labels, whose silence IS the effusion coupling being escaped, and 0.93
+# is the model's own current self-coupling, which is the thing the residual
+# head is meant to replace rather than reproduce. Below both, deliberately:
+# it leaves room for g to add signal instead of re-deriving effusion.
+RESIDUAL_BETA = 0.64
 LAMBDA_COUPLING = 0.0
 COUPLING_TARGET = 0.403     # the observed truth coupling, not independence
 
@@ -3369,11 +3377,11 @@ COUPLING_TARGET = 0.403     # the observed truth coupling, not independence
 # the leaderboard. The gating paper's promise held -- no collapse -- but there
 # was nothing to gain. Both lambdas ship at 0.0; the code stays for a future
 # capacity phase.
-# "cosine" for the Stage 1 retry: the Du et al. gate is what turns an
-# auxiliary loss off when it stops being a descent direction for the main
-# task, and the 2026-08-31 divergence is exactly the run it would have saved.
-# With LAMBDA_REPORT at 0.0 this gates the stratified term and nothing else.
-AUX_MODE = "cosine"
+# Back to "fixed": no auxiliary loss is active in the residual run, so the
+# gate would gate nothing, and a second changed constant would stop this being
+# a one-variable experiment. Set it to "cosine" together with any future
+# LAMBDA_STRATIFIED_RANK -- that pairing is what the divergence bought.
+AUX_MODE = "fixed"
 AUX_GATE = "binary"   # "weighted" uses max(0, cos) instead of an on/off gate
 REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
               if reports is not None else None)

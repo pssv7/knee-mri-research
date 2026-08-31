@@ -5,6 +5,68 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-31 (e) — Stage 1 run 2 configured: the residual head, alone
+
+    FOLD 1   RESIDUAL_BETA 0.64   everything else at the reference config
+    LAMBDA_STRATIFIED_RANK 0.0   LAMBDA_RANK 0.0   LAMBDA_COUPLING 0.0
+    AUX_MODE "fixed"   16 x 5   12 epochs   ConvNeXt-T
+
+Reordered from the plan's own menu, with agreement: §5 lists stratified
+ranking as the primary lever and the residual parameterisation as the
+"alternative or complement", and the two swap places for two reasons. Stage 0a
+showed the coupling is **structural** -- it survives removing the capacity that
+was supposed to cause it -- which is exactly what a reparameterisation
+addresses. And the ranking term has now demonstrated the instability §2.4
+predicted, so even repaired it is the riskier of the two. The residual head
+adds no loss term: beta is fixed, the parent is detached, nothing can run away.
+
+### Why beta = 0.64, and how well it is known
+
+    gold labels vs predicted effusion logit    0.636 +/- 0.245   [0.15, 1.12]
+    mined labels, n=4349                       1.141 +/- 0.064
+    the model's own self-coupling (OLS)        0.931
+
+The gold fit is wide and it is still the right starting point. The mined
+estimate is tight and wrong for this purpose -- the silence that makes mined
+synovitis track effusion mentions *is* the coupling being escaped, so fitting
+on it hard-codes the bias. And 0.93 is what the model already does, which the
+residual head exists to replace rather than reproduce. 0.64 sits below both on
+purpose: it leaves room for `g` to add signal instead of re-deriving effusion.
+
+If this run is null, beta is the obvious knob -- but each setting costs 1.9 h,
+so it is a hypothesis to argue for, not a sweep to launch.
+
+### Checked before the run, not after
+
+The residual coupling travels as two buffers, and a run writes three
+checkpoints. `residual_pairs` is a long tensor, so `WeightAverage` routes it
+through `_fixed` rather than averaging it, and `residual_beta` is float and
+averages to itself because it never changes. Both come back through
+`ema_state()` / `swa_state()` and reload into a bare `KneeNet` still coupled --
+verified, and now held by
+`tests/test_averaging.py::TestTheResidualCouplingSurvivesAveraging`. Had either
+been dropped, the EMA and SWA files would have scored as uncoupled models with
+nothing raising, which is the shape of failure the normalisation buffers
+already cost this project once.
+
+### Pre-registered
+
+- **Primary:** conditional AUC on the gold 58, paired against the aux-free
+  fold-1 baseline (0.630). Pass at **>= 0.75**.
+- **The reading that matters more than the number.** This run hard-codes part
+  of the coupling, so **pooled synovitis AUC may rise while conditional does
+  not move at all** -- that is the residual head doing nothing except what
+  beta was told to do, and it is a null, not a win. Judge on conditional, and
+  watch whether the effusion-head-as-synovitis gap (currently +0.021 pooled)
+  widens: if it does, `g` has learned nothing and the head is now more gated
+  than before, by construction.
+- **Guard:** macro more than 0.02 below the fold-1 reference kills it. After
+  run 1 took macro to 0.706, check this line first.
+- **Secondary, higher power:** out-of-fold conditional on mined labels against
+  0.801, paired.
+
+---
+
 ## 2026-08-31 (d) — Stage 1 run 1 diverged; the loss is fixed, not just the weight
 
     epoch  bce_loss  strat_rank  val_macro  gold_macro  gold_syn_conditional
