@@ -257,6 +257,148 @@ class TestPairwiseRankLoss:
         assert combined < (each[0] + each[1]) / 2
 
 
+class TestStratifiedRankLoss:
+    """Stage 1: rank only within an effusion stratum.
+
+    Conditional AUC is within-stratum pair concordance, so a loss that leaks
+    across strata is optimising the metric the plan is trying to stop using.
+    """
+
+    def _loss(self, strata, ref_strata, findings=("Synovitis",), caliper=0.15,
+              score=-2.0, ref_score=2.0):
+        # A pair ordered wrongly: target 1.0 scored below target 0.0.
+        return net.stratified_rank_loss(
+            torch.full((1, 12), score), torch.ones(1, 12),
+            torch.full((1, 12), ref_score), torch.zeros(1, 12),
+            torch.tensor(strata), torch.tensor(ref_strata),
+            findings, caliper)
+
+    def test_a_pair_outside_the_caliper_is_dropped(self):
+        assert self._loss([0.1], [0.9]) == 0.0
+
+    def test_a_pair_inside_the_caliper_counts(self):
+        assert self._loss([0.1], [0.2]) > 0.0
+
+    def test_only_the_named_findings_receive_gradient(self):
+        scores = torch.zeros(1, 12, requires_grad=True)
+        loss = net.stratified_rank_loss(
+            scores, torch.ones(1, 12),
+            torch.full((1, 12), 2.0), torch.zeros(1, 12),
+            torch.tensor([0.5]), torch.tensor([0.5]), ("Synovitis",))
+        loss.backward()
+        touched = (scores.grad.abs().sum(dim=0) > 0).tolist()
+        assert touched == [name == "Synovitis" for name in config.LABELS]
+
+    def test_it_reduces_to_the_plain_loss_at_an_infinite_caliper(self):
+        stratified = net.stratified_rank_loss(
+            torch.full((1, 12), -2.0), torch.ones(1, 12),
+            torch.full((1, 12), 2.0), torch.zeros(1, 12),
+            torch.tensor([0.0]), torch.tensor([1.0]),
+            config.LABELS, caliper=10.0)
+        plain = net.pairwise_rank_loss(
+            torch.full((1, 12), -2.0), torch.ones(1, 12),
+            torch.full((1, 12), 2.0), torch.zeros(1, 12))
+        assert stratified == pytest.approx(float(plain))
+
+
+class TestCouplingPenalty:
+    """The penalty must aim at the truth's coupling, not at independence."""
+
+    @staticmethod
+    def _scores(correlation, n=64):
+        torch.manual_seed(0)
+        parent = torch.randn(n)
+        noise = torch.randn(n)
+        child = correlation * parent + (1 - correlation ** 2) ** 0.5 * noise
+        scores = torch.zeros(n, 12)
+        scores[:, config.LABELS.index("Effusion")] = parent
+        scores[:, config.LABELS.index("Synovitis")] = child
+        return scores
+
+    def test_it_is_smallest_at_the_target(self):
+        child = config.LABELS.index("Synovitis")
+        parent = config.LABELS.index("Effusion")
+        empty = torch.zeros(0, 12)
+        at_target = net.coupling_penalty(self._scores(0.4), empty, child,
+                                         parent, 0.4)
+        decoupled = net.coupling_penalty(self._scores(0.0), empty, child,
+                                         parent, 0.4)
+        overcoupled = net.coupling_penalty(self._scores(0.8), empty, child,
+                                           parent, 0.4)
+        assert at_target < decoupled
+        assert at_target < overcoupled
+
+    def test_too_few_studies_is_a_zero_that_keeps_the_graph(self):
+        scores = torch.zeros(2, 12, requires_grad=True)
+        loss = net.coupling_penalty(scores, torch.zeros(0, 12), 8, 7, 0.4)
+        assert loss == 0.0
+        loss.backward()
+        assert scores.grad is not None
+
+
+class TestResidualCoupling:
+    """`syn_logit = beta * stopgrad(eff_logit) + g(features)`.
+
+    The coupling has to travel in the checkpoint. Every construction site that
+    had to be told about a model detail has eventually forgotten -- that is
+    what the input-normalisation buffers cost -- so a bare `KneeNet` loading a
+    residual checkpoint must reproduce it without being asked.
+    """
+
+    CHILD = config.LABELS.index("Synovitis")
+    PARENT = config.LABELS.index("Effusion")
+
+    def test_off_by_default(self):
+        model = make_model()
+        assert model.residual_pairs is None
+        volumes, meta, mask = make_batch()
+        assert torch.equal(model(volumes, meta, mask),
+                           model.couple(model(volumes, meta, mask)))
+
+    def test_the_parent_logit_is_added_with_beta(self):
+        model = make_model()
+        logits = torch.randn(3, len(config.LABELS))
+        coupled = make_model(residual_pairs=[(self.CHILD, self.PARENT)],
+                             residual_beta=0.5).couple(logits)
+        expected = logits[:, self.CHILD] + 0.5 * logits[:, self.PARENT]
+        assert torch.allclose(coupled[:, self.CHILD], expected)
+        # Nothing else moves.
+        other = [i for i in range(len(config.LABELS)) if i != self.CHILD]
+        assert torch.allclose(coupled[:, other], logits[:, other])
+
+    def test_the_parent_receives_no_gradient_through_the_coupling(self):
+        model = make_model(residual_pairs=[(self.CHILD, self.PARENT)],
+                           residual_beta=0.9)
+        logits = torch.randn(4, len(config.LABELS), requires_grad=True)
+        model.couple(logits)[:, self.CHILD].sum().backward()
+        assert logits.grad[:, self.PARENT].abs().max() == 0.0
+        assert logits.grad[:, self.CHILD].abs().min() > 0.0
+
+    def test_it_travels_in_the_state_dict(self):
+        trained = make_model(residual_pairs=[(self.CHILD, self.PARENT)],
+                             residual_beta=0.6)
+        volumes, meta, mask = make_batch()
+        expected = trained(volumes, meta, mask)
+
+        # A scoring site that knows nothing about the coupling.
+        scoring = make_model()
+        scoring.load_state_dict(trained.state_dict())
+        assert torch.allclose(scoring(volumes, meta, mask), expected)
+        assert scoring.residual_beta.tolist() == pytest.approx([0.6], abs=1e-6)
+
+    def test_an_older_checkpoint_still_loads_strictly(self):
+        older = make_model().state_dict()
+        assert not any(key.startswith("residual") for key in older)
+        make_model().load_state_dict(older)
+
+    def test_mismatched_beta_count_is_refused(self):
+        with pytest.raises(ValueError):
+            make_model(residual_pairs=[(8, 7), (9, 7)],
+                       residual_beta=[0.5])
+        with pytest.raises(ValueError):
+            make_model(residual_pairs=[(8, 7)])
+
+
 class TestFrozenPath:
     """The frozen path must produce the same architecture as the end-to-end one.
 
@@ -482,10 +624,37 @@ class TestBackboneDefaults:
         normed.encode_series(volumes.reshape(2, 4, 8, 8))
         assert abs(seen["mean"] - raw) > 0.5
 
-    def test_normalisation_buffers_stay_out_of_the_state_dict(self):
-        # Every checkpoint written before this must still load strictly.
+    def test_a_convnext_state_dict_gains_no_keys(self):
+        # ConvNeXt trains with no normalisation, so nothing new appears in its
+        # checkpoint and every file this project has already shipped still
+        # loads strictly against the current class.
+        plain = net.KneeNet(nn.Linear(4, 8), 8)
+        assert not [k for k in plain.state_dict() if k.startswith("input_")]
+
+    def test_the_statistics_travel_with_the_weights(self):
         normed = net.KneeNet(nn.Linear(4, 8), 8, input_mean=net.IMAGENET_MEAN,
                              input_std=net.IMAGENET_STD)
-        plain = net.KneeNet(nn.Linear(4, 8), 8)
-        assert set(normed.state_dict()) == set(plain.state_dict())
-        plain.load_state_dict(normed.state_dict())
+        state = normed.state_dict()
+        assert "input_mean" in state and "input_std" in state
+
+    def test_a_bare_model_adopts_the_checkpoint_s_statistics(self):
+        # The bug this replaced: a scoring site that forgot the statistics
+        # loaded every weight strictly and silently scored without them.
+        normed = net.KneeNet(nn.Linear(4, 8), 8, input_mean=net.IMAGENET_MEAN,
+                             input_std=net.IMAGENET_STD)
+        bare = net.KneeNet(nn.Linear(4, 8), 8)
+        assert bare.input_mean is None
+        bare.load_state_dict(normed.state_dict())
+        assert torch.equal(bare.input_mean, normed.input_mean)
+        assert torch.equal(bare.input_std, normed.input_std)
+
+    def test_an_older_checkpoint_still_loads_strictly(self):
+        # Files written before the buffers were persistent carry neither key.
+        normed = net.KneeNet(nn.Linear(4, 8), 8, input_mean=net.IMAGENET_MEAN,
+                             input_std=net.IMAGENET_STD)
+        old = {k: v for k, v in normed.state_dict().items()
+               if not k.startswith("input_")}
+        fresh = net.KneeNet(nn.Linear(4, 8), 8, input_mean=net.IMAGENET_MEAN,
+                            input_std=net.IMAGENET_STD)
+        fresh.load_state_dict(old, strict=True)
+        assert fresh.input_mean is not None

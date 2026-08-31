@@ -101,3 +101,89 @@ class TestSeriesLookup:
             "SeriesInstanceUID": [f"s{i}" for i in range(5)],
         })
         assert len(splits.series_for_studies(manifest, ["a"])) == 5
+
+
+class TestGroupedFolds:
+    """Leave-scanner-out rather than leave-study-out.
+
+    Random K-fold over a multi-site dataset lets a CNN memorise scanner
+    signature and score it as pathology -- the plan puts that at ~0.053 of
+    inflation, with one measured model showing a 0.136 grouped-vs-random gap.
+    Nothing about it raises; the validation number is simply not the number.
+    """
+
+    def _labels(self, n=60):
+        frame = pd.DataFrame({config.ID_COL: [f"s{i}" for i in range(n)]})
+        for name in config.LABELS:
+            frame[name] = (np.arange(n) % 3 == 0).astype(float)
+        return frame
+
+    def test_a_group_is_never_split_across_folds(self):
+        labels = self._labels()
+        groups = pd.Series({f"s{i}": f"scanner{i % 7}" for i in range(60)})
+        folded = splits.make_folds(labels, groups=groups)
+        per_group = folded.assign(group=folded[config.ID_COL].map(groups)) \
+                          .groupby("group")["fold"].nunique()
+        assert (per_group == 1).all()
+
+    def test_every_study_still_gets_a_fold(self):
+        labels = self._labels()
+        groups = pd.Series({f"s{i}": f"scanner{i % 7}" for i in range(60)})
+        folded = splits.make_folds(labels, groups=groups)
+        assert set(folded["fold"]) <= set(range(splits.N_FOLDS))
+        assert (folded["fold"] >= 0).all()
+
+    def test_unequal_groups_are_balanced_greedily(self):
+        # One scanner holding half the corpus cannot be split, so the folds
+        # cannot come out even -- but nothing else should be piled on top of
+        # it. The largest fold must be the one holding that group alone.
+        labels = self._labels(40)
+        groups = pd.Series({f"s{i}": ("big" if i < 20 else f"small{i}")
+                            for i in range(40)})
+        folded = splits.make_folds(labels, groups=groups)
+        sizes = folded["fold"].value_counts()
+        assert sizes.max() == 20
+
+    def test_a_study_missing_from_the_group_map_is_not_dropped(self):
+        labels = self._labels(10)
+        groups = pd.Series({f"s{i}": "scanner0" for i in range(5)})
+        folded = splits.make_folds(labels, groups=groups)
+        assert (folded["fold"] >= 0).all()
+        assert len(folded) == 10
+
+    def test_the_ungrouped_path_is_unchanged(self):
+        # Every reference number on record was produced by it.
+        labels = self._labels()
+        assert splits.make_folds(labels)["fold"].tolist() == \
+            splits.make_folds(labels, groups=None)["fold"].tolist()
+
+
+class TestScannerKey:
+    def test_it_combines_the_three_header_fields(self):
+        index = pd.DataFrame({
+            config.ID_COL: ["a", "a", "b"],
+            "Manufacturer": ["SIEMENS", "SIEMENS", "GE"],
+            "ManufacturerModelName": ["Aera", "Aera", "Signa"],
+            "MagneticFieldStrength": [1.5, 1.5, 3.0],
+        })
+        keys = splits.scanner_key(index)
+        assert keys["a"] == "SIEMENS|Aera|1.5"
+        assert keys["a"] != keys["b"]
+
+    def test_a_study_with_no_scanner_headers_is_grouped_as_unknown(self):
+        index = pd.DataFrame({
+            config.ID_COL: ["a"],
+            "Manufacturer": [None],
+            "ManufacturerModelName": [None],
+            "MagneticFieldStrength": [None],
+        })
+        assert splits.scanner_key(index)["a"] == "unknown"
+
+    def test_it_works_from_whichever_fields_are_present(self):
+        index = pd.DataFrame({config.ID_COL: ["a"], "Manufacturer": ["GE"]})
+        assert splits.scanner_key(index)["a"] == "GE"
+
+    def test_an_index_without_any_of_them_says_so(self):
+        index = pd.DataFrame({config.ID_COL: ["a"], "Rows": [256]})
+        with pytest.raises(ValueError, match="Manufacturer"):
+            splits.scanner_key(index)

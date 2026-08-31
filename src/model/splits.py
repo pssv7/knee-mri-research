@@ -59,21 +59,90 @@ def stratification_key(labels: pd.DataFrame) -> pd.Series:
     return positives.clip(upper=4)
 
 
+def scanner_key(index: pd.DataFrame) -> pd.Series:
+    """A per-study scanner identity, from the header scan's index.
+
+    The dataset spans 16-19 sites on five continents, and a CNN reads scanner
+    signature as readily as it reads pathology. A fold split that puts the same
+    scanner on both sides therefore reports an accuracy that does not survive
+    a new site: the plan's figure is ~0.053 of inflation from random K-fold,
+    with one measured model showing a 0.136 grouped-vs-random gap.
+
+    Site is not given, so manufacturer + model + field strength stands in for
+    it. That is coarser than a site id -- two hospitals with the same scanner
+    collapse into one group, which makes the split *more* conservative, not
+    less -- and it is what the DICOM headers actually carry.
+
+    Takes the frame `src/data/index.py` writes (one row per instance or
+    series, carrying `StudyInstanceUID`), and returns one key per study,
+    indexed by study UID. A study whose headers name none of the three fields
+    gets "unknown", and those all land in one group together.
+    """
+    fields = [c for c in ("Manufacturer", "ManufacturerModelName",
+                          "MagneticFieldStrength") if c in index.columns]
+    if not fields:
+        raise ValueError(
+            "the index carries none of Manufacturer / ManufacturerModelName / "
+            f"MagneticFieldStrength; it has {list(index.columns)[:8]}")
+
+    # fillna after astype: pandas keeps a missing value missing through
+    # astype(str) rather than rendering it "nan", and the join below would
+    # then fail on a float instead of producing a key.
+    joined = index[fields].astype(str).fillna("nan").agg("|".join, axis=1)
+    joined = joined.where(~joined.str.fullmatch(r"(nan\|?)+"), "unknown")
+    # The first series scanned decides the study. A study imaged on two
+    # scanners is rare and either group is defensible; taking the first keeps
+    # the assignment deterministic.
+    return joined.groupby(index[config.ID_COL]).first()
+
+
 def make_folds(labels: pd.DataFrame, n_folds: int = N_FOLDS,
-               seed: int = SEED) -> pd.DataFrame:
+               seed: int = SEED,
+               groups: Optional[pd.Series] = None) -> pd.DataFrame:
     """Assign each study to a fold, stratified by positive-finding count.
 
     Returns the frame with a `fold` column added.
+
+    `groups` maps study UID -> group id (see `scanner_key`). When given, a
+    whole group lands in one fold: the split becomes leave-scanner-out rather
+    than leave-study-out, so validation measures transfer to unseen equipment
+    instead of rewarding memorised scanner signature.
+
+    Grouping costs balance. Groups are sized very unequally -- one scanner may
+    hold a quarter of the corpus -- so groups are assigned largest-first to
+    whichever fold is currently smallest, which is the standard greedy
+    approximation and the best available without splitting a group. Check
+    `summarise()` afterwards: badly imbalanced folds are the price of grouping,
+    and worth knowing before a run rather than after.
+
+    **Changing this re-cuts every fold**, and every reference number on record
+    (fold 1: val 0.872 / gold 0.861 / LB 0.889) belongs to the ungrouped
+    split. Adopt it when the fold ensemble is rebuilt, not in the middle of an
+    experiment that is being compared against those numbers.
     """
     frame = labels.copy().reset_index(drop=True)
     key = stratification_key(frame)
     rng = np.random.default_rng(seed)
 
     frame["fold"] = -1
-    for value in key.unique():
-        rows = np.flatnonzero(key.to_numpy() == value)
-        rng.shuffle(rows)
-        frame.loc[rows, "fold"] = np.arange(len(rows)) % n_folds
+    if groups is None:
+        for value in key.unique():
+            rows = np.flatnonzero(key.to_numpy() == value)
+            rng.shuffle(rows)
+            frame.loc[rows, "fold"] = np.arange(len(rows)) % n_folds
+    else:
+        mapped = frame[config.ID_COL].map(groups).fillna("unknown")
+        sizes = mapped.value_counts()
+        # Shuffle before sorting so equal-sized groups do not always fall the
+        # same way, then place the largest first into the emptiest fold.
+        order = sizes.sample(frac=1.0, random_state=seed).sort_values(
+            ascending=False, kind="mergesort").index
+        counts = np.zeros(n_folds, dtype=int)
+        for group in order:
+            fold = int(np.argmin(counts))
+            rows = np.flatnonzero(mapped.to_numpy() == group)
+            frame.loc[rows, "fold"] = fold
+            counts[fold] += len(rows)
 
     if (frame["fold"] < 0).any():
         raise RuntimeError("some studies were not assigned a fold")

@@ -37,6 +37,25 @@ the bottleneck (model trailing its labels by ≫0.02 under honest evaluation).
    number the project is judged by, which is exactly why it is allowed to
    select checkpoints and gold is not.
 
+**Revised 2026-08-28: mined validation is a *biased* selector, not a noisy
+one.** Its labels come from the same reports the training labels do, carrying
+the same ~18% systematic disagreement with image-derived truth. So once the
+network starts memorising that disagreement, mined-val agreement keeps rising
+while true performance does not — measured here as val 0.860 at epoch 9 falling
+to 0.843 by epoch 20 while gold sat flat at 0.864-0.869 for eleven epochs.
+"Best epoch on val" therefore selects *into* the memorisation phase. Two
+consequences:
+
+- **Prefer selection-free weights.** EMA and SWA are accumulated on every run
+  (`knee_lightning.WeightAverage`) and read no metric at all. Ship those unless
+  a measurement says otherwise.
+- **Gold still selects nothing.** The temptation, once mined val is known to be
+  biased, is to select on gold instead. Don't. It is 58 studies with a macro SE
+  of 0.015-0.025 (Hanley-McNeil); the run-to-run sd of 0.004 measures optimiser
+  noise, not the error on the estimate. **A difference under 0.02 on gold is
+  not a difference.** Resolving 0.015 reliably needs roughly 300-500 clean
+  studies.
+
 ## 3. The loop discipline: cheap before expensive
 
 The cost ladder is: local script (seconds) → gold checkpoint on Colab
@@ -104,3 +123,29 @@ and just cost 0.03 silently.
   backbone) becomes the priority, in that order.
 - Gold underestimates LB by ~0.02 (observed once). One data point; do not
   lean on it.
+
+**Revised 2026-08-29 — the gold-forecast rule, after five trials:**
+
+    change                        gold      LB     verdict
+    8 -> 16 slices              +0.023  +0.024     tracked
+    3 -> 5 series               +0.021  +0.020     tracked
+    16 -> 24 slices             +0.004  +0.002     tracked
+    report loss 0.5             +0.006  -0.009     MISSED
+    20 ep + warmup + P0 fixes   +0.021  -0.001     MISSED
+
+**A gold delta under ~0.03 forecasts nothing.** Hanley-McNeil puts the macro
+SE on 58 studies at 0.015-0.025, so anything smaller is one standard error.
+The three that tracked were capacity changes with real movement behind them;
+both misses sat inside the noise band. The validation fold (~870 studies) has
+been the better forecaster on the one occasion the two disagreed sharply:
+val +0.002 against gold +0.021, and the LB came in at -0.001.
+
+Use gold to check a run is not broken. Do not use it to decide.
+- **Checkpoint selection, not capacity, is what the model is currently losing
+  to.** Falsified if a 20-epoch fold-1 run shows no val/gold divergence, or if
+  the EMA and SWA weights do not match the selected checkpoint on the
+  leaderboard. Added 2026-08-28 with the plan that replaced Phases A-E.
+- **The remaining architectural headroom is in resolution, not the backbone.**
+  Small structures — lateral meniscus at 0.62-0.68, the worst finding on the
+  board — are what higher resolution helps and what 224px caps. Falsified if a
+  288 or 384 cache leaves meniscus AUC flat.

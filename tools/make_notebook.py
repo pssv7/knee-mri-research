@@ -40,6 +40,13 @@ MODEL_MODULES = KAGGLE_MODULES + [
     "src/model/embed.py",
     "src/model/dataset.py",
     "src/model/net.py",
+    # Torch-free, so it costs nothing to carry: the conditional-AUC metric is
+    # needed by the training loop's validation hook (notebook 08) and by the
+    # error-analysis notebook, and a second copy of it would be a second
+    # definition of the number synovitis is judged on.
+    "src/model/conditional.py",
+    "src/model/augment.py",
+    "src/model/averaging.py",
     "src/model/splits.py",
     "src/labels/__init__.py",
 ]
@@ -47,7 +54,21 @@ MODEL_MODULES = KAGGLE_MODULES + [
 # Only notebook 08 trains, and only it needs Lightning. The module imports
 # lightning at import time, which the submission notebook has no reason to
 # require.
-FINETUNE_MODULES = MODEL_MODULES + ["src/model/lightning.py"]
+# Only notebook 11 renders anything, so the inspection module travels only
+# there rather than adding 9 KB of source to every notebook's bootstrap.
+INSPECT_MODULES = MODEL_MODULES + ["src/model/inspect.py"]
+
+# Notebook 08 additionally needs the label package: the silence reweighting
+# lives in `fuse` beside WEIGHT_SILENT and the rationale for it, rather than
+# being reimplemented in the model package where the two could drift. `fuse`
+# imports `calibrate` and `lexicon` at module scope, so they come too -- 1,000
+# lines of pure Python with no dependency beyond numpy and pandas.
+FINETUNE_MODULES = MODEL_MODULES + [
+    "src/labels/calibrate.py",
+    "src/labels/lexicon.py",
+    "src/labels/fuse.py",
+    "src/model/lightning.py",
+]
 
 
 def read(path):
@@ -126,9 +147,14 @@ from src.data import dicom_io, cache, index as index_mod
 if pathlib.Path("src/model/side_classifier.py").exists():
     from src.model import side_classifier
 if pathlib.Path("src/model/net.py").exists():
-    from src.model import embed, dataset as knee_dataset, net, splits
-# Only the fine-tuning notebook materialises this one; it imports lightning at
-# module scope, which nothing else needs.
+    from src.model import (augment as knee_augment, averaging, conditional,
+                           embed, dataset as knee_dataset, net, splits)
+# Only the fine-tuning notebook materialises these; lightning imports its
+# framework at module scope and fuse pulls in the two extractors.
+if pathlib.Path("src/model/inspect.py").exists():
+    from src.model import inspect as knee_inspect
+if pathlib.Path("src/labels/fuse.py").exists():
+    from src.labels import fuse
 if pathlib.Path("src/model/lightning.py").exists():
     from src.model import lightning as knee_lightning
 
@@ -2259,118 +2285,22 @@ worth measuring even when the budget is not at risk.
 # 08 -- end-to-end fine-tuning (Colab)
 # ---------------------------------------------------------------------------
 
-def build_finetune_notebook(colab=False):
-    nb = Notebook(gpu=True)
+# ---------------------------------------------------------------------------
+# Colab staging, shared by every Colab copy
+# ---------------------------------------------------------------------------
+#
+# ONE implementation of "how the inputs arrive", emitted into both
+# 08_finetune_colab and 10_submit_ensemble_colab. It was briefly two
+# hand-trimmed copies, which is how the trimmed one loses a guard the other
+# still has -- so the differences between the notebooks are the arguments
+# below and nothing else.
+#
+# Sentinels rather than an f-string or .format(): the cell body is full of
+# braces of its own ({pattern}, {name}, f-strings) and every one of them would
+# have to be doubled.
 
-    nb.md("""
-# 08 — Fine-Tuned Backbone
-
-Trains a ConvNeXt-T end to end instead of reading frozen DINOv2 features. Prior
-RSNA competitions were won by fine-tuned ImageNet CNNs, so this is the arm most
-likely to top the leaderboard, and the one the frozen path exists to be
-measured against.
-""")
-
-    if colab:
-        nb.md("""
-**This is the Colab copy of notebook 08.** Generated from the same source as
-`08_finetune.ipynb` -- edit `tools/make_notebook.py` and regenerate, never
-this file. Everything below the staging cell is identical to the Kaggle
-notebook, so a result from either is comparable with the other.
-
-**Why a copy exists at all.** The Kaggle GPU quota is 25 h/week and one
-session at a time; when it is spent, Colab is the only GPU left. The blocker
-was never compute, it was the 29 GB cache -- and pulling that over HTTP fails
-at ~5.5 GB with IncompleteRead, consistently.
-
-**The route that works is a mount, not a download.** `kagglehub` resolves a
-Kaggle *dataset* on Colab by asking Colab's backend to mount it at
-`/kaggle/input/<slug>` -- no copy, no Drive, no transfer. That is the same
-path Kaggle itself uses, which is why `find_inputs` needs no change. There is
-no such resolver for notebook *outputs* or for competitions, so:
-
-- the three cache shards must exist as **datasets** (one-time conversion, run
-  `kagglehub.dataset_upload()` from a Kaggle **CPU** notebook -- CPU sessions
-  do not touch the GPU quota),
-- `knee-side-classifier` is a notebook output and downloads, which is fine at
-  its size,
-- the competition contributes exactly two CSVs, fetched per-file with
-  `path=`. Never call `competition_download` without it: the bare call pulls
-  the full 570 GB DICOM archive.
-
-**Authentication is required and is checked first.** The shards and
-`knee-labels` are private, and the competition needs its rules accepted on
-this account; an unauthenticated call fails as a 401 or a bare 404 on a
-handle that plainly exists, which names nothing. Add a Colab secret called
-`KAGGLE_API_TOKEN` holding the `KGAT_...` bearer token (the key icon in the
-sidebar, with notebook access enabled) and the staging cell needs no edit.
-kagglehub checks Colab Secrets last, after `KAGGLE_API_TOKEN` in the
-environment, the legacy `KAGGLE_USERNAME`/`KAGGLE_KEY` pair, and
-`~/.kaggle/kaggle.json` -- the bearer token alone is enough at any of them.
-
-**Do not point `KAGGLEHUB_CACHE` at Drive.** Every byte written through the
-Drive FUSE mount is staged on the VM's local disk first, and kagglehub writes
-each archive twice (download, then extract beside it). That fills a ~100 GB
-VM regardless of how much Drive quota exists.
-
-**One GPU is expected here**, so `STRATEGY` resolves to `"auto"` rather than
-`ddp_notebook`: there is no fork, and the CUDA-poisoning trap that governs
-the Kaggle run does not apply. `ACCUM_STEPS` adapts to hold the effective
-batch constant, so the run stays numerically comparable to a two-GPU one.
-
-**`/kaggle/working` is ephemeral on Colab.** The last cell copies the
-checkpoint, `metrics.csv` and the OOF dump to Drive; those are small. Run it.
-""")
-    else:
-        nb.md("""
-**Runs on Kaggle.** Fine-tuning needs raw volumes, and one cache shard is
-9.7 GB. Pulling that to Colab over HTTP failed twice at ~5.5 GB with
-IncompleteRead -- a consistent ceiling rather than a flaky connection. On
-Kaggle the cache is already mounted and nothing transfers. A T4 is slower than
-an A100, but not slower than a download that never finishes.
-
-If the GPU quota is spent, `08_finetune_colab.ipynb` is the same notebook with
-a staging cell that *mounts* the shards on Colab instead of copying them.
-
-**Attach:** one cache dataset, `knee-labels`, `knee_side_classifier`, and the
-competition data. GPU on. The auxiliary report loss additionally wants
-`report_embeddings.parquet` (built locally by `src/labels/report_embed.py`)
-in the `knee-labels` dataset; without it that loss silently disables, which
-the assemble cell prints.
-""")
-
-    nb.md("""
-
-**This run measures before it commits.** One study is ~5.5 series x 24 slices
-= ~130 slice-forwards, so a full epoch over 4,349 studies is ~570,000. The
-training cell reports actual throughput and projects the full sweep. Read that
-before launching five folds.
-
-Subsampling controls the cost, and both knobs are real trade-offs:
-
-    SLICES_PER_SERIES  16 of 24     the reference geometry; 24 overfit for +0.002
-    MAX_SERIES          5 of ~5.5   a finding may live only in a dropped series
-
-The capacity ladder is finished (0.845 -> 0.869 -> 0.889 -> 0.891) and 16
-slices x 5 series is where experiments iterate. Expect roughly **9 min/epoch,
-~1.8 h for twelve epochs**. If it OOMs, drop `MAX_SERIES` to 4.
-
-**Mirroring is used here**, unlike the frozen path: raw volumes can be
-reflected, so left knees are mapped onto the canonical side along the axis the
-acquisition plane dictates. That makes this a comparison of two things at once,
-backbone and laterality handling, which is worth remembering when reading the
-result.
-""")
-
-    nb.md("## 1. Setup")
-
-    if colab:
-        nb.code("""
-# --- Colab staging: mount the Kaggle data, then run the cells below unchanged.
-# Nothing here writes to Drive. dataset_download MOUNTS on Colab (no copy) and
-# lands under /kaggle/input/<slug>, which is exactly where find_inputs looks,
-# so the rest of this notebook is byte-identical to the Kaggle one.
-!pip install -q timm lightning kagglehub
+COLAB_STAGE_TEMPLATE = """@@HEADER@@
+!pip install -q @@PIP@@
 
 import glob
 import os
@@ -2434,7 +2364,7 @@ print("authenticated as:", kagglehub.whoami()["username"])
 # byte on the VM's disk first and fills it long before Drive notices.
 os.environ.pop("KAGGLEHUB_CACHE", None)
 
-# Notebook 08 writes the checkpoint, metrics.csv and the OOF dump here.
+@@WORKING_NOTE@@
 os.makedirs("/kaggle/working", exist_ok=True)
 os.makedirs("/kaggle/input", exist_ok=True)
 
@@ -2597,10 +2527,163 @@ print(f"\\nshards staged: {len(shards)}")
 for path in shards:
     print(f"  {os.path.basename(path)}  {os.path.getsize(path) / 1e9:.1f} GB")
 if len(shards) < 3:
-    print("WARNING: fewer than three shards. A short run looks entirely "
-          "healthy and trains on part of the data -- the assemble cell must "
-          "report 4,349 studies.")
+@@SHORT_SHARDS@@
+@@TAIL@@"""
+
+
+def colab_stage_cell(pip="timm lightning kagglehub", header=None,
+                     working_note=None, short_shards=None, tail=""):
+    """The Colab input-staging cell.
+
+    Mount first, download second, Drive third -- see the comments in the body.
+    Only four things vary between notebooks: which packages to install, what
+    the cell says it is doing, what /kaggle/working is for, and what a
+    short-shard set means for that notebook. `tail` appends notebook-specific
+    staging after the shared part.
+    """
+    header = header or (
+        "# --- Colab staging: mount the Kaggle data, then run the cells below "
+        "unchanged.\n"
+        "# Nothing here writes to Drive. dataset_download MOUNTS on Colab (no "
+        "copy) and\n"
+        "# lands under /kaggle/input/<slug>, which is exactly where "
+        "find_inputs looks,\n"
+        "# so the rest of this notebook is byte-identical to the Kaggle one.")
+    working_note = working_note or (
+        "# Notebook 08 writes the checkpoint, metrics.csv and the OOF dump "
+        "here.")
+    short_shards = short_shards or (
+        '    print("WARNING: fewer than three shards. A short run looks '
+        'entirely "\n'
+        '          "healthy and trains on part of the data -- the assemble '
+        'cell must "\n'
+        '          "report 4,349 studies.")')
+    cell = COLAB_STAGE_TEMPLATE
+    for sentinel, value in (("@@HEADER@@", header), ("@@PIP@@", pip),
+                            ("@@WORKING_NOTE@@", working_note),
+                            ("@@SHORT_SHARDS@@", short_shards),
+                            ("@@TAIL@@", tail)):
+        cell = cell.replace(sentinel, value)
+    return cell
+
+
+def build_finetune_notebook(colab=False):
+    nb = Notebook(gpu=True)
+
+    nb.md("""
+# 08 — Fine-Tuned Backbone
+
+Trains a ConvNeXt-T end to end instead of reading frozen DINOv2 features. Prior
+RSNA competitions were won by fine-tuned ImageNet CNNs, so this is the arm most
+likely to top the leaderboard, and the one the frozen path exists to be
+measured against.
 """)
+
+    if colab:
+        nb.md("""
+**This is the Colab copy of notebook 08.** Generated from the same source as
+`08_finetune.ipynb` -- edit `tools/make_notebook.py` and regenerate, never
+this file. Everything below the staging cell is identical to the Kaggle
+notebook, so a result from either is comparable with the other.
+
+**Why a copy exists at all.** The Kaggle GPU quota is 25 h/week and one
+session at a time; when it is spent, Colab is the only GPU left. The blocker
+was never compute, it was the 29 GB cache -- and pulling that over HTTP fails
+at ~5.5 GB with IncompleteRead, consistently.
+
+**The route that works is a mount, not a download.** `kagglehub` resolves a
+Kaggle *dataset* on Colab by asking Colab's backend to mount it at
+`/kaggle/input/<slug>` -- no copy, no Drive, no transfer. That is the same
+path Kaggle itself uses, which is why `find_inputs` needs no change. There is
+no such resolver for notebook *outputs* or for competitions, so:
+
+- the three cache shards must exist as **datasets** (one-time conversion, run
+  `kagglehub.dataset_upload()` from a Kaggle **CPU** notebook -- CPU sessions
+  do not touch the GPU quota),
+- `knee-side-classifier` is a notebook output and downloads, which is fine at
+  its size,
+- the competition contributes exactly two CSVs, fetched per-file with
+  `path=`. Never call `competition_download` without it: the bare call pulls
+  the full 570 GB DICOM archive.
+
+**Authentication is required and is checked first.** The shards and
+`knee-labels` are private, and the competition needs its rules accepted on
+this account; an unauthenticated call fails as a 401 or a bare 404 on a
+handle that plainly exists, which names nothing. Add a Colab secret called
+`KAGGLE_API_TOKEN` holding the `KGAT_...` bearer token (the key icon in the
+sidebar, with notebook access enabled) and the staging cell needs no edit.
+kagglehub checks Colab Secrets last, after `KAGGLE_API_TOKEN` in the
+environment, the legacy `KAGGLE_USERNAME`/`KAGGLE_KEY` pair, and
+`~/.kaggle/kaggle.json` -- the bearer token alone is enough at any of them.
+
+**Do not point `KAGGLEHUB_CACHE` at Drive.** Every byte written through the
+Drive FUSE mount is staged on the VM's local disk first, and kagglehub writes
+each archive twice (download, then extract beside it). That fills a ~100 GB
+VM regardless of how much Drive quota exists.
+
+**One GPU is expected here**, so `STRATEGY` resolves to `"auto"` rather than
+`ddp_notebook`: there is no fork, and the CUDA-poisoning trap that governs
+the Kaggle run does not apply. `ACCUM_STEPS` adapts to hold the effective
+batch constant, so the run stays numerically comparable to a two-GPU one.
+
+**`/kaggle/working` is ephemeral on Colab.** The last cell copies the
+checkpoint, `metrics.csv` and the OOF dump to Drive; those are small. Run it.
+""")
+    else:
+        nb.md("""
+**Runs on Kaggle.** Fine-tuning needs raw volumes, and one cache shard is
+9.7 GB. Pulling that to Colab over HTTP failed twice at ~5.5 GB with
+IncompleteRead -- a consistent ceiling rather than a flaky connection. On
+Kaggle the cache is already mounted and nothing transfers. A T4 is slower than
+an A100, but not slower than a download that never finishes.
+
+If the GPU quota is spent, `08_finetune_colab.ipynb` is the same notebook with
+a staging cell that *mounts* the shards on Colab instead of copying them.
+
+**Attach:** one cache dataset, `knee-labels`, `knee_side_classifier`, and the
+competition data. GPU on. The auxiliary report loss additionally wants
+`report_embeddings.parquet` (built locally by `src/labels/report_embed.py`)
+in the `knee-labels` dataset; without it that loss silently disables, which
+the assemble cell prints.
+""")
+
+    nb.md("""
+
+**This run measures before it commits.** One study is ~5.5 series x 24 slices
+= ~130 slice-forwards, so a full epoch over 4,349 studies is ~570,000. The
+training cell reports actual throughput and projects the full sweep. Read that
+before launching five folds.
+
+Subsampling controls the cost, and both knobs are real trade-offs:
+
+    SLICES_PER_SERIES  16 of 24     the reference geometry (gold 0.861, LB 0.889)
+    MAX_SERIES          5 of ~5.5   6 was measured worse (LB 0.885 vs 0.888)
+
+The capacity ladder is finished (0.845 -> 0.869 -> 0.889 -> 0.891) and 16
+slices is where experiments iterate: 24 holds the best LB by +0.002 and overfit
+to get it (val peaked epoch 7, gold fell 0.865 -> 0.842), so it stays reserved
+for a final AUC-slot run.
+
+**This run is P0.4 and the series cap is the only change in it.** 5 -> 6 lifts
+mean series/study 6.7% and cuts truncation from 32.5% of studies to 16.7% --
+about half the remaining headroom on this axis. Compare against the P1 run at
+16 x 5 (val 0.874 / gold 0.882 at epoch 10).
+
+**Budget ~1 h per fold.** 4.7 min/epoch measured on an A100 at 16 x 5, twelve
+epochs. Read the throughput line the training cell prints after epoch 1 before
+walking away. If it OOMs, drop `MAX_SERIES` to 4.
+
+**Mirroring is used here**, unlike the frozen path: raw volumes can be
+reflected, so left knees are mapped onto the canonical side along the axis the
+acquisition plane dictates. That makes this a comparison of two things at once,
+backbone and laterality handling, which is worth remembering when reading the
+result.
+""")
+
+    nb.md("## 1. Setup")
+
+    if colab:
+        nb.code(colab_stage_cell())
 
     setup_source = """
 !pip install -q timm
@@ -2709,6 +2792,51 @@ def find_competition_file(name):
 
 
 labels = pd.read_parquet(find_inputs("train_labels.parquet")[0])
+
+# SILENCE REWEIGHTING -- the Synovitis fix.
+#
+# 82.2% of studies say nothing about Synovitis. Its mined target averages
+# 0.087; its true prevalence on the gold 58 is 46.6%. So ~1,666 of the 3,576
+# silent studies are true positives being trained toward zero, and because
+# silence is so common for this finding they carry **57% of its gradient**.
+# The model is taught to rank real positives low, and duly scores 0.682 on
+# gold -- the only finding where fine-tuning is WORSE than the retired frozen
+# path (0.746). That is what fitting label noise harder looks like.
+#
+# The fix multiplies the silent weight by (1 - silence_rate), measured on the
+# 4,349 mined studies. One rule, no free parameters, no gold. Silence about
+# ACL (9.2% of studies) keeps nearly its full weight, because a report that
+# discusses ligaments and omits the ACL is saying something; silence about
+# Synovitis falls to 0.044 because a corpus that mentions it once in six
+# studies is not. Targets are untouched -- fabricating P(positive | silent) as
+# a target was measured worse on every variant tried, and that stands.
+#
+# Near-neutral for 8 of 12 findings by construction: silence already carries
+# only 3-5% of the gradient where reports are thorough. Synovitis goes 57% ->
+# 19%.
+# MEASURED 2026-08-29 AND FAILED. Synovitis 0.682 -> 0.694 against a gate of
+# 0.78; per-finding gold SE is 0.045-0.08, so +0.012 is noise. The correlation
+# between how much weight a finding lost and how its AUC moved is -0.08 --
+# i.e. nothing happened in either direction, to any finding.
+#
+# What that rules out: silent false negatives dragging the ranking down was
+# NOT the mechanism. Removing 57% -> 19% of Synovitis's gradient from silent
+# studies changed nothing, so the studies that remain must be where the
+# problem is -- the 18% of reports that DO mention synovitis are presumably
+# the severe cases, and a model trained on those cannot rank the mild ones
+# that the radiologist graded positive. Loss weighting cannot fix a biased
+# positive sample; only image-derived labels for the silent studies can.
+SILENCE_REWEIGHT = False
+
+if SILENCE_REWEIGHT:
+    _rates = fuse.silence_rates(labels)
+    labels = fuse.rescale_silent_weights(labels)
+    print("silence reweighting ON")
+    for _n in sorted(config.LABELS, key=lambda x: -_rates[x])[:3]:
+        print(f"  {_n:18s} silent {_rates[_n]:5.1%} -> weight "
+              f"{fuse.WEIGHT_SILENT * (1 - _rates[_n]):.3f}")
+else:
+    print("silence reweighting OFF (reference labels)")
 sides = pd.read_parquet(find_inputs("side_predictions.parquet")[0])
 
 # Report sentence embeddings, built locally by src/labels/report_embed.py and
@@ -2749,14 +2877,73 @@ for cache_path in cache_paths:
 
 manifest = pd.concat(frames, ignore_index=True)
 
-folded = splits.make_folds(labels)
+# GROUPED FOLDS -- leave-scanner-out instead of leave-study-out.
+#
+# The corpus spans 16-19 sites, and a CNN reads scanner signature as readily
+# as it reads pathology. A random split puts the same equipment on both sides
+# of the fold and reports an accuracy that will not survive a new site: the
+# figure in the plan is ~0.053 of inflation, with one measured model showing a
+# 0.136 grouped-vs-random gap. Nothing about it raises.
+#
+# DEFAULT OFF, deliberately. Turning it on re-cuts every fold, and every
+# reference number this project has (fold 1: val 0.872 / gold 0.861 / LB
+# 0.889) belongs to the ungrouped split -- so an experiment compared against
+# those numbers must NOT flip this. Turn it on when the five-fold ensemble is
+# rebuilt from scratch, and expect the validation numbers to drop: that drop
+# is the inflation being removed, not a regression.
+#
+# Needs notebook 01's index.parquet attached, for the scanner headers. It is
+# not part of the cache dataset, so this falls back with a warning rather than
+# failing a training run over a missing input.
+GROUPED_FOLDS = False
+
+groups = None
+if GROUPED_FOLDS:
+    _index_files = find_inputs("index_train.parquet") + find_inputs("index.parquet")
+    if _index_files:
+        groups = splits.scanner_key(pd.read_parquet(_index_files[0]))
+        print(f"grouped folds: {groups.nunique()} scanner groups over "
+              f"{len(groups)} studies")
+    else:
+        print("GROUPED_FOLDS is on but no index parquet was found -- attach "
+              "notebook 01's output. Falling back to the ungrouped split.")
+
+folded = splits.make_folds(labels, groups=groups)
 splits.assert_no_gold_leakage(folded["StudyInstanceUID"], set(gold["StudyInstanceUID"]))
+if groups is not None:
+    _summary = splits.summarise(folded)
+    print(_summary[["studies"] + config.LABELS[:4]].to_string())
+    print("  fold sizes are uneven by construction -- a scanner group cannot "
+          "be split. Check the positive rates before trusting a comparison.")
 
 # Capacity ladder, step 2. Doubling slices was worth +0.024 on the
 # leaderboard, so the other axis the study is subsampled on is the next thing
 # to test. Most studies hold ~5.5 series and three were being kept; PF OA is
 # one of only two findings where this model still loses to frozen DINOv2
 # features, and the patella may simply not be in the three that survive.
+#
+# CURRENT: 5. P0.4 raised this to 6 and it was MEASURED NEGATIVE -- LB 0.885
+# against the same configuration's 0.888 at cap 5, with gold -0.005 and +4%
+# runtime. Reverted 2026-08-29. The series axis is closed: the plan put total
+# remaining headroom at +14% and 5 -> 6 was half of it.
+#
+# Historical note kept because the gate passed a null:
+#
+# 5 -> 6 buys about half the remaining headroom on the series axis: mean
+# series/study +6.7%, truncation down from 32.5% of studies to 16.7%. The mean
+# is 5.53 series per study, so uncapping would add only another ~7% for the
+# last 2.3%. Cheap: a load-time knob, every series already cached.
+#
+# Held at 5 through the P1 run so gold differed from the reference on run
+# length alone. P1 is done -- no divergence, selection cost 0.000 -- so the
+# hold is released.
+#
+# THE COMPARISON is the P1 run: fold 1, 20 epochs, 16 x 5, val 0.874 / gold
+# 0.882 at epoch 10. The plan's gate is "gold up or flat with no cost blowup".
+# Read val as well: on 58 gold studies 0.02 is one standard error, and val has
+# ~870.
+#
+# Notebook 10's TUNED_MAX_SERIES tracks this constant; a test asserts it.
 MAX_SERIES = 5
 
 index = knee_dataset.StudyIndex(manifest, series_meta, folded, sides,
@@ -2790,10 +2977,29 @@ from torch.utils.data import DataLoader
 # leaderboard, 3 -> 5 series +0.020, and 16 -> 24 slices +0.002 while the
 # gold curve began falling after epoch 7 -- overfitting, not headroom.
 #
-# Experiments therefore iterate at 16 slices, the reference geometry behind
-# LB 0.889 / gold 0.861 on fold 1. The current experiment is the pair of
-# auxiliary losses above; 24 remains a one-line change reserved for a final
-# AUC-slot run, where its +0.002 may still be worth the runtime.
+# CURRENT: 16, the reference geometry -- fold 1 at 16 x 5 is val 0.872 /
+# gold 0.861 / LB 0.889, the only split with a measured baseline.
+#
+# **24 is not the better setting, despite holding the best LB.** It scored
+# 0.891 against 16's 0.889 -- +0.002 for +57% training and +48% inference --
+# and it overfit while doing it: val peaked at epoch 7 and fell to 0.871 while
+# **gold fell 0.865 -> 0.842**. Both curves down together is capacity against
+# 4,349 studies, not headroom.
+#
+# That matters specifically for the run this notebook is currently set up for.
+# P1 asks whether a late gold decline comes from a biased selector rather than
+# from overfitting; at 24 slices ConvNeXt has already produced the overfitting
+# shape once, so the two explanations are indistinguishable there. At 16 the
+# late decay was mild (0.854 -> 0.849 over epochs 9-12, and that was with an
+# auxiliary loss on), which is the condition under which the answer is legible.
+#
+# The plan agrees: "past ~16-24 slices, expect flattening ... treat slice count
+# as roughly saturated and spend compute elsewhere". The headroom for the small
+# structures is resolution, which needs a cache rebuild at CACHE_SIZE 288 or
+# 384 -- not a change here.
+#
+# Notebook 10's TUNED_SLICES tracks this constant and a test asserts the two
+# agree, because a mismatch scores worse without erring.
 SLICES_PER_SERIES = 16
 
 # One study per rank, held over from the five-series rung (1 x 5 x 16 = 80
@@ -2837,15 +3043,25 @@ import timm
 # series counts. `net.build_backbone` handles the ViT-family input-size
 # argument, so a DINOv2 name works here unchanged.
 #
-# The incumbent is "convnext_tiny.fb_in22k_ft_in1k" (768 features, 27.8M
-# params) -- restore it to resume the fold ensemble.
+# CURRENT: the incumbent, "convnext_tiny.fb_in22k_ft_in1k" (768 features,
+# 27.8M params). FEATURE_DIM printed below is the check that an edit here
+# reached the running notebook: 768 features and 27.8M params is ConvNeXt-T.
 #
-# CURRENT RUN: the DINOv2-S probe. The FEATURE_DIM printed below is the check
-# that the swap took effect: 384 features and ~22M params means DINOv2, 768
-# and 27.8M means this edit did not reach the running notebook. The frozen
-# version of this same trunk is the retired 0.787 baseline; this run is
-# asking what it does fine-tuned, and the gate is fold 1's gold 0.861.
-BACKBONE = "vit_small_patch14_reg4_dinov2.lvd142m"
+# **The DINOv2 axis is closed.** Fine-tuned DINOv2-S measured gold 0.820
+# against fold 1's 0.861 gate, and at 24 slices it converged level with
+# ConvNeXt while losing to its own frozen self on three findings. That matches
+# the published evidence rather than contradicting it: DINOv2 transfers "on
+# par or slightly better" than supervised CNNs on medical *classification*
+# (Bassi et al., arXiv:2312.02366), its gains are a segmentation story, and
+# even DINOv3 only overtakes ImageNet initialisation at 512px -- where
+# ConvNeXt-B still beat ViT-B/16 (arXiv:2510.07191). Do not re-run it.
+#
+# The backbone experiments still open, in order: ConvNeXt-V2-Base
+# ("convnextv2_base.fcmae_ft_in22k_in1k", +1.1-1.5% ImageNet top-1 over V1
+# from FCMAE pretraining + GRN, CVPR 2023) as a drop-in, then EfficientNet-V2-S
+# as a second trunk for a rank ensemble. Both keep BACKBONE_DEFAULTS' convnet
+# path, so each is a one-variable change.
+BACKBONE = "convnext_tiny.fb_in22k_ft_in1k"
 
 # Built once here before the trainer spawns its workers. Each rank constructs
 # its own backbone, and two processes racing to download the same weights into
@@ -2883,10 +3099,78 @@ import time
 
 import timm
 
+# THIS CELL DEPENDS ON EVERY CELL ABOVE IT.
+#
+# The five-fold sweep is run by changing FOLD here and re-running from this
+# point, which works only while the kernel still holds the earlier cells. A
+# restarted or reclaimed Colab runtime loses them, and the first symptom is
+# `NameError: name 'make_loader' is not defined` twenty lines down -- which
+# says nothing about what to do. Name the real problem instead.
+_required = {
+    "DEVICES": "1. Setup",
+    "knee_lightning": "2. Repo modules",
+    "index": "3. Assemble",
+    "make_loader": "4. Dataset",
+    "FEATURE_DIM": "5. Model",
+}
+_missing = {name: cell for name, cell in _required.items()
+            if name not in globals()}
+if _missing:
+    raise SystemExit(
+        "This cell needs the cells above it, and this kernel has not run "
+        "them:\\n"
+        + "\\n".join(f"    {name!r} comes from section {cell}"
+                     for name, cell in _missing.items())
+        + "\\n\\nRun the notebook from the top (Runtime -> Run all). Changing "
+          "FOLD and re-running only this cell works within a LIVE kernel; a "
+          "restarted runtime has to re-run everything.")
+
 # The measurement run reached 0.729 at epoch 4 and was still rising
 # (0.584 -> 0.679 -> 0.708 -> 0.729), so four was undertrained.
+#
+# CURRENT: 12, back from the 20 the P1 experiment used.
+#
+# Run length is measured and closed. Twelve epochs scored LB 0.889 and twenty
+# scored 0.888 at the same geometry; across three 20-epoch runs val was flat
+# from epoch 10 and gold moved +0.003 over epochs 12-20. Nothing is bought
+# after 12.
+#
+# This is NOT "stop the 20-epoch run early" -- OneCycleLR is sized by EPOCHS,
+# so a 12-epoch run anneals into its low-rate phase by epoch 12 rather than
+# being cut off mid-schedule. It is a different, complete run.
+#
+# At 12 the absolute warmup below reproduces the historic schedule exactly:
+# 3.6 / 12 = pct_start 0.30, OneCycleLR's default, which is what every
+# reference number on record was trained under.
+#
+# Saves 38 min per fold, ~1.9 h across the three outstanding folds.
 EPOCHS = 12
 LR = 1e-4
+
+# Warmup as an ABSOLUTE step count, not OneCycleLR's default 0.3 fraction.
+# The fraction restretches with run length: at EPOCHS=12 the learning rate
+# peaks near epoch 3.6, at EPOCHS=20 near epoch 6. Two runs of different
+# lengths are then at different points of differently shaped schedules at the
+# same epoch number, so "the best epoch moved" means nothing. Pinning the peak
+# makes the 12- and 20-epoch runs comparable, which is what P1 needs.
+#
+# 0.3 x 12 epochs' worth of steps, so a twelve-epoch run is unchanged and a
+# longer one warms up over the same absolute distance.
+WARMUP_EPOCHS = 3.6
+SCHEDULE = "onecycle"   # "cosine" removes the restretch entirely
+
+# Seeded so every fold starts the aggregation from the same random
+# initialisation. Reproducibility is the small reason. The real one is that
+# weight averaging across folds -- a model soup -- is only meaningful for
+# models in the same loss basin, and two runs whose heads were initialised
+# differently are not. Averaging them produces a worse model, silently.
+SEED = 0
+# Safe to call here: seed_everything defers the CUDA seeding through
+# torch.cuda._lazy_call rather than initialising a context, so the fork this
+# notebook depends on is not poisoned. The STRATEGY guard further down checks
+# torch.cuda.is_initialized() anyway and stops with an instruction if anything
+# ever changes that.
+pl.seed_everything(SEED, workers=True)
 
 # Two auxiliary objectives, both training-time only and both dropped at
 # export, so notebook 10 is untouched. Either is disabled by setting its
@@ -2915,6 +3199,51 @@ LR = 1e-4
 # stays for any later phase that reaches for more capacity.
 LAMBDA_REPORT = 0.0
 LAMBDA_RANK = 0.0
+
+# --- Stage 1: the conditional synovitis objective -------------------------
+# All three knobs are off by default, so a reference fold is unchanged.
+#
+# Why they exist: on the gold 58 the *effusion* head scores 0.722 as a
+# synovitis classifier against the synovitis head's 0.701, and the gold
+# effusion label alone scores 0.698. Pooled AUC on this finding is therefore
+# obtainable with no synovitis-specific skill, which is why seven consecutive
+# experiments read as null. The metric that can see the finding is
+# effusion-stratified conditional AUC -- concordance over positive/negative
+# pairs drawn from the same effusion stratum -- and it stands at 0.630.
+#
+# LAMBDA_STRATIFIED_RANK: RankNet restricted to pairs whose predicted effusion
+# scores lie within STRATIFIED_CALIPER. Conditional AUC *is* within-stratum
+# pair concordance, so this optimises the metric rather than a proxy for it.
+# The known risk: stripping effusion removes the one reliable cue and leaves a
+# harder task supervised by labels silent in 82.2% of reports against a true
+# prevalence of 46.6%. Watch `gold_Synovitis_conditional`, which every epoch
+# now logs beside `gold_Synovitis_pooled`.
+#
+# RESIDUAL_BETA: builds `syn_logit = beta * stopgrad(eff_logit) + g(features)`
+# into the model, so g can only learn what effusion does not explain. Not
+# derived from the model's own +0.93 self-coupling (that is the thing being
+# replaced) and not from r_true = 0.403 (a correlation between two binary
+# labels is not a logit coefficient). Fitted on labels, out of fold, by
+# `conditional.calibrate_coupling`: 0.64 against the 58 gold labels, 1.14
+# against the mined ones, which are 82% silent and biased toward severity.
+# The coupling travels in the checkpoint, so notebook 10 needs no change.
+#
+# LAMBDA_COUPLING: a decorrelation penalty that aims at COUPLING_TARGET rather
+# than at zero. The findings genuinely co-occur (gold odds ratio 6.09,
+# p = 0.003, label correlation 0.403) while the model couples them at 0.65,
+# so independence is the wrong target and the module refuses a penalty
+# without an explicit one.
+#
+# Pre-registered success criterion, before any of this is run: conditional
+# AUC 0.630 -> >= 0.75 on the gold 58, tested by paired bootstrap
+# (tools/synovitis_gate.py). That is pooled ~0.755 on the same studies.
+LAMBDA_STRATIFIED_RANK = 0.0
+STRATIFIED_FINDINGS = ("Synovitis",)
+STRATIFY_BY = "Effusion"
+STRATIFIED_CALIPER = 0.15
+RESIDUAL_BETA = None        # e.g. 0.64 to switch the residual head on
+LAMBDA_COUPLING = 0.0
+COUPLING_TARGET = 0.403     # the observed truth coupling, not independence
 
 # AUX_MODE selects how the lambdas above are applied.
 #
@@ -2966,10 +3295,28 @@ REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
 # member of the average a different model. The banner below states which run
 # this is.
 #
-# CURRENT RUN: the DINOv2-S fine-tune probe. Restore FOLD = 0 and BACKBONE =
-# convnext_tiny to resume the ensemble if the probe fails its gate.
-FOLD = 1
+# CURRENT RUN: fold 4, the last of the five. Folds 0, 1, 2 and 3 are done and
+# verified from their checkpoints; the banner below prints what is outstanding.
+# ~1 h at 12 epochs.
+#
+# This is the only remaining item with a positive track record in this project
+# (+0.005-0.010 historically). It is variance insurance for the private
+# leaderboard rather than a public climb: a five-fold result at ~0.890 is a
+# SUCCESS, because the cross-split spread on a single fold is ~0.012 and the
+# average removes it.
+#
+# NOTHING ELSE CHANGES BETWEEN THESE THREE RUNS. Seven single-variable
+# experiments have now measured null against a gold set whose macro SE is
+# 0.015-0.025; the instrument cannot read them, so do not slip one in here.
+FOLD = 4
 CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
+
+# Where the EMA and SWA weights land. Deliberately NOT convnext_fold*_ema.pt:
+# notebook 10 averages every `convnext_fold*.pt` it can see, so a name under
+# that glob would silently join the fold ensemble as an extra member of the
+# same run. `avg_fold{N}_ema.pt` and `avg_fold{N}_swa.pt` are picked up only
+# when TUNED_PATTERNS asks for them by name.
+AVERAGE_PREFIX = f"/kaggle/working/avg_fold{FOLD}"
 
 keyed = folded.set_index("StudyInstanceUID")
 train_studies = [s for s in index.studies if keyed.loc[s, "fold"] != FOLD]
@@ -2988,11 +3335,22 @@ TOTAL_STEPS = knee_lightning.optimiser_steps(
     len(train_studies), BATCH_STUDIES, DEVICES, ACCUM_STEPS, EPOCHS)
 print("optimiser steps:", TOTAL_STEPS)
 
+WARMUP_STEPS = int(round(TOTAL_STEPS / EPOCHS * WARMUP_EPOCHS))
+print(f"warmup: {WARMUP_STEPS} steps ({WARMUP_EPOCHS} epochs' worth), "
+      f"schedule {SCHEDULE}")
+
 module = knee_lightning.KneeLitModule(
     backbone=net.build_backbone(BACKBONE),
     feature_dim=FEATURE_DIM, lr=LR, total_steps=TOTAL_STEPS,
     report_dim=REPORT_DIM, lambda_report=LAMBDA_REPORT,
     lambda_rank=LAMBDA_RANK, aux_mode=AUX_MODE, aux_gate=AUX_GATE,
+    schedule=SCHEDULE, warmup_steps=WARMUP_STEPS,
+    lambda_stratified_rank=LAMBDA_STRATIFIED_RANK,
+    stratified_findings=STRATIFIED_FINDINGS, stratify_by=STRATIFY_BY,
+    stratified_caliper=STRATIFIED_CALIPER,
+    lambda_coupling=LAMBDA_COUPLING,
+    coupling_target=COUPLING_TARGET if LAMBDA_COUPLING > 0 else None,
+    residual_beta=RESIDUAL_BETA,
     **BACKBONE_DEFAULTS)
 print(f"trunk lr: {LR * BACKBONE_DEFAULTS['backbone_lr_scale']:.1e}  "
       f"head lr: {LR:.1e}  "
@@ -3000,31 +3358,94 @@ print(f"trunk lr: {LR * BACKBONE_DEFAULTS['backbone_lr_scale']:.1e}  "
 print(f"aux losses: report {LAMBDA_REPORT} (dim {REPORT_DIM})  "
       f"rank {LAMBDA_RANK}  mode {AUX_MODE}"
       + (f"/{AUX_GATE}" if AUX_MODE == "cosine" else ""))
+print(f"synovitis: stratified rank {LAMBDA_STRATIFIED_RANK} "
+      f"(caliper {STRATIFIED_CALIPER})  residual beta {RESIDUAL_BETA}  "
+      f"coupling {LAMBDA_COUPLING}"
+      + (f" -> {COUPLING_TARGET}" if LAMBDA_COUPLING > 0 else ""))
 
 # Which of the notebook's two mutually exclusive runs this is. An ensemble
 # fold trained with an auxiliary loss makes one member of the average a
 # different model, and the averaging hides it -- so say it before the hours
 # are spent, not after the leaderboard disagrees.
-_aux_on = LAMBDA_REPORT > 0 or LAMBDA_RANK > 0
+# --- Ensemble bookkeeping -------------------------------------------------
+# Which folds are already trained at the reference config. Update this list
+# when a fold finishes and its .pt is safely off the VM -- it is the only
+# record a cold session has of what is left to run.
+#
+# Verified by opening each checkpoint's stored hyper_parameters rather than
+# trusting the filenames: folds 0, 1, 2 all report total_steps 5220 (12 epochs
+# at 435 steps/epoch), both auxiliary lambdas 0.0, gated_pool False.
+#
+# Fold 3 is the older 2026-08-26 checkpoint: 5232 steps, also 12 epochs and
+# also aux-free, but predating both `gated_pool` and `seed_everything`. Kept.
+# The 12-step difference is nothing, and the missing seed matters only for
+# weight-space souping -- notebook 10 averages probabilities, so it does not
+# apply. Retraining it would buy homogeneity nobody can measure.
+ENSEMBLE_DONE = {0: "2026-08-30, 12 ep, val 0.8814",
+                 1: "2026-08-30, 12 ep, val 0.8726",
+                 2: "2026-08-30, 12 ep, val 0.8675",
+                 3: "2026-08-26, 12 ep, val 0.8686 (LB 0.877 solo)"}
+ENSEMBLE_TODO = [f for f in range(5) if f not in ENSEMBLE_DONE]
+
+# The reference config, spelled out. Every member of an average must be the
+# same model; one fold trained with a different knob makes the ensemble a
+# blend of two things and the averaging hides it. Checked, not trusted.
+_expected = {"SLICES_PER_SERIES": (SLICES_PER_SERIES, 16),
+             "MAX_SERIES": (MAX_SERIES, 5),
+             "EPOCHS": (EPOCHS, 12),
+             "LAMBDA_REPORT": (LAMBDA_REPORT, 0.0),
+             "LAMBDA_RANK": (LAMBDA_RANK, 0.0),
+             "LAMBDA_STRATIFIED_RANK": (LAMBDA_STRATIFIED_RANK, 0.0),
+             "RESIDUAL_BETA": (RESIDUAL_BETA, None),
+             "LAMBDA_COUPLING": (LAMBDA_COUPLING, 0.0),
+             "SILENCE_REWEIGHT": (SILENCE_REWEIGHT, False),
+             "BACKBONE": (BACKBONE, "convnext_tiny.fb_in22k_ft_in1k")}
+_wrong = {k: v for k, (v, want) in _expected.items() if v != want}
+
 print("=" * 68)
-if _aux_on and FOLD == 1:
-    print("  AUX EXPERIMENT: fold 1, the only split with a baseline")
-    print("  compare against val 0.872 / gold 0.861 / LB 0.889")
-    print("  read report_gate in metrics.csv; decide on the LB, not on val")
-elif not _aux_on:
-    print(f"  ENSEMBLE FOLD {FOLD}: reference config, no auxiliary loss")
-    print("  export convnext_fold{}.pt and keep it for the 5-fold run".format(FOLD))
+if _wrong:
+    print(f"  OFF-REFERENCE FOLD {FOLD}. These differ from the ensemble config:")
+    for k, v in _wrong.items():
+        print(f"    {k} = {v!r}, reference is {_expected[k][1]!r}")
+    print("  An ensemble member trained off-reference makes the average a")
+    print("  blend of two models, and the averaging hides it. Fix these, or")
+    print("  accept that this run is an experiment and not a member.")
+elif FOLD in ENSEMBLE_DONE:
+    print(f"  FOLD {FOLD} IS ALREADY DONE -- {ENSEMBLE_DONE[FOLD]}")
+    print(f"  Retraining it is fine, but the folds still missing are "
+          f"{ENSEMBLE_TODO}.")
 else:
-    print(f"  MISCONFIGURED: auxiliary loss on with FOLD = {FOLD}.")
-    print("  This is neither an ensemble fold (which needs the lambdas at")
-    print("  0.0) nor a readable experiment (which needs fold 1). Stop and")
-    print("  set one of the two configurations at the top of this notebook.")
+    print(f"  ENSEMBLE FOLD {FOLD}: reference config, no auxiliary loss")
+    print(f"  done: {sorted(ENSEMBLE_DONE)}   outstanding after this: "
+          f"{[f for f in ENSEMBLE_TODO if f != FOLD]}")
+    print(f"  export convnext_fold{FOLD}.pt and COPY IT OFF THE VM before the")
+    print("  session ends -- /kaggle/working does not survive.")
 print("=" * 68)
 
 checkpointer = pl.callbacks.ModelCheckpoint(
     dirpath="/kaggle/working", filename=f"lit_fold{FOLD}",
     monitor="val_macro", mode="max", save_top_k=1)
 report = knee_lightning.EpochReport()
+
+# Selection-free weights, accumulated alongside the monitored checkpoint so
+# one run produces three candidates instead of one:
+#
+#   lit_fold{N}.ckpt      the best mined-val epoch      <- selected, suspect
+#   avg_fold{N}_ema.pt    exponential moving average    <- selection-free
+#   avg_fold{N}_swa.pt    equal average, last 25%       <- selection-free
+#
+# The argument for the two averages is that the selector is broken, not that
+# the optimiser is. Mined validation shares its ~18% systematic disagreement
+# with gold with the training labels, so late in training it rewards
+# memorising exactly the labels that are wrong -- Liu et al., ELR, NeurIPS
+# 2020. Averaging asks nothing of any metric. SWA (Izmailov et al., UAI 2018)
+# lands in a flatter region than any single point on the trajectory; EMA
+# (Tarvainen & Valpola, NeurIPS 2017) is the cheap continuous version.
+#
+# Scored against each other in the cell below. Nothing here selects.
+averager = knee_lightning.WeightAverage(
+    prefix=AVERAGE_PREFIX, decay=0.999, swa_fraction=0.25,
+    total_steps=TOTAL_STEPS)
 
 # Metrics go to a CSV as well as to stdout. Under ddp_notebook every rank is
 # a forked child, and a child's prints do not always find their way back to
@@ -3058,7 +3479,8 @@ trainer = pl.Trainer(
     strategy=STRATEGY,
     precision="16-mixed",
     accumulate_grad_batches=ACCUM_STEPS,
-    callbacks=[checkpointer, report, knee_lightning.BatchProgress()],
+    callbacks=[checkpointer, report, averager,
+               knee_lightning.BatchProgress()],
     logger=csv_logger,
     log_every_n_steps=50,
     enable_model_summary=False,
@@ -3080,14 +3502,34 @@ elapsed = time.time() - start
 # that effect. Formatting it here crashed a finished twelve-epoch run. So the
 # path is used, the score comes from the CSV below, and the path itself is
 # checked against the filesystem rather than trusted.
+def recover_checkpoint(fold):
+    \"\"\"The checkpoint this run wrote, when `best_model_path` came back empty.
+
+    NOT `sorted(glob(...))[0]`, which is what this was. That picks the first
+    name ALPHABETICALLY, and "-" (45) sorts before "." (46), which sorts
+    before "_" (95): `lit_fold1-v1.ckpt` beats `lit_fold1.ckpt`, which beats
+    `lit_fold1_old.ckpt`. Lightning writes those `-vN` suffixes on every name
+    collision, so a session that resumed after a crash silently recovered a
+    checkpoint from the earlier attempt.
+
+    The exact name wins when it exists, and otherwise the newest file does --
+    which is this run's, since this cell runs seconds after fit returned.
+    \"\"\"
+    exact = f"/kaggle/working/lit_fold{fold}.ckpt"
+    if os.path.exists(exact):
+        return exact
+    found = glob.glob(f"/kaggle/working/lit_fold{fold}*.ckpt")
+    return max(found, key=os.path.getmtime) if found else None
+
+
 checkpoint_path = checkpointer.best_model_path or ""
 if not checkpoint_path or not os.path.exists(checkpoint_path):
-    found = sorted(glob.glob(f"/kaggle/working/lit_fold{FOLD}*.ckpt"))
-    if not found:
+    checkpoint_path = recover_checkpoint(FOLD)
+    if checkpoint_path is None:
         raise SystemExit(
             "training finished but no checkpoint was written -- check the "
             "epoch log for whether val_macro was ever computed")
-    checkpoint_path = found[0]
+    print(f"best_model_path was empty; recovered {checkpoint_path}")
 print("\\nbest checkpoint:", checkpoint_path)
 
 # Convert Lightning's checkpoint into the bare KneeNet state dict notebook 10
@@ -3095,6 +3537,21 @@ print("\\nbest checkpoint:", checkpoint_path)
 # not the process that trained.
 n_tensors = knee_lightning.export_from_checkpoint(checkpoint_path, CHECKPOINT)
 print(f"wrote {CHECKPOINT} ({n_tensors} tensors)")
+
+# The averages were written by the callback inside fit, in on_train_end. They
+# are read back off disk here for exactly the reason best_model_score comes
+# back None: under ddp_notebook the object that accumulated them lives in a
+# forked child, and `averager.average` in THIS process is still None. Asking
+# it directly would report an empty average with no error at all.
+AVERAGES = {kind: f"{AVERAGE_PREFIX}_{kind}.pt"
+            for kind in ("ema", "swa")
+            if os.path.exists(f"{AVERAGE_PREFIX}_{kind}.pt")}
+for kind, path in AVERAGES.items():
+    print(f"wrote {path} ({kind.upper()} weights, selection-free)")
+if not AVERAGES:
+    print("NOTE: no averaged weights on disk -- the WeightAverage callback "
+          "did not run to on_train_end. The monitored checkpoint is fine; "
+          "only the P2 comparison is unavailable.")
 
 # Re-read the epoch table rather than trusting the forked ranks' stdout. The
 # logger's version is pinned, because the child resolves it during fit and a
@@ -3114,6 +3571,38 @@ try:
     print(f"\\nbest val macro {best['val_macro']:.3f} at epoch "
           f"{best_epoch + 1}; gold there {best['gold_macro']:.3f} "
           "(monitor only, never selected on)")
+
+    # P1's verdict, read off the curves this run just produced.
+    #
+    # The claim under test: mined validation is a BIASED selector, not merely
+    # a noisy one. It carries the same ~18% systematic disagreement with
+    # image-derived truth that the training labels do, so once the network
+    # starts memorising that disagreement, mined-val agreement keeps rising
+    # while true performance does not. The signature is a val peak that
+    # arrives while gold is still flat or still climbing, and a val curve that
+    # then falls away from a gold curve that does not.
+    #
+    # Not a decision procedure: gold on 58 studies has a macro SE around 0.02,
+    # so no single epoch's gold reading means anything. The shape across
+    # eleven epochs does.
+    _val = per_epoch_rows["val_macro"]
+    _gold = per_epoch_rows["gold_macro"]
+    _tail = _gold.loc[best_epoch:]
+    print("\\nP1 -- val/gold divergence")
+    print(f"  val   peak {_val.max():.3f} at epoch {_val.idxmax() + 1}, "
+          f"final {_val.iloc[-1]:.3f}  ({_val.iloc[-1] - _val.max():+.3f})")
+    print(f"  gold  peak {_gold.max():.3f} at epoch {_gold.idxmax() + 1}, "
+          f"final {_gold.iloc[-1]:.3f}  ({_gold.iloc[-1] - _gold.max():+.3f})")
+    print(f"  gold from the selected epoch on: range "
+          f"{_tail.max() - _tail.min():.3f} over {len(_tail)} epochs")
+    if _val.iloc[-1] < _val.max() - 0.005 and _tail.max() - _tail.min() < 0.02:
+        print("  -> DIVERGENCE REPRODUCES. Mined val fell while gold held "
+              "flat: the selector is biased, and every fold selected on it "
+              "is paying for it. Ship the averaged weights.")
+    else:
+        print("  -> no divergence in this run. Selecting on mined val is "
+              "defensible here; re-read before adopting the averages "
+              "fleet-wide.")
 except Exception as exc:  # noqa: BLE001 - the checkpoint is already safe
     print(f"\\ncould not read the epoch table ({exc}); "
           f"look under {csv_logger.save_dir} for metrics.csv")
@@ -3148,28 +3637,43 @@ device = "cuda"
 # that refuses to run.
 scoring_path = CHECKPOINT
 if not os.path.exists(scoring_path):
-    found = sorted(glob.glob(f"/kaggle/working/lit_fold{FOLD}*.ckpt"))
-    if not found:
+    scoring_path = recover_checkpoint(FOLD)
+    if scoring_path is None:
         raise SystemExit(f"neither {CHECKPOINT} nor a lit_fold{FOLD} "
                          "checkpoint is present")
-    scoring_path = found[0]
     print(f"{CHECKPOINT} missing; scoring from {scoring_path}")
 
-scoring_model = net.KneeNet(
-    net.build_backbone(BACKBONE, pretrained=False), FEATURE_DIM).to(device)
-scoring_model.load_state_dict(net.load_knee_state(scoring_path,
-                                                  map_location=device))
-scoring_model.eval()
+# BACKBONE_DEFAULTS, exactly as the training module applied them. These now
+# also travel IN the checkpoint -- the buffers were registered
+# persistent=False until 2026-08-28, so a strict load restored every weight
+# and silently left normalisation off, which is how this cell once printed
+# 0.823 for weights that logged 0.864 during training. Passed here anyway:
+# the model should be right before it is loaded, not because it was loaded.
+def load_for_scoring(path):
+    model = net.KneeNet(
+        net.build_backbone(BACKBONE, pretrained=False), FEATURE_DIM,
+        input_mean=BACKBONE_DEFAULTS["input_mean"],
+        input_std=BACKBONE_DEFAULTS["input_std"]).to(device)
+    model.load_state_dict(net.load_knee_state(path, map_location=device))
+    return model.eval()
 
-gold_ids, rows = [], []
-with torch.no_grad(), torch.amp.autocast("cuda"):
-    for batch in gold_loader:
-        logits = scoring_model(batch["volumes"].to(device),
-                               batch["meta"].to(device),
-                               batch["mask"].to(device))
-        rows.append(torch.sigmoid(logits.float()).cpu().numpy())
-        gold_ids += batch[config.ID_COL]
-gold_probs = np.concatenate(rows)
+
+def gold_predictions(model):
+    ids, rows = [], []
+    with torch.no_grad(), torch.amp.autocast("cuda"):
+        for batch in gold_loader:
+            logits = model(batch["volumes"].to(device),
+                           batch["meta"].to(device),
+                           batch["mask"].to(device))
+            rows.append(torch.sigmoid(logits.float()).cpu().numpy())
+            ids += batch[config.ID_COL]
+    return ids, np.concatenate(rows)
+
+
+print("scoring with input normalisation:",
+      "on" if BACKBONE_DEFAULTS["input_mean"] else "off")
+scoring_model = load_for_scoring(scoring_path)
+gold_ids, gold_probs = gold_predictions(scoring_model)
 truth = gold.set_index("StudyInstanceUID").loc[gold_ids]
 
 # The frozen DINOv2 path, retired 2026-08-23 at LB 0.787. Kept only as
@@ -3210,6 +3714,28 @@ if FOLD != 1:
     print(f"  -> NOTE: this is fold {FOLD}; both references are fold 1, so "
           "these deltas are not comparable. Judge fold members by the "
           "ensemble's leaderboard score, not by gold here.")
+
+# P2 -- the three candidates this run produced, side by side.
+#
+# The selected checkpoint against the two averages that selected nothing. Read
+# the DIRECTION, not the numbers: 58 studies put a standard error of roughly
+# 0.02 on the macro, so a 0.005 gap between these is not a result. What would
+# be a result is the averages sitting consistently at or above the selected
+# checkpoint across several folds -- which is what the literature predicts
+# when the selector is the thing that is broken.
+if AVERAGES:
+    print("\\nP2 -- selection-free weights (gold macro)")
+    print(f"  {'best mined-val epoch':24s} {macro:.3f}")
+    for kind, path in AVERAGES.items():
+        _ids, _probs = gold_predictions(load_for_scoring(path))
+        _truth = gold.set_index("StudyInstanceUID").loc[_ids]
+        _macro = float(np.nanmean([
+            auc(_truth[name].to_numpy().astype(int), _probs[:, i])
+            for i, name in enumerate(config.LABELS)]))
+        print(f"  {kind.upper() + ' (selection-free)':24s} {_macro:.3f}  "
+              f"({_macro - macro:+.3f} vs selected)")
+    print("  gold's macro SE on 58 studies is ~0.02; treat anything under "
+          "that as a tie and decide on the leaderboard.")
 """)
 
     nb.md("""
@@ -3281,7 +3807,7 @@ os.makedirs(DRIVE_OUT, exist_ok=True)
 
 saved = []
 for pattern in (f"convnext_fold{FOLD}.pt", f"lit_fold{FOLD}*.ckpt",
-                f"oof_fold{FOLD}.parquet"):
+                f"avg_fold{FOLD}_*.pt", f"oof_fold{FOLD}.parquet"):
     for path in glob.glob(f"/kaggle/working/{pattern}"):
         shutil.copy(path, DRIVE_OUT)
         saved.append(os.path.basename(path))
@@ -3463,7 +3989,388 @@ either place.
 # 10 -- ensemble submission
 # ---------------------------------------------------------------------------
 
-def build_ensemble_notebook():
+# --- Where notebook 10's Colab copy looks for its inputs --------------------
+# The Kaggle notebook scans /kaggle/working and /kaggle/input/*. On Colab the
+# Drive copy is somewhere else entirely, so the search is rewritten rather
+# than extended: the roots overlap (from_drive is inside /kaggle_local/input),
+# and /kaggle/input entries are symlinks made by the staging cell, so the same
+# file is reachable by two or three paths. Loading it twice is not a crash --
+# it silently doubles that checkpoint's weight in the fold average.
+
+COLAB_FIND_INPUTS_OLD = '''def find_inputs(pattern):
+    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    return found'''
+
+COLAB_FIND_INPUTS_NEW = '''# Search roots in priority order. Edit this one tuple to move the cache, the
+# checkpoints, or anything else -- find_inputs is what every later cell calls,
+# so nothing downstream needs to know where a file came from.
+INPUT_ROOTS = (
+    "data",                              # competition CSVs, from the staging cell
+    "/content/downloads",                # a checkpoint dropped in by hand
+    "/content/drive/MyDrive/Downloads",  # ... or downloaded into Drive
+    "/kaggle/working",                   # a checkpoint trained in this session
+    "/kaggle_local/input/from_drive",    # the Drive copy on this machine
+    "/kaggle_local/input",
+    "/kaggle/input",                     # where staging symlinks its mounts
+)
+
+
+def find_inputs(pattern):
+    """Every distinct file matching `pattern`, nearest root first.
+
+    Deduplicated by realpath. The roots deliberately overlap and /kaggle/input
+    holds symlinks into the kagglehub cache, so a single checkpoint is
+    reachable several ways; returning it twice would load it twice and weight
+    it twice in the averaged prediction, with nothing in the output saying so.
+    """
+    found = []
+    for root in INPUT_ROOTS:
+        # Skip absent roots rather than walking them. Over the Drive FUSE
+        # mount a recursive glob is slow enough to look like a hang, and most
+        # of these roots are absent in any given session.
+        if not os.path.isdir(root):
+            continue
+        for path in sorted(glob.glob(f"{root}/**/{pattern}", recursive=True)):
+            # Competition mounts are addressed by find_competition_file.
+            if f"{os.sep}competitions{os.sep}" in path:
+                continue
+            found.append(path)
+
+    seen, unique = set(), []
+    for path in found:
+        key = os.path.realpath(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique'''
+
+
+# --- Notebook 10's four differences from notebook 08's staging --------------
+# Everything else about how the inputs arrive is the shared cell above.
+
+COLAB_STAGE_HEADER_10 = """\
+# --- Colab staging: mount the Kaggle data, then run the cells below unchanged.
+# The same method 08_finetune_colab uses -- one implementation, emitted into
+# both notebooks -- so what this run reads is what the training run read.
+# dataset_download MOUNTS on Colab (no copy) and lands under
+# /kaggle/input/<slug>, which is exactly where find_inputs looks.
+#
+# This notebook scores instead of training, so it stages the cache the
+# training run read plus the checkpoints to score. It never stages test
+# DICOM: there is none off Kaggle, which is why the copy ends at the gold 58
+# rather than at a submission."""
+
+COLAB_STAGE_WORKING_10 = """\
+# Nothing is written to /kaggle/working here, but a checkpoint trained in an
+# earlier Colab session is read from it, and both directories must exist for
+# the one find_inputs implementation to work unchanged on both platforms."""
+
+COLAB_STAGE_SHORT_SHARDS_10 = """\
+    print("WARNING: fewer than three shards. A gold study whose series live "
+          "in a missing shard is dropped silently -- the scoring cell must "
+          "report 58 of 58.")"""
+
+COLAB_STAGE_TAIL_10 = '''
+
+# --- What this notebook needs and notebook 08 does not ----------------------
+# Same three-step method as everything above: prefer the mount, fall back to
+# the notebook output, and say so when neither exists.
+
+# 1. The tuned checkpoints. One attempt, not fetch_shard's ten: a handle that
+#    does not exist is the normal case here, because a checkpoint trained in
+#    this session is already in /kaggle/working and needs no staging at all.
+CHECKPOINT_DATASETS = ("pssv27/knee-convnext",)
+
+local_checkpoints = (glob.glob("/kaggle/working/*.pt")
+                     + glob.glob("/kaggle/working/*.ckpt"))
+if local_checkpoints:
+    print(f"\\ncheckpoints already local: {len(local_checkpoints)} in "
+          "/kaggle/working")
+else:
+    for handle in CHECKPOINT_DATASETS:
+        try:
+            stage(kagglehub.dataset_download(handle), handle.split("/")[1])
+            print(f"  mounted  {handle}")
+        except Exception as exc:  # noqa: BLE001 - not staged is a valid state
+            print(f"  {handle}: {type(exc).__name__} -- skipped. A checkpoint "
+                  "in /kaggle/working or Drive is fine; the listing cell "
+                  "below reports whatever is actually found.")
+
+# 2. side_model.pt. The load cell reads it unconditionally, and it arrives
+#    only with the side-classifier output -- which the block above fetches
+#    only when side_predictions.parquet was missing. Supplied from knee-labels
+#    or from Drive, that parquet is present and the model file is not, and the
+#    failure lands several cells later on a name that says nothing about
+#    staging.
+if not glob.glob("/kaggle/input/**/side_model.pt", recursive=True):
+    stage(kagglehub.notebook_output_download("pssv27/knee-side-classifier"),
+          "knee-side-classifier")
+if not glob.glob("/kaggle/input/**/side_model.pt", recursive=True):
+    raise SystemExit(
+        "side_model.pt not staged. The load cell below reads it whatever the "
+        "blend is set to, so this fails here rather than there.")
+print("side_model.pt: staged")
+'''
+
+COLAB_CHECKPOINT_CELL = '''
+# --- Which weights are we about to score? -----------------------------------
+# The Kaggle notebook globs for checkpoints and scores whatever turns up. That
+# is fine when one dataset is attached and actively misleading otherwise:
+# `sorted(glob(...))[0]` picks the first name ALPHABETICALLY, and "-" (45)
+# sorts before "." (46), which sorts before "_" (95). So lit_fold1-v1.ckpt
+# beats lit_fold1.ckpt, which beats lit_fold1_old.ckpt -- and Lightning writes
+# those -vN suffixes on every name collision.
+#
+# Here every candidate is listed with its size, mtime and content hash before
+# anything is loaded, and CHECKPOINTS pins the choice explicitly. Set it to a
+# list of paths to score exactly those; leave it None to score everything
+# found, which is the five-fold ensemble case.
+import hashlib
+
+CHECKPOINTS = None
+
+# Exactly the roots find_inputs uses -- not a superset. A cell that lists a
+# checkpoint the loader cannot see is worse than one that lists nothing, and
+# bare /content or MyDrive would recursively walk the whole Drive mount.
+SEARCH = INPUT_ROOTS
+
+# The three families notebook 08 writes per fold. Listing all of them here is
+# deliberate -- the point of this cell is to show what is on the machine --
+# but the load cell below refuses to score more than one family at once, so
+# pin CHECKPOINTS when several are present. `dinov2_fold*.pt` is gone: that
+# axis closed at gold 0.820 against a 0.861 gate.
+PATTERNS = ("convnext_fold*.pt", "lit_fold*.ckpt",
+            "avg_fold*_ema.pt", "avg_fold*_swa.pt")
+
+
+def find_checkpoints():
+    hits = []
+    for root in SEARCH:
+        for pattern in PATTERNS:
+            hits += glob.glob(f"{root}/**/{pattern}", recursive=True)
+    return sorted({os.path.realpath(h) for h in hits})
+
+
+def digest(path, limit=64 << 20):
+    # First 64 MB only. Enough to separate two checkpoints, fast enough to run
+    # on every candidate without thinking about it.
+    sha = hashlib.sha256()
+    with open(path, "rb") as handle:
+        sha.update(handle.read(limit))
+    return sha.hexdigest()[:12]
+
+
+candidates = CHECKPOINTS if CHECKPOINTS is not None else find_checkpoints()
+if not candidates:
+    raise SystemExit(
+        f"no checkpoint matched {PATTERNS} under {SEARCH}. Upload the .pt or "
+        ".ckpt, or set CHECKPOINTS to its path.")
+
+print(f"{'checkpoint':52s} {'MB':>7s} {'modified':>17s}  sha256[:12]")
+for path in candidates:
+    stat = os.stat(path)
+    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime))
+    print(f"{path[-52:]:52s} {stat.st_size / 1e6:7.0f} {stamp:>17s}  "
+          f"{digest(path)}")
+print(f"\\nscoring {len(candidates)} checkpoint(s) as one averaged ensemble")
+'''
+
+
+COLAB_GOLD_CELL = '''
+# --- Assemble the gold 58 out of the cache ----------------------------------
+# Same inputs notebook 08 used to print its per-epoch gold, so a disagreement
+# between that number and this one is the export or the checkpoint, not the
+# data.
+labels_frame = pd.read_parquet(find_one("train_labels.parquet"))
+sides = pd.read_parquet(find_one("side_predictions.parquet"))
+series_meta_train = pd.read_csv(find_competition_file("train_series.csv"))
+train_csv = pd.read_csv(find_competition_file("train.csv"))
+gold = train_csv[train_csv["ACL"].notna()].reset_index(drop=True)
+
+frames, shard_arrays = [], {}
+for cache_path in find_inputs("cache_train_series_*.npy"):
+    manifest_path = cache_path.replace("cache_", "manifest_").replace(".npy",
+                                                                     ".parquet")
+    if not os.path.exists(manifest_path):
+        stem = os.path.basename(cache_path).replace("cache_", "").replace(".npy", "")
+        hits = [m for m in find_inputs("manifest_train_series_*.parquet")
+                if os.path.basename(m).startswith(f"manifest_{stem}")]
+        if not hits:
+            continue
+        manifest_path = hits[0]
+    frame = pd.read_parquet(manifest_path)
+    frame["cache_path"] = cache_path
+    shard_arrays[cache_path] = np.load(cache_path, mmap_mode="r")
+    frames.append(frame)
+
+manifest = pd.concat(frames, ignore_index=True)
+
+gold_labels = gold[[config.ID_COL] + config.LABELS].copy()
+for name in config.LABELS:
+    gold_labels[f"{name}_weight"] = 1.0
+
+# max_series is TUNED_MAX_SERIES on purpose: this is the submission geometry
+# being measured, not the training one. They are the same number today.
+gold_index = knee_dataset.StudyIndex(manifest, series_meta_train, gold_labels,
+                                     sides, max_series=TUNED_MAX_SERIES)
+print(f"gold studies with cached series: {len(gold_index)} of {len(gold)}")
+if len(gold_index) < len(gold):
+    print("  NOTE: a gold study whose shard is missing is dropped here, and a "
+          "macro over fewer than 58 is not comparable to the references below.")
+'''
+
+
+COLAB_SCORE_CELL = '''
+from tqdm.auto import tqdm
+
+KEEP = np.linspace(0, config.CACHE_SLICES - 1, TUNED_SLICES).round().astype(int)
+print(f"slice subsample: {TUNED_SLICES} of {config.CACHE_SLICES} -> {KEEP.tolist()}")
+
+
+def score_study(study):
+    """One study through the tuned path, at the submission geometry.
+
+    The cache route rather than notebook 10's DICOM route -- there is no test
+    DICOM off Kaggle. The two used to disagree on WHICH series survive the
+    cap: the cache path (StudyIndex.series_for) spreads its pick with
+    np.linspace while notebook 10 took volumes[:TUNED_MAX_SERIES], a head
+    truncation, which selected differently for the 32.5% of studies carrying
+    more than five series. Notebook 10's `pick_series` now applies the
+    linspace rule too, so this measurement and the submission read the same
+    images.
+    """
+    item = knee_dataset.load_study(gold_index, study, shard_arrays)
+    volumes = item["volumes"]
+    if volumes.shape[1] > TUNED_SLICES:
+        volumes = volumes[:, KEEP]
+    elif volumes.shape[1] < TUNED_SLICES:
+        raise SystemExit(
+            f"cache supplies {volumes.shape[1]} slices and TUNED_SLICES is "
+            f"{TUNED_SLICES}. This is notebook 09's thinned export; scoring at "
+            "24 needs the full shards.")
+
+    batch = torch.from_numpy(np.ascontiguousarray(volumes)).unsqueeze(0).to(device)
+    meta = torch.from_numpy(item["meta"]).unsqueeze(0).to(device)
+    mask = torch.ones(1, volumes.shape[0], dtype=torch.bool, device=device)
+    with torch.no_grad(), torch.amp.autocast("cuda"):
+        return np.mean([torch.sigmoid(m(batch, meta, mask).float()).cpu().numpy()[0]
+                        for m in tuned_models], axis=0)
+
+
+gold_ids, rows = [], []
+for study in tqdm(gold_index.studies, desc="gold", unit="study"):
+    rows.append(score_study(study))
+    gold_ids.append(study)
+
+gold_probs = np.stack(rows)
+truth = gold.set_index(config.ID_COL).loc[gold_ids]
+print(f"scored {len(gold_ids)} studies")
+'''
+
+
+COLAB_TABLE_CELL = '''
+from sklearn.metrics import roc_auc_score
+
+
+def auc(y_true, scores):
+    return (float("nan") if len(np.unique(y_true)) < 2
+            else float(roc_auc_score(y_true, scores)))
+
+
+# The frozen DINOv2 path, retired 2026-08-23 at LB 0.787. Historical context;
+# beating it has not been news since the first capacity rung.
+FROZEN = dict(zip(config.LABELS,
+                  [0.728, 0.671, 0.698, 0.680, 0.895, 0.899,
+                   0.772, 0.897, 0.746, 0.862, 0.711, 0.683]))
+
+# Both fold 1 at 16 x 5, so a fold-1 run is directly comparable and any other
+# fold is not.
+REFERENCE_GOLD = 0.861     # fold 1, 16 x 5, no aux losses -> LB 0.889
+BEST_GOLD = 0.865          # fold 1, 24 x 5              -> LB 0.891 (best)
+
+print(f"{'finding':18s} {'this run':>9s}  {'frozen (retired)':>16s}")
+print("-" * 47)
+scores = []
+for i, name in enumerate(config.LABELS):
+    value = auc(truth[name].to_numpy().astype(int), gold_probs[:, i])
+    scores.append(value)
+    print(f"{name:18s} {value:9.3f}  {FROZEN[name]:16.3f}")
+print("-" * 47)
+macro = float(np.nanmean(scores))
+print(f"{'macro':18s} {macro:9.3f}  {np.mean(list(FROZEN.values())):16.3f}")
+
+print(f"\\ngeometry scored: {TUNED_SLICES} slices x {TUNED_MAX_SERIES} series"
+      f"  |  backbone: {TUNED_BACKBONE}")
+print(f"the comparisons that matter (fold 1, 16 x 5):")
+print(f"  vs reference  gold {REFERENCE_GOLD:.3f} (LB 0.889): "
+      f"{macro - REFERENCE_GOLD:+.3f}")
+print(f"  vs best       gold {BEST_GOLD:.3f} (LB 0.891): "
+      f"{macro - BEST_GOLD:+.3f}")
+if abs(macro - REFERENCE_GOLD) < 0.02:
+    print("  -> inside the gold 58's ~0.02 noise floor: this is a null "
+          "against the reference, whatever the frozen column says.")
+
+# The reconciliation this notebook exists for. Training logs a gold score per
+# epoch from the in-memory model; this scores the same studies from weights
+# read off disk. They must agree. If they do not, the export or the checkpoint
+# choice is wrong, and it is worth knowing here rather than after a submission.
+TRAINING_GOLD = None    # paste the selected epoch's logged gold
+if TRAINING_GOLD is not None:
+    drift = macro - TRAINING_GOLD
+    verdict = "agrees" if abs(drift) < 0.005 else "DISAGREES -- export is wrong"
+    print(f"\\nvs training log {TRAINING_GOLD:.3f}: {drift:+.3f}  {verdict}")
+'''
+
+
+def _colab_ensemble_cells(nb):
+    """The Colab copy's tail: score the gold 58 instead of writing a submission.
+
+    Notebook 10 proper reads raw test DICOM, which exists only inside a Kaggle
+    submission run, so the copy cannot end the way the original does. It ends
+    at the one measurement Kaggle cannot make -- labelled studies through the
+    submission's own geometry -- which is what a checkpoint has to pass before
+    a Kaggle session is spent on it.
+    """
+    nb.md("""
+## 5. The gold 58, out of the cache
+
+Same shards, same manifest, same `StudyIndex` notebook 08 scores with, so a
+disagreement between the epoch log and this table is the export or the
+checkpoint choice -- never the data.
+""")
+    nb.code(COLAB_GOLD_CELL)
+    nb.code(COLAB_SCORE_CELL)
+
+    nb.md("""
+## 6. Per-finding table
+
+`TRAINING_GOLD` at the bottom is the reconciliation: paste the selected epoch's
+logged gold and the cell says outright whether the export agrees with it.
+""")
+    nb.code(COLAB_TABLE_CELL)
+
+    nb.md("""
+## Next
+
+A checkpoint that reproduces its training gold here is ready for a Kaggle
+session; one that does not has an export problem, and submitting it spends
+~2 h to learn something this cell just said for free.
+
+**Two things this notebook cannot tell you.** It never touches raw DICOM, so
+it does not exercise `build_volumes`, `predict_side`, or the fallback path --
+a study that fails to decode on Kaggle fails there and not here. And the gold
+58 were already spent on checkpoint selection, so a macro read off this table
+is not an unbiased estimate of anything; it is a consistency check against a
+number that came from the same 58 studies.
+""")
+
+
+def build_ensemble_notebook(colab=False):
     nb = Notebook(gpu=True)
 
     nb.md("""
@@ -3494,10 +4401,51 @@ number rather than twelve.
 folds), `knee-labels` (priors for the fallback).
 """)
 
-    nb.md("## Setup")
-    nb.code(bootstrap_cell(MODEL_MODULES, require_raw_dicom=True))
+    if colab:
+        nb.md("""
+**This is the Colab copy of notebook 10.** Generated from the same source as
+`10_submit_ensemble.ipynb` -- edit `tools/make_notebook.py` and regenerate,
+never this file.
 
-    nb.code("""
+**It cannot produce a submission, and that is not a limitation of the copy.**
+Notebook 10 builds its volumes from raw test DICOM under
+`config.DATA_ROOT / "test_series"`. The test set is hidden: it exists only
+inside a Kaggle submission run, and there is no route to it from Colab. A
+literal copy would find no directory, fall back to the training prior for
+every study, write a `submission.csv` of twelve constants and report zero
+errors -- the failure this project keeps paying for, one more time.
+
+**So the copy stops where the data stops and does the measurement instead.**
+The tuned path runs at the submission's own geometry over the 58 gold studies,
+read from the cache shards. That is the check Kaggle's notebook can never run
+-- it has no labels there -- and it answers the question that actually gates a
+submission: *does this checkpoint, loaded from disk, score what training said
+it scored?*
+
+**Geometry: 16 slices x 5 series**, the same constants notebook 08 trains at,
+and the reference geometry every fold-1 number on record belongs to. The cache
+holds 24 slices per series, so 24 is the ceiling without rebuilding the shards
+and notebook 09's thinned export (8 slices) cannot feed a 16- or 24-slice run
+-- the scoring cell raises rather than scoring quietly on short volumes. Set
+both constants to match whatever the checkpoint was trained at: the 24-slice
+LB-0.891 checkpoint needs 24 **and** 5.
+""")
+
+        nb.md("## 0. Stage the inputs")
+        nb.code(colab_stage_cell(
+            pip="timm kagglehub",
+            header=COLAB_STAGE_HEADER_10,
+            working_note=COLAB_STAGE_WORKING_10,
+            short_shards=COLAB_STAGE_SHORT_SHARDS_10,
+            tail=COLAB_STAGE_TAIL_10))
+
+    nb.md("## 1. Repo modules" if colab else "## Setup")
+    nb.code(bootstrap_cell(MODEL_MODULES, require_raw_dicom=not colab))
+
+    if colab:
+        nb.md("## 2. Geometry and constants")
+
+    setup_source = """
 !pip install -q timm
 
 import glob
@@ -3529,9 +4477,18 @@ USE_TUNED = BLEND > 0.0
 # enforces it: the aggregation masks over the slice axis and pads the series
 # axis, so a mismatch runs clean and simply scores worse than it should. These
 # track notebook 08's SLICES_PER_SERIES and MAX_SERIES -- a checkpoint trained
-# at 8 slices and 3 series must be scored with 8 and 3 here. Notebook 08 is
-# back at 16 for the auxiliary-loss experiments; a submission of the 24-slice
-# 0.891 checkpoint needs 24 here instead.
+# at 8 slices and 3 series must be scored with 8 and 3 here.
+#
+# CURRENT: 16 x 5, matching notebook 08. P0.4's cap of 6 measured LB 0.885
+# against 0.888 at 5 and was reverted.
+#
+# **Every checkpoint trained before P0.4 was trained at 5 and must be scored
+# at 5.** That is convnext_fold1.pt from the P1 run, the 16 x 5 LB-0.889
+# reference, and the 24 x 5 LB-0.891 best (which needs 24 here too).
+#
+# **Score a checkpoint at the geometry it was trained at.** Nothing enforces
+# it: the aggregation masks the slice axis and pads the series axis, so a
+# mismatch runs clean and simply scores worse.
 TUNED_SLICES = 16
 TUNED_MAX_SERIES = 5
 
@@ -3540,7 +4497,24 @@ TUNED_MAX_SERIES = 5
 # have trained one trunk and scored another; the strict load would have caught
 # it, but only after the hours were spent. Now it travels with the slice and
 # series counts -- the three are re-uploaded together.
+#
+# CURRENT: ConvNeXt-T (768 features, 27.8M params), matching notebook 08.
+# The DINOv2 axis is closed -- fine-tuned it measured gold 0.820 against a
+# 0.861 gate -- so a ViT name here would be scoring weights this project no
+# longer trains.
 TUNED_BACKBONE = "convnext_tiny.fb_in22k_ft_in1k"
+
+# Combine fold members by rank rather than by mean probability. Free, and
+# strictly better aligned to a rank metric -- but it changes the submission's
+# numbers, and every LB score on record was produced by the probability mean,
+# so it is off until one submission measures it. No effect with one member.
+MEMBER_RANK_AVERAGE = False
+
+# Test-time augmentation: predict on the mirrored knee too, swap the
+# medial/lateral findings back, average. DOUBLES inference time -- at ~1.65 h
+# per fold that is the difference between five folds fitting the 9 h cap and
+# not -- so it is off until it is shown to pay for itself.
+FLIP_TTA = False
 
 BATCH_SLICES = 256
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -3570,16 +4544,52 @@ def find_competition_file(name):
         if hits:
             return hits[0]
     raise SystemExit(f"missing competition file: {name}")
-""")
+"""
 
-    nb.md("""
-## Load both models
+    if colab:
+        # The Colab copy's markdown states the geometry it measures at, so it
+        # has to be checked against the constant rather than assumed. Asserted
+        # rather than replaced: a str.replace that no longer matches is a
+        # silent no-op, and this is the constant whose mismatch scores worse
+        # without erroring.
+        assert "TUNED_SLICES = 16" in setup_source, (
+            "notebook 10's TUNED_SLICES is no longer 16; update the Colab "
+            "copy's geometry paragraph to match before changing this")
+        # Every place an input can be on this machine, in priority order, and
+        # the whole of find_inputs rewritten around it rather than one glob
+        # bolted on: the Drive copy lives outside /kaggle/input, the roots
+        # overlap, and one of them is reached through a symlink.
+        assert COLAB_FIND_INPUTS_OLD in setup_source, (
+            "find_inputs in notebook 10 has changed; COLAB_FIND_INPUTS_OLD no "
+            "longer matches and the Colab copy would silently keep the "
+            "Kaggle-only search")
+        setup_source = setup_source.replace(COLAB_FIND_INPUTS_OLD,
+                                            COLAB_FIND_INPUTS_NEW)
+        # find_competition_file's Kaggle globs never match on Colab, where the
+        # two CSVs are copied into ./data by the staging cell.
+        setup_source = setup_source.replace(
+            '    for candidate in (f"/kaggle/input/competitions/*/{name}",',
+            '    for candidate in (f"data/{name}",\n'
+            '                      f"/kaggle/input/competitions/*/{name}",')
+    nb.code(setup_source)
+
+    if colab:
+        nb.md("""
+## 3. Which checkpoint
+
+Before the load, not after it: this cell decides what gets loaded and prints
+size, mtime and a content hash for each candidate. `CHECKPOINTS` pins the
+choice, and the load cell below consumes this list rather than globbing again.
+""")
+        nb.code(COLAB_CHECKPOINT_CELL)
+
+    nb.md(("## 4. Load both models" if colab else "## Load both models") + """
 
 Everything from disk. The ConvNeXt checkpoint carries its own backbone weights,
 so `pretrained=False` is correct here -- timm cannot reach the network anyway.
 """)
 
-    nb.code("""
+    models_source = """
 import timm
 
 # --- frozen path ---------------------------------------------------------
@@ -3628,20 +4638,125 @@ if USE_FROZEN:
 # tensors under `state_dict` behind a `model.` prefix. Requiring the export
 # first would be requiring a step that can be skipped -- one already was, when
 # a crash in the reporting cell landed between training and the conversion.
+#
+# TUNED_DEFAULTS is the trunk's input statistics. They travel in checkpoints
+# written from 2026-08-28 onward, and `KneeNet` adopts a checkpoint's own
+# statistics over whatever is passed here -- so an older file scored with the
+# right TUNED_BACKBONE is still correct, and a newer one cannot be scored
+# wrongly at all. Derived from TUNED_BACKBONE so the two cannot disagree.
+TUNED_DEFAULTS = net.backbone_defaults(TUNED_BACKBONE)
+print("input normalisation:", "on" if TUNED_DEFAULTS["input_mean"] else "off")
+
+# WHICH FAMILY OF WEIGHTS TO SCORE. Notebook 08 now writes three per fold:
+#
+#   convnext_fold{N}.pt    the best mined-val epoch    <- selected on a
+#                                                         biased metric
+#   avg_fold{N}_ema.pt     EMA of the trajectory       <- selection-free
+#   avg_fold{N}_swa.pt     equal average, last 25%     <- selection-free
+#
+# **Score one family at a time.** These are three views of the same run, so a
+# glob that catches two of them averages a fold with itself and quietly gives
+# it double weight in the ensemble. The guard below refuses that.
 TUNED_PATTERNS = ("convnext_fold*.pt", "lit_fold*.ckpt")
 
 tuned_paths = []
 for pattern in TUNED_PATTERNS:
     tuned_paths += find_inputs(pattern)
 
-tuned_models = []
+import re
+
+
+# (family, fold) for a checkpoint, from its filename.
+#
+# Two files describing the same fold's weights must never both be loaded. The
+# averaging here is unweighted, so a fold present twice gets twice the say --
+# 2/6 of a five-fold ensemble instead of 1/5 -- and nothing in the output says
+# so.
+#
+# The family comes from the suffix notebook 08 writes. The fold comes from the
+# digits after "fold", which every name this project produces carries:
+# convnext_fold1.pt, lit_fold1.ckpt, lit_fold1-v1.ckpt, lit_fold1_old.ckpt and
+# avg_fold1_ema.pt are five names for two distinct sets of weights, and the
+# first four are all fold 1 "selected".
+#
+# A comment rather than a docstring on purpose: a triple-quoted string in a
+# cell body terminates the generator's own cell source. PROJECT.md lists it.
+def checkpoint_identity(path):
+    name = os.path.basename(path)
+    family = ("ema" if name.endswith("_ema.pt") else
+              "swa" if name.endswith("_swa.pt") else "selected")
+    match = re.search(r"fold(\\d+)", name)
+    # No fold number means the identity cannot be established, so the file is
+    # keyed by its own name and can only collide with itself.
+    return family, (match.group(1) if match else name)
+
+
+_seen = {}
 for path in tuned_paths:
+    _seen.setdefault(checkpoint_identity(path), []).append(
+        os.path.basename(path))
+
+# 1. More than one family: three views of the same runs, averaged together.
+_families = sorted({family for family, _ in _seen})
+if len(_families) > 1:
+    _listing = "; ".join(
+        f"{fam}={sorted(n for (f, _), names in _seen.items() if f == fam for n in names)}"
+        for fam in _families)
+    raise SystemExit(
+        f"checkpoints from more than one family matched TUNED_PATTERNS: "
+        f"{_listing}\\nThese are the same runs' weights several ways, so "
+        "averaging across them double-counts every fold. Narrow "
+        "TUNED_PATTERNS to one family.")
+
+# 2. One fold under two names inside a family. This is the standing trap:
+#    `convnext_fold{N}.pt` is a bit-exact export of `lit_fold{N}.ckpt`, and
+#    both match TUNED_PATTERNS. Lightning's `-vN` collision suffixes and the
+#    `_old` files kept on disk land here too.
+_duplicated = {k: v for k, v in _seen.items() if len(v) > 1}
+if _duplicated:
+    raise SystemExit(
+        "the same fold matched TUNED_PATTERNS under more than one name: "
+        + "; ".join(f"fold {fold} -> {sorted(names)}"
+                    for (_, fold), names in sorted(_duplicated.items()))
+        + "\\nThese are one set of weights each, and averaging a fold with "
+        "itself gives it double weight in the ensemble. Attach exactly one "
+        "file per fold -- the exported .pt, not the .ckpt it came from.")
+
+print(f"checkpoint family: {_families[0] if _families else 'none'}  "
+      f"({len(_seen)} fold(s))")
+
+# SOUP averages the checkpoints in WEIGHT space and runs one model, instead of
+# running each and averaging probabilities. Wortsman et al. (ICML 2022) report
+# that this usually matches or beats the ensemble, and it is free at inference
+# -- five folds for the cost of one, which is the whole 9-hour budget question
+# and the Efficiency Prize's as well.
+#
+# **Only valid for models in the same loss basin.** Notebook 08 seeds every
+# fold identically so they share an initialisation; checkpoints from before
+# that seeding was added do not, and averaging them produces a worse model
+# with nothing in the output saying so. Default off: probability averaging is
+# what every leaderboard number on record was produced by, and this switches
+# the submission's semantics.
+SOUP = False
+
+tuned_states = [net.load_knee_state(path, map_location="cpu")
+                for path in tuned_paths]
+for path in tuned_paths:
+    print("  tuned:", os.path.basename(path))
+
+if SOUP and len(tuned_states) > 1:
+    tuned_states = [averaging.average_states(tuned_states)]
+    print(f"  souped {len(tuned_paths)} checkpoints into one set of weights")
+
+tuned_models = []
+for state in tuned_states:
     backbone = net.build_backbone(TUNED_BACKBONE, pretrained=False)
-    model = net.KneeNet(backbone, backbone.num_features).to(device)
-    model.load_state_dict(net.load_knee_state(path, map_location="cpu"))
+    model = net.KneeNet(backbone, backbone.num_features,
+                        input_mean=TUNED_DEFAULTS["input_mean"],
+                        input_std=TUNED_DEFAULTS["input_std"]).to(device)
+    model.load_state_dict(state)
     model.eval()
     tuned_models.append(model)
-    print("  tuned:", os.path.basename(path))
 
 side_model = side_classifier.SideNet().to(device)
 side_model.load_state_dict(torch.load(find_one("side_model.pt"), map_location=device))
@@ -3671,7 +4786,29 @@ try:
     PRIORS = {n: float(train_labels[n].mean()) for n in config.LABELS}
 except SystemExit:
     PRIORS = {n: 0.5 for n in config.LABELS}
-""")
+"""
+
+    if colab:
+        # Load the candidates the cell above listed and hashed, in that order.
+        # A second glob here would ignore a pinned CHECKPOINTS and could load
+        # a different set than the one whose hashes were just printed -- the
+        # exact ambiguity that cell exists to remove.
+        old_glob = """TUNED_PATTERNS = ("convnext_fold*.pt", "lit_fold*.ckpt")
+
+tuned_paths = []
+for pattern in TUNED_PATTERNS:
+    tuned_paths += find_inputs(pattern)"""
+        assert old_glob in models_source
+        models_source = models_source.replace(old_glob, """TUNED_PATTERNS = PATTERNS
+tuned_paths = list(candidates)""")
+    nb.code(models_source)
+
+    if colab:
+        # Everything below this point reads raw test DICOM, which does not
+        # exist off Kaggle. The copy ends with the measurement instead.
+        _colab_ensemble_cells(nb)
+        nb.write(NOTEBOOKS / "10_submit_ensemble_colab.ipynb")
+        return
 
     nb.md("""
 ## Inference
@@ -3738,21 +4875,66 @@ def frozen_predict(volumes, meta, mask):
                         .cpu().numpy()[0] for m in frozen_models], axis=0)
 
 
+def pick_series(count):
+    \"\"\"Which series survive the cap -- the SAME rule training uses.
+
+    `StudyIndex.series_for` spreads its pick with np.linspace; this took
+    `volumes[:TUNED_MAX_SERIES]`, a head truncation. For a seven-series study
+    that is positions [0, 2, 3, 4, 6] against [0, 1, 2, 3, 4], so the model was
+    scored on a different subset of the study than it was trained to read.
+    **32.5% of studies carry more than five series**, and nothing about the
+    mismatch raises: the shapes agree and the prediction is merely built from
+    the wrong images.
+
+    Both sides order series by SeriesInstanceUID -- `build_volumes` sorts the
+    directory names, the cache manifest is written in that order -- so once
+    the rule matches, the selection matches.
+    \"\"\"
+    if count <= TUNED_MAX_SERIES:
+        return list(range(count))
+    keep = np.linspace(0, count - 1, TUNED_MAX_SERIES).round().astype(int)
+    return np.unique(keep).tolist()
+
+
 def tuned_predict(volumes, uids, side):
     # Mirrored and subsampled exactly as during training.
-    picked = volumes[:TUNED_MAX_SERIES]
-    picked_uids = uids[:TUNED_MAX_SERIES]
-    mirrored = []
+    chosen = pick_series(len(volumes))
+    picked = [volumes[i] for i in chosen]
+    picked_uids = [uids[i] for i in chosen]
+    mirrored, planes = [], []
     for volume, uid in zip(picked, picked_uids):
         plane = series_meta.loc[uid]["Anatomical_Plane"] if uid in series_meta.index else None
+        planes.append(plane)
         mirrored.append(knee_dataset.mirror_volume(volume, side, plane)[KEEP])
 
-    batch = torch.from_numpy(np.stack(mirrored)).unsqueeze(0).to(device)
     meta = meta_tensor(picked_uids, side)
     mask = torch.ones(1, len(mirrored), dtype=torch.bool, device=device)
-    with torch.no_grad(), torch.amp.autocast("cuda"):
-        return np.mean([torch.sigmoid(m(batch, meta, mask).float()).cpu().numpy()[0]
-                        for m in tuned_models], axis=0)
+
+    def run(stack):
+        tensor = torch.from_numpy(
+            np.ascontiguousarray(np.stack(stack))).unsqueeze(0).to(device)
+        with torch.no_grad(), torch.amp.autocast("cuda"):
+            # (n_members, n_labels) -- NOT averaged here. Members are combined
+            # once, over the whole test set, so they can be rank-averaged.
+            return np.stack([
+                torch.sigmoid(m(tensor, meta, mask).float()).cpu().numpy()[0]
+                for m in tuned_models])
+
+    out = run(mirrored)
+
+    if FLIP_TTA:
+        # Mirror the knee and read the prediction back through the
+        # medial/lateral swap. The plan calls hflip "safe post-laterality
+        # normalisation" -- it is not, on its own: a mirrored knee puts the
+        # medial compartment where the lateral one was, so four of the twelve
+        # findings come back transposed. augment.lateral_swap_order() is the
+        # permutation that undoes it, and augment.flip_volume picks the axis
+        # from the same table mirror_volume canonicalises with.
+        flipped = [knee_augment.flip_volume(v, plane)
+                   for v, plane in zip(mirrored, planes)]
+        out = 0.5 * (out + run(flipped)[:, knee_augment.lateral_swap_order()])
+
+    return out
 
 
 ids, frozen_rows, tuned_rows, failures = [], [], [], 0
@@ -3781,7 +4963,10 @@ for study in tqdm(studies, desc="studies", unit="study"):
         print(f"  fallback for {study[-12:]}: {str(exc)[:80]}")
         prior = np.array([PRIORS[n] for n in config.LABELS])
         frozen_rows.append(prior)
-        tuned_rows.append(prior)
+        # One row per member, so the stack below keeps its shape whether a
+        # study succeeded or fell back.
+        tuned_rows.append(np.repeat(prior[None], max(len(tuned_models), 1),
+                                    axis=0))
     ids.append(study)
 
 loop_elapsed = time.time() - loop_start
@@ -3812,7 +4997,29 @@ def to_ranks(matrix):
 have_frozen = frozen_models and USE_FROZEN and all(r is not None for r in frozen_rows)
 have_tuned = tuned_models and USE_TUNED and all(r is not None for r in tuned_rows)
 frozen_matrix = np.stack(frozen_rows) if have_frozen else None
-tuned_matrix = np.stack(tuned_rows) if have_tuned else None
+
+# The fold members are combined HERE, over the whole test set, rather than
+# inside tuned_predict per study -- because rank-averaging needs every study's
+# score for a member before it can rank any of them.
+#
+# Why ranks: the metric is macro AUC, which reads only the ordering of studies
+# within a finding. A probability mean lets a member with a confident output
+# distribution outvote one with a compressed distribution even when the two
+# rank studies identically. Ranking first gives every member one vote.
+# to_ranks below already did this for the frozen-vs-tuned blend; it was never
+# applied ACROSS FOLDS, which is the ensemble that matters now that BLEND=1.0
+# retires the frozen path.
+tuned_matrix = None
+if have_tuned:
+    # (studies, members, labels) -> (members, studies, labels)
+    per_member = np.stack(tuned_rows).transpose(1, 0, 2)
+    if MEMBER_RANK_AVERAGE and per_member.shape[0] > 1 and len(ids) > 1:
+        tuned_matrix = averaging.rank_average(list(per_member))
+        print(f"combining {per_member.shape[0]} members by RANK average")
+    else:
+        tuned_matrix = per_member.mean(axis=0)
+        print(f"combining {per_member.shape[0]} member(s) by probability mean")
+
 print(f"blending: frozen={have_frozen} tuned={have_tuned} weight={BLEND}")
 
 if frozen_matrix is not None and tuned_matrix is not None and len(ids) > 1:
@@ -3865,6 +5072,474 @@ as well as on AUC.
     nb.write(NOTEBOOKS / "10_submit_ensemble.ipynb")
 
 
+
+# ---------------------------------------------------------------------------
+# 11 -- error analysis: which studies fail, and what do they look like
+# ---------------------------------------------------------------------------
+
+def build_error_analysis_notebook():
+    nb = Notebook(gpu=True)
+
+    nb.md("""
+# 11 — Error Analysis
+
+**Deliberately separate from notebook 08.** That notebook trains; this one
+looks. Keeping them apart means a diagnostic can be re-run against any
+checkpoint without spending a training session, and a training run is not
+slowed down by rendering images nobody asked for.
+
+Seven consecutive changes have been judged on one aggregate number that
+provably cannot resolve them: the gold set's macro standard error is
+0.015-0.025 and every remaining idea is worth less than that. This notebook
+asks the questions the number cannot.
+
+1. **Per finding**, with the Hanley-McNeil standard error beside each one, so
+   a gap is never read without its noise.
+2. **By study descriptor** — series count, fluid-sensitive count, planes
+   present. Is the model uniformly mediocre, or losing a definable slice?
+3. **The failing studies as pictures**, rendered exactly as the model sees
+   them: after laterality mirroring and the slice subsample.
+
+The third is the one no metric can substitute for. The two worst bugs this
+project has had — slice order reversed by `InstanceNumber`, sagittal mirroring
+flipping the wrong axis — raised nothing, scored plausibly, and cost about
+0.03 each. They are visible in a contact sheet and nowhere else.
+
+**Attach:** the cache shards, `knee-labels`, `knee_side_classifier`, the
+competition data, and whichever checkpoint you want to examine.
+""")
+
+    nb.md("## 1. Setup")
+    nb.code("""
+!pip install -q timm
+
+import glob
+import os
+
+import numpy as np
+import pandas as pd
+import torch
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print("device:", device)
+""")
+
+    nb.md("## 2. Repo modules")
+    nb.code(bootstrap_cell(INSPECT_MODULES, require_raw_dicom=False))
+
+    nb.md("""
+## 3. Which checkpoint, and at what geometry
+
+**The geometry must match what the checkpoint was trained at.** Nothing
+enforces it: the aggregation masks the slice axis and pads the series axis, so
+a mismatch runs clean and simply scores worse — and this notebook would then
+report failures that are artefacts of the mismatch rather than of the model.
+""")
+
+    nb.code("""
+# Point this at the checkpoint to examine. Either format loads: the exported
+# .pt or Lightning's .ckpt.
+CHECKPOINT = None          # None -> take the newest convnext_fold*.pt found
+
+SLICES = 16                # notebook 08's SLICES_PER_SERIES for this checkpoint
+MAX_SERIES = 5             # notebook 08's MAX_SERIES for this checkpoint
+BACKBONE = "convnext_tiny.fb_in22k_ft_in1k"
+
+
+def find_inputs(pattern):
+    found = sorted(glob.glob(f"data/**/{pattern}", recursive=True))
+    found += sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    seen, unique = set(), []
+    for path in found:
+        key = os.path.realpath(path)
+        if key not in seen:
+            seen.add(key); unique.append(path)
+    return unique
+
+
+def find_one(pattern):
+    hits = find_inputs(pattern)
+    if not hits:
+        raise SystemExit(f"missing input: {pattern}")
+    return hits[0]
+
+
+def find_competition_file(name):
+    for candidate in (f"data/{name}", f"/kaggle/input/competitions/*/{name}",
+                      f"/kaggle/input/*/{name}"):
+        hits = sorted(glob.glob(candidate))
+        if hits:
+            return hits[0]
+    raise SystemExit(f"missing competition file: {name}")
+
+
+if CHECKPOINT is None:
+    candidates = find_inputs("convnext_fold*.pt") + find_inputs("lit_fold*.ckpt")
+    if not candidates:
+        raise SystemExit("no checkpoint found; set CHECKPOINT explicitly")
+    CHECKPOINT = max(candidates, key=os.path.getmtime)
+print("examining:", CHECKPOINT)
+print(f"geometry : {SLICES} slices x {MAX_SERIES} series   backbone {BACKBONE}")
+""")
+
+    nb.md("## 4. Assemble the gold studies")
+    nb.code("""
+labels = pd.read_parquet(find_one("train_labels.parquet"))
+sides = pd.read_parquet(find_one("side_predictions.parquet"))
+series_meta = pd.read_csv(find_competition_file("train_series.csv"))
+train_csv = pd.read_csv(find_competition_file("train.csv"))
+gold = train_csv[train_csv["ACL"].notna()].reset_index(drop=True)
+
+frames, shards = [], {}
+for cache_path in find_inputs("cache_train_series_*.npy"):
+    stem = os.path.basename(cache_path).replace("cache_", "").replace(".npy", "")
+    hits = [m for m in find_inputs("manifest_train_series_*.parquet")
+            if os.path.basename(m).startswith(f"manifest_{stem}")]
+    if not hits:
+        continue
+    frame = pd.read_parquet(hits[0])
+    frame["cache_path"] = cache_path
+    shards[cache_path] = np.load(cache_path, mmap_mode="r")
+    frames.append(frame)
+if not frames:
+    raise SystemExit("no cache shards found -- attach the cache dataset")
+manifest = pd.concat(frames, ignore_index=True)
+
+gold_labels = gold[[config.ID_COL] + config.LABELS].copy()
+for name in config.LABELS:
+    gold_labels[f"{name}_weight"] = 1.0
+gold_index = knee_dataset.StudyIndex(manifest, series_meta, gold_labels, sides,
+                                     max_series=MAX_SERIES)
+print(f"gold studies with cached series: {len(gold_index)} of {len(gold)}")
+if len(gold_index) < len(gold):
+    print("  NOTE: a study whose shard is missing is dropped, and a macro over")
+    print("  fewer than 58 is not comparable to anything on record.")
+""")
+
+    nb.md("## 5. Score them")
+    nb.code("""
+KEEP = np.linspace(0, config.CACHE_SLICES - 1, SLICES).round().astype(int)
+DEFAULTS = net.backbone_defaults(BACKBONE)
+
+backbone = net.build_backbone(BACKBONE, pretrained=False)
+model = net.KneeNet(backbone, backbone.num_features,
+                    input_mean=DEFAULTS["input_mean"],
+                    input_std=DEFAULTS["input_std"]).to(device)
+model.load_state_dict(net.load_knee_state(CHECKPOINT, map_location=device))
+model.eval()
+print("input normalisation:", "on" if DEFAULTS["input_mean"] else "off")
+
+ids, rows = [], []
+for study in gold_index.studies:
+    item = knee_dataset.load_study(gold_index, study, shards)
+    volumes = item["volumes"]
+    if volumes.shape[1] > SLICES:
+        volumes = volumes[:, KEEP]
+    elif volumes.shape[1] < SLICES:
+        raise SystemExit(
+            f"cache has {volumes.shape[1]} slices and SLICES is {SLICES} -- "
+            "this is the thinned export; attach the full shards")
+    batch = torch.from_numpy(np.ascontiguousarray(volumes)).unsqueeze(0).to(device)
+    meta = torch.from_numpy(item["meta"]).unsqueeze(0).to(device)
+    mask = torch.ones(1, volumes.shape[0], dtype=torch.bool, device=device)
+    with torch.no_grad(), torch.amp.autocast("cuda", enabled=(device == "cuda")):
+        rows.append(torch.sigmoid(model(batch, meta, mask).float()).cpu().numpy()[0])
+    ids.append(study)
+
+preds = pd.DataFrame(np.stack(rows), columns=config.LABELS, index=ids)
+truth = gold.set_index(config.ID_COL).loc[ids, config.LABELS].astype(float)
+
+# Dumped so the same analysis can be re-run off the VM with
+# tools/error_analysis.py, which shares this notebook's error definition.
+out = preds.reset_index().rename(columns={"index": config.ID_COL})
+out.to_parquet("/kaggle/working/gold_predictions.parquet", index=False)
+print(f"scored {len(ids)} studies -> /kaggle/working/gold_predictions.parquet")
+""")
+
+    nb.md("""
+## 6. Per finding, with the noise beside it
+
+`se` is the Hanley-McNeil standard error. **If the difference you are looking
+at is smaller than the SE, there is nothing there** — which has been true of
+every change measured on this set so far.
+""")
+
+    nb.code("""
+# The same rank-statistic AUC the training loop uses. Copied rather than
+# imported: `src/model/lightning.py` is bootstrapped only into notebook 08,
+# because it imports the Lightning framework at module scope and this notebook
+# has no reason to need it.
+def auc(y, s):
+    y, s = np.asarray(y), np.asarray(s, dtype=float)
+    pos = y == 1
+    n_pos, n_neg = int(pos.sum()), int((~pos).sum())
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    order = np.argsort(s, kind="mergesort")
+    ranks = np.empty(len(s), dtype=float)
+    ranks[order] = np.arange(1, len(s) + 1)
+    uniq, inv, cnt = np.unique(s, return_inverse=True, return_counts=True)
+    sums = np.zeros(len(uniq)); np.add.at(sums, inv, ranks)
+    ranks = (sums / cnt)[inv]
+    return (ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+
+# Hanley & McNeil (1982) -- the number that says whether a gap is real.
+# A comment, not a docstring: a triple-quoted string in a cell body terminates
+# the generator's own cell source. PROJECT.md lists this trap.
+def auc_se(a, n_pos, n_neg):
+    if not np.isfinite(a) or n_pos < 1 or n_neg < 1:
+        return float("nan")
+    q1, q2 = a / (2 - a), 2 * a * a / (1 + a)
+    num = a * (1 - a) + (n_pos - 1) * (q1 - a * a) + (n_neg - 1) * (q2 - a * a)
+    return float(np.sqrt(max(num, 0.0) / (n_pos * n_neg)))
+
+
+scores = []
+print(f"{'finding':18s} {'auc':>7s} {'+/- se':>8s} {'pos':>5s} {'neg':>5s}")
+for name in config.LABELS:
+    y, s = truth[name].to_numpy(), preds[name].to_numpy()
+    value = auc(y, s)
+    n_pos, n_neg = int((y == 1).sum()), int((y != 1).sum())
+    scores.append(value)
+    print(f"{name:18s} {value:7.3f} {auc_se(value, n_pos, n_neg):8.3f} "
+          f"{n_pos:5d} {n_neg:5d}")
+print(f"{'macro':18s} {np.nanmean(scores):7.3f}")
+""")
+
+    nb.md("""
+## 7. Is the loss concentrated on a describable slice of studies?
+
+Buckets with fewer than eight studies print `--`. An eye-catching 0.55 computed
+from six studies, sitting beside numbers from fifty, is how this project has
+fooled itself before.
+""")
+
+    nb.code("""
+plane = series_meta["Anatomical_Plane"].astype(str)
+enriched = series_meta.assign(
+    _sag=(plane == "Sagittal").astype(int),
+    _cor=(plane == "Coronal").astype(int),
+    _ax=(plane == "Axial").astype(int),
+    _fluid=series_meta["Fluid_Sensitive"].fillna(0).astype(int))
+grouped = enriched.groupby(config.ID_COL)
+features = pd.DataFrame({"n_series": grouped.size(),
+                         "n_sagittal": grouped["_sag"].sum(),
+                         "n_coronal": grouped["_cor"].sum(),
+                         "n_axial": grouped["_ax"].sum(),
+                         "n_fluid_sensitive": grouped["_fluid"].sum()})
+
+
+def macro_on(mask):
+    if mask.sum() < 8:
+        return float("nan")
+    return float(np.nanmean([auc(truth[n].to_numpy()[mask],
+                                 preds[n].to_numpy()[mask])
+                             for n in config.LABELS]))
+
+
+for column, edges in (("n_series", [0, 4, 5, 6, 8, 99]),
+                      ("n_fluid_sensitive", [0, 1, 2, 3, 99]),
+                      ("n_sagittal", [0, 1, 2, 3, 99]),
+                      ("n_coronal", [0, 1, 2, 99]),
+                      ("n_axial", [0, 1, 2, 99])):
+    values = features.reindex(truth.index)[column]
+    parts = []
+    for low, high in zip(edges[:-1], edges[1:]):
+        mask = ((values >= low) & (values < high)).to_numpy()
+        macro = macro_on(mask)
+        parts.append(f"[{low},{high}):"
+                     + (f"{macro:.3f}" if np.isfinite(macro) else "--")
+                     + f"(n={int(mask.sum())})")
+    print(f"{column:20s} " + "  ".join(parts))
+""")
+
+    nb.md("""
+## 8. Synovitis, on the metric that can measure it
+
+Pooled AUC cannot see this finding. On these 58 studies the **effusion** head
+scores 0.722 as a synovitis classifier against the synovitis head's 0.701, and
+the gold effusion label alone scores 0.698 — a number in that region is
+obtainable with no synovitis-specific skill at all.
+
+**Effusion-stratified conditional AUC** keeps only positive/negative pairs from
+the same effusion stratum, which is the part of the ranking effusion does not
+already decide. Everything below comes from `src/model/conditional.py`, the
+same code the training loop logs every epoch and `tools/synovitis_gate.py`
+reads the Stage 0 gate from.
+""")
+
+    nb.code("""
+FINDING, STRATIFY_BY = "Synovitis", "Effusion"
+
+y = truth[FINDING].to_numpy()
+scores_syn = preds[FINDING].to_numpy()
+strata_gold = truth[STRATIFY_BY].to_numpy()
+strata_pred = conditional.strata_from_scores(preds[STRATIFY_BY].to_numpy())
+
+for label, strata in (("gold effusion label", strata_gold),
+                      ("predicted effusion (median split)", strata_pred)):
+    stats = conditional.bootstrap_conditional(y, scores_syn, strata, draws=4000)
+    counts = conditional.pair_counts(y, strata)
+    print(f"{label:34s} conditional {stats['auc']:.3f}  "
+          f"95% CI [{stats['lo']:.3f}, {stats['hi']:.3f}]  "
+          f"P(<= 0.5) = {stats['p_at_or_below_chance']:.3f}  "
+          f"({counts['within']} within-stratum pairs)")
+
+print(f"{'pooled':34s} {conditional.auc(y, scores_syn):.3f}")
+print(f"{'the effusion head, used directly':34s} "
+      f"{conditional.auc(y, preds[STRATIFY_BY].to_numpy()):.3f}   "
+      "<- if this is close to pooled, pooled is not measuring the finding")
+print()
+
+print("where the error sits")
+for row in conditional.pair_decomposition(y, scores_syn, strata_gold):
+    mark = "  <- within stratum, addressable" if row["within"] else ""
+    print(f"  pos eff={row['pos_stratum']} vs neg eff={row['neg_stratum']}: "
+          f"{row['pairs']:4d} pairs  {row['misranked']:5.1%} misranked  "
+          f"{row['error_share']:5.1%} of the error{mark}")
+print()
+
+print("what a conditional target is worth in pooled terms, on these studies")
+for row in conditional.pooled_from_conditional(
+        y, scores_syn, strata_gold, [0.70, 0.75, 0.80, 0.85, 1.00]):
+    print(f"  conditional {row['conditional']:.2f} -> pooled {row['pooled']:.3f}")
+print("  the last line is the ceiling under an unchanged gating: arithmetic,")
+print("  not a reachable target -- one model produces both halves.")
+""")
+
+    nb.md("""
+### 8b. Contrast, and series composition
+
+Two checks on the input rather than the model, from the plan's Stage 0.
+Post-contrast series fed to the model as ordinary fluid-sensitive ones would
+be worth more than any modelling change; genuinely absent contrast is a hard
+ceiling on the finding and belongs in the write-up. **Absence of a string is
+not absence of contrast** — about a fifth of this collection's series carry no
+usable description, so the blind spot is printed beside the result.
+
+Needs `index_train.parquet` (the header scan from notebook 01). Skipped with a
+message if it is not attached, rather than reporting a clean bill it has not
+earned.
+""")
+
+    nb.code("""
+CONTRAST_MARKERS = r"\\+\\s*c\\b|gad|contrast|enhanc|subtract|arthro"
+
+index_paths = find_inputs("index_train*.parquet")
+if not index_paths:
+    print("no index_train.parquet attached -- contrast cannot be ruled in or")
+    print("out from the competition's series table, which carries no")
+    print("SeriesDescription. Attach the notebook 01 output to run this.")
+else:
+    header = pd.read_parquet(index_paths[0], columns=[
+        config.ID_COL, "SeriesInstanceUID", "SeriesDescription",
+        "ProtocolName"]).drop_duplicates("SeriesInstanceUID")
+    text = (header["SeriesDescription"].fillna("") + " | "
+            + header["ProtocolName"].fillna("")).str.lower()
+    hits = text.str.contains(CONTRAST_MARKERS, regex=True, na=False)
+    blind = header["SeriesDescription"].fillna("").str.strip().str.lower().isin(
+        ["", "dummyseriesdesc!"])
+
+    flagged = header[hits].merge(series_meta, on=[config.ID_COL,
+                                                  "SeriesInstanceUID"],
+                                 how="left")
+    print(f"{len(header)} series, {header[config.ID_COL].nunique()} studies")
+    print(f"{len(flagged)} series in {flagged[config.ID_COL].nunique()} "
+          "studies name contrast")
+    for _, row in flagged.iterrows():
+        print(f"  {str(row[config.ID_COL])[-12:]}  "
+              f"{str(row['SeriesDescription'])[:34]:34s} "
+              f"fluid={row.get('Fluid_Sensitive')} "
+              f"fatsat={row.get('Fat_Suppression')}")
+    routed = int((flagged.get("Fluid_Sensitive", pd.Series(dtype=float))
+                  .fillna(0) == 1).sum())
+    print(f"routed to the model as fluid-sensitive: {routed}"
+          + ("   <- fix this before anything else" if routed else
+             "   (no routing bug)"))
+    print(f"blind spot: {int(blind.sum())} series ({blind.mean():.1%}) carry "
+          "no usable description")
+
+# 0d: does the score scale with how many fluid-sensitive fat-suppressed series
+# a study happens to have? Compared against the LABEL's own correlation with
+# the same count -- sicker knees are scanned with more sequences, so the raw
+# number alone cannot say whether the model is reading protocol.
+both = ((series_meta["Fluid_Sensitive"].fillna(0) == 1)
+        & (series_meta["Fat_Suppression"].fillna(0) == 1)).astype(int)
+per_study = series_meta.assign(_both=both).groupby(config.ID_COL)["_both"].sum()
+count = per_study.reindex(truth.index).to_numpy(dtype=float)
+
+
+def _logit(p):
+    return np.log(np.clip(p, 1e-6, 1 - 1e-6) / (1 - np.clip(p, 1e-6, 1 - 1e-6)))
+
+
+print()
+print(f"corr(n fluid+fatsat series, {FINDING} logit) "
+      f"{np.corrcoef(count, _logit(scores_syn))[0, 1]:+.3f}")
+print(f"the label's own correlation with the same count  "
+      f"{np.corrcoef(count, y)[0, 1]:+.3f}")
+print(f"on {len(count)} studies a correlation carries SE "
+      f"{1 / np.sqrt(max(len(count) - 3, 1)):.2f} -- read this on the "
+      "out-of-fold predictions, not here.")
+""")
+
+    nb.md("""
+## 9. The failing studies, as pictures
+
+Eight worst and two best, the latter as controls — without them there is no way
+to tell whether the odd thing in a failure is odd, or just what knee MRI looks
+like.
+
+Rendered **as the model sees them**: after laterality mirroring and the slice
+subsample. Look for a blank series; slices running the wrong way through the
+knee; one study's sagittals mirrored against the others; `side?` on every row,
+meaning laterality was unknown so no mirroring was applied; a plane label that
+does not match the picture.
+""")
+
+    nb.code("""
+FAILURE_DIR = "/kaggle/working/failures"
+
+sheets = knee_inspect.render_failures(gold_index, shards, truth, preds,
+                                      FAILURE_DIR, limit=8, best=2)
+print(f"wrote {len(sheets)} sheets to {FAILURE_DIR}")
+
+from IPython.display import Image, display
+for path in sheets:
+    print(os.path.basename(path))
+    display(Image(filename=path))
+""")
+
+    nb.md("""
+## 10. Take them off the VM
+
+`/kaggle/working` dies with the runtime. These are small.
+""")
+
+    nb.code("""
+import shutil
+
+try:
+    from google.colab import drive
+    drive.mount("/content/drive")
+    OUT = "/content/drive/MyDrive/knee_runs/error_analysis"
+    os.makedirs(OUT, exist_ok=True)
+    for path in sheets + ["/kaggle/working/gold_predictions.parquet"]:
+        shutil.copy(path, OUT)
+    print("copied to", OUT)
+except ImportError:
+    print("not on Colab; the files are in /kaggle/working and will be saved "
+          "with the notebook version")
+""")
+
+    nb.write(NOTEBOOKS / "11_error_analysis.ipynb")
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
@@ -3878,6 +5553,8 @@ def main():
     build_finetune_notebook(colab=True)
     build_export_notebook()
     build_ensemble_notebook()
+    build_ensemble_notebook(colab=True)
+    build_error_analysis_notebook()
 
 
 if __name__ == "__main__":

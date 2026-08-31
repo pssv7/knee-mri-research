@@ -24,6 +24,7 @@ import lightning.pytorch as pl  # noqa: E402
 import torch  # noqa: E402
 
 from src.model import lightning as knee_lightning  # noqa: E402
+from src.model import net  # noqa: E402
 
 
 class TestAuc:
@@ -348,6 +349,143 @@ class TestEpochReportSeesTheMetrics:
         assert "on_validation_epoch_end" not in vars(knee_lightning.EpochReport)
 
 
+class TestStage1Objectives:
+    """The stratified rank loss, the coupling penalty, and the shared queue.
+
+    All three are off at their defaults, so the first thing guarded is that a
+    run which does not ask for them is byte-identical to the reference runs.
+    """
+
+    FEATURES = 8
+
+    def _module(self, **kwargs):
+        torch.manual_seed(0)
+
+        class TinyBackbone(torch.nn.Module):
+            def __init__(self, dim):
+                super().__init__()
+                self.conv = torch.nn.Conv2d(3, dim, 3, padding=1)
+
+            def forward(self, x):
+                return self.conv(x).mean(dim=(2, 3))
+
+        return knee_lightning.KneeLitModule(
+            TinyBackbone(self.FEATURES), self.FEATURES, **kwargs)
+
+    def _batch(self, studies=2, series=2, depth=4, size=8):
+        from src.model.dataset import META_COLUMNS
+        torch.manual_seed(1)
+        return {
+            "volumes": torch.randint(0, 255, (studies, series, depth, size, size),
+                                     dtype=torch.uint8),
+            "meta": torch.rand(studies, series, len(META_COLUMNS)),
+            "mask": torch.ones(studies, series, dtype=torch.bool),
+            "targets": torch.rand(studies, len(config.LABELS)),
+            "weights": torch.ones(studies, len(config.LABELS)),
+        }
+
+    def test_defaults_leave_the_reference_loss_untouched(self):
+        module = self._module()
+        assert module.lambda_stratified_rank == 0.0
+        assert module.lambda_coupling == 0.0
+        assert module.model.residual_pairs is None
+
+    def test_a_step_with_every_term_on_produces_a_finite_loss(self):
+        module = self._module(lambda_rank=0.1, lambda_stratified_rank=0.2,
+                              lambda_coupling=0.05, coupling_target=0.403,
+                              residual_beta=0.6)
+        batch = self._batch()
+        first = module.training_step(batch, 0)
+        second = module.training_step(batch, 1)   # now the queue is populated
+        assert torch.isfinite(first) and torch.isfinite(second)
+        second.backward()
+        assert any(p.grad is not None for p in module.parameters())
+
+    def test_the_queue_carries_the_effusion_score_for_the_reference_studies(self):
+        module = self._module(lambda_stratified_rank=0.2)
+        module.training_step(self._batch(), 0)
+        reference = module._rank_reference()
+        assert set(reference) == {"scores", "targets", "weights", "strata"}
+        assert reference["strata"].shape == (2,)
+        assert ((reference["strata"] >= 0) & (reference["strata"] <= 1)).all()
+
+    def test_one_push_per_step_even_with_both_ranking_terms_on(self):
+        module = self._module(lambda_rank=0.1, lambda_stratified_rank=0.1)
+        for step in range(3):
+            module.training_step(self._batch(), step)
+        assert len(module._rank_queue) == 3
+
+    def test_nothing_is_queued_when_no_ranking_term_is_on(self):
+        module = self._module()
+        module.training_step(self._batch(), 0)
+        assert module._rank_queue == []
+
+    def test_a_coupling_penalty_without_a_target_is_refused(self):
+        # Independence is the wrong target: the findings co-occur at OR 6.09.
+        with pytest.raises(ValueError, match="coupling_target"):
+            self._module(lambda_coupling=0.1)
+
+    def test_an_unknown_finding_is_refused(self):
+        with pytest.raises(ValueError, match="unknown finding"):
+            self._module(stratified_findings=("Synovitus",))
+
+    def test_the_residual_coupling_reaches_the_exported_checkpoint(self, tmp_path):
+        module = self._module(residual_beta=0.75)
+        path = str(tmp_path / "exported.pt")
+        knee_lightning.export_state_dict(module, path)
+        bare = net.KneeNet(module.model.backbone, self.FEATURES)
+        bare.load_state_dict(net.load_knee_state(path))
+        assert bare.residual_beta.tolist() == pytest.approx([0.75], abs=1e-6)
+        assert bare.residual_pairs.tolist() == [
+            [config.LABELS.index("Synovitis"), config.LABELS.index("Effusion")]]
+
+
+class TestConditionalIsLoggedBesidePooled:
+    """§3: pooled AUC on synovitis is obtainable from the effusion label alone.
+
+    An epoch-level number that cannot distinguish "learned synovitis" from
+    "learned effusion" is what seven consecutive null readings were judged on,
+    so the conditional number is logged every epoch beside it.
+    """
+
+    def _module(self):
+        # feature_dim must divide the transformer's head count; the module is
+        # never run forward here, only its validation hook.
+        return knee_lightning.KneeLitModule(torch.nn.Identity(), 8)
+
+    def _feed(self, module, truth, probs):
+        tensor_truth = torch.tensor(truth, dtype=torch.float32)
+        tensor_probs = torch.tensor(probs, dtype=torch.float32)
+        module._val_outputs[1] = [{"probs": tensor_probs,
+                                   "targets": tensor_truth}]
+        logged = {}
+        module.log = lambda name, value, **kwargs: logged.__setitem__(
+            name, float(value))
+        module.all_gather = lambda x: x
+        module.on_validation_epoch_end()
+        return logged
+
+    def test_a_gated_model_logs_a_high_pooled_and_a_chance_conditional(self):
+        rng = np.random.default_rng(0)
+        n = 600      # enough that a chance reading is not a sampling accident
+        effusion = rng.integers(0, 2, n)
+        synovitis = np.where(
+            rng.random(n) < np.where(effusion == 1, 0.7, 0.3), 1, 0)
+        truth = np.zeros((n, len(config.LABELS)))
+        truth[:, config.LABELS.index("Effusion")] = effusion
+        truth[:, config.LABELS.index("Synovitis")] = synovitis
+        probs = np.full((n, len(config.LABELS)), 0.5)
+        # The failure mode: the synovitis head is the effusion head.
+        gated = 0.5 + 0.4 * effusion + rng.normal(0, 0.02, n)
+        probs[:, config.LABELS.index("Effusion")] = gated
+        probs[:, config.LABELS.index("Synovitis")] = gated
+
+        logged = self._feed(self._module(), truth, probs)
+        assert logged["gold_Synovitis_pooled"] > 0.6
+        assert abs(logged["gold_Synovitis_conditional"] - 0.5) < 0.05
+        assert "gold_macro" in logged
+
+
 class TestCheckpointIsTheBestNotTheLast:
     """Every result in this project rests on this being true.
 
@@ -649,3 +787,283 @@ class TestBackboneLearningRateGroups:
     def test_one_group_still_peaks_where_it_always_did(self):
         groups = self._module(1.0).configure_optimizers()["optimizer"].param_groups
         assert groups[0]["max_lr"] == pytest.approx(3e-4)
+
+
+class TestSchedule:
+    """The warmup must be pinnable to an absolute step count.
+
+    `OneCycleLR`'s `pct_start` is a fraction of the run, so lengthening a run
+    moves the learning-rate peak. Twelve epochs put it near epoch 3.6 and
+    twenty put it near epoch 6, which is why "the best epoch moved" across two
+    runs of different lengths says nothing on its own.
+    """
+
+    import torch.nn as _nn
+
+    def _module(self, **kwargs):
+        import torch.nn as nn
+        return knee_lightning.KneeLitModule(
+            backbone=nn.Linear(4, 8), feature_dim=8, lr=1e-4, **kwargs)
+
+    def _peak_step(self, module):
+        """Where the schedule's learning rate is highest, by stepping it."""
+        cfg = module.configure_optimizers()
+        scheduler = cfg["lr_scheduler"]["scheduler"]
+        optimiser = cfg["optimizer"]
+        rates = []
+        for _ in range(module.total_steps):
+            rates.append(optimiser.param_groups[0]["lr"])
+            optimiser.step()
+            scheduler.step()
+        return int(np.argmax(rates)), rates
+
+    def test_the_default_is_the_thirty_percent_cycle_it_always_was(self):
+        peak, _ = self._peak_step(self._module(total_steps=100))
+        assert peak == pytest.approx(30, abs=2)
+
+    def test_an_absolute_warmup_holds_the_peak_across_run_lengths(self):
+        short, _ = self._peak_step(self._module(total_steps=100,
+                                                warmup_steps=20))
+        long, _ = self._peak_step(self._module(total_steps=200,
+                                               warmup_steps=20))
+        assert short == pytest.approx(20, abs=2)
+        assert long == pytest.approx(20, abs=2)
+
+    def test_the_fractional_default_does_not(self):
+        # The behaviour being fixed, asserted so the fix has something to be
+        # a fix of.
+        short, _ = self._peak_step(self._module(total_steps=100))
+        long, _ = self._peak_step(self._module(total_steps=200))
+        assert long > short * 1.5
+
+    def test_cosine_warms_up_then_decays_to_nothing(self):
+        peak, rates = self._peak_step(
+            self._module(total_steps=100, warmup_steps=10, schedule="cosine"))
+        assert peak == pytest.approx(9, abs=1)
+        assert rates[-1] < rates[peak] * 0.01
+
+    def test_cosine_peaks_where_onecycle_does(self):
+        _, cycle = self._peak_step(self._module(total_steps=100,
+                                                warmup_steps=10))
+        _, cosine = self._peak_step(self._module(total_steps=100,
+                                                 warmup_steps=10,
+                                                 schedule="cosine"))
+        assert max(cosine) == pytest.approx(max(cycle), rel=0.02)
+
+    def test_cosine_keeps_the_trunk_group_slower(self):
+        module = self._module(total_steps=100, warmup_steps=10,
+                              schedule="cosine", backbone_lr_scale=0.1)
+        cfg = module.configure_optimizers()
+        optimiser, scheduler = cfg["optimizer"], cfg["lr_scheduler"]["scheduler"]
+        for _ in range(15):
+            optimiser.step()
+            scheduler.step()
+        trunk, rest = (g["lr"] for g in optimiser.param_groups)
+        assert trunk == pytest.approx(rest * 0.1)
+
+    def test_an_unknown_schedule_is_refused(self):
+        with pytest.raises(ValueError, match="schedule"):
+            self._module(total_steps=100, schedule="triangular")
+
+    def test_a_warmup_longer_than_the_run_is_refused(self):
+        with pytest.raises(ValueError, match="warmup_steps"):
+            self._module(total_steps=100, warmup_steps=200)
+
+
+class TestNoiseRobustLossKnobs:
+    """Label smoothing, per-finding weighting and symmetric CE, all inert by
+    default so every reference run stays reproducible."""
+
+    def _module(self, **kwargs):
+        import torch.nn as nn
+        module = knee_lightning.KneeLitModule(
+            backbone=nn.Linear(4, 8), feature_dim=8, total_steps=10, **kwargs)
+        module.log = lambda *args, **kw: None
+        return module
+
+    def test_the_defaults_change_nothing(self):
+        module = self._module()
+        assert module.label_smoothing == 0.0
+        assert module.symmetric_beta == 0.0
+        assert module.pos_weight is None
+
+    def test_pos_weight_reaches_the_loss_as_a_tensor(self):
+        module = self._module(pos_weight=[2.0] * len(config.LABELS))
+        assert module.pos_weight.shape == (len(config.LABELS),)
+        # On the wrapper, so it never reaches the exported KneeNet.
+        assert not [k for k in module.state_dict()
+                    if k.startswith("model.") and "pos_weight" in k]
+
+    def test_label_smoothing_pulls_targets_toward_a_half(self):
+        # Read off the gradient rather than the loss value: BCE's gradient at
+        # a logit is (p - target), so the smoothed target is exactly the
+        # probability the loss stops pushing at. At eps=0.2 a target of 1.0
+        # becomes 0.9, and the gradient at p=0.9 must vanish.
+        logits = torch.logit(torch.full((1, 1), 0.9)).requires_grad_()
+        targets, weights = torch.ones(1, 1), torch.ones(1, 1)
+
+        net.weighted_bce(logits, targets, weights,
+                         label_smoothing=0.2).backward()
+        assert logits.grad.abs().item() == pytest.approx(0.0, abs=1e-6)
+
+        logits.grad = None
+        net.weighted_bce(logits, targets, weights).backward()
+        assert logits.grad.item() == pytest.approx(-0.1, abs=1e-6)
+
+    def test_pos_weight_raises_the_cost_of_missing_a_positive(self):
+        logits = torch.full((1, 2), -4.0)
+        targets = torch.ones(1, 2)
+        weights = torch.ones(1, 2)
+        plain = net.weighted_bce(logits, targets, weights)
+        weighted = net.weighted_bce(logits, targets, weights,
+                                    pos_weight=torch.tensor([3.0, 3.0]))
+        assert weighted == pytest.approx(plain * 3.0, rel=1e-5)
+
+    def test_symmetric_ce_bounds_what_one_wrong_label_contributes(self):
+        # A confident prediction against a confident opposite label: plain BCE
+        # grows without bound as the logit does, the reverse term does not.
+        weights = torch.ones(1, 1)
+        targets = torch.zeros(1, 1)
+        losses = [net.weighted_bce(torch.tensor([[scale]]), targets, weights,
+                                   symmetric_beta=1.0)
+                  - net.weighted_bce(torch.tensor([[scale]]), targets, weights)
+                  for scale in (4.0, 8.0)]
+        # The extra term saturates rather than tracking the logit.
+        assert losses[1] == pytest.approx(losses[0], rel=0.05)
+
+    def test_the_training_step_runs_with_every_knob_on(self):
+        module = self._module(label_smoothing=0.05, symmetric_beta=0.5,
+                              pos_weight=[1.5] * len(config.LABELS))
+        module.model = net.KneeNet(TestAuxiliaryLosses.ConvBackbone(8), 8)
+        batch = TestAuxiliaryLosses()._batch(with_report=False)
+        loss = module.training_step(batch, 0)
+        loss.backward()
+        assert torch.isfinite(loss)
+
+
+class TestWeightAverageCallback:
+    """EMA and SWA of the trajectory, written from inside `fit`.
+
+    Selection-free by construction: nothing here reads a metric, so nothing
+    here can select into the memorisation phase the mined validation curve
+    rewards.
+    """
+
+    def _run(self, tmp_path, epochs=4, **kwargs):
+        from torch.utils.data import DataLoader, TensorDataset
+
+        class Counting(pl.LightningModule):
+            """Weights equal to the epoch number, so an average is readable."""
+
+            def __init__(self):
+                super().__init__()
+                self.model = torch.nn.Linear(1, 1)
+
+            def training_step(self, batch, _):
+                with torch.no_grad():
+                    self.model.bias.fill_(float(self.current_epoch + 1))
+                return (self.model(batch[0]).mean() * 0.0
+                        + self.model.bias.sum() * 0.0)
+
+            def configure_optimizers(self):
+                return torch.optim.SGD(self.parameters(), lr=0.0)
+
+        average = knee_lightning.WeightAverage(
+            prefix=str(tmp_path / "fold0"), **kwargs)
+        data = DataLoader(TensorDataset(torch.randn(2, 1)), batch_size=2)
+        pl.Trainer(max_epochs=epochs, accelerator="cpu", devices=1,
+                   logger=False, enable_progress_bar=False,
+                   enable_model_summary=False, num_sanity_val_steps=0,
+                   callbacks=[average]).fit(Counting(), data)
+        return average
+
+    def test_both_files_are_written_by_the_end_of_fit(self, tmp_path):
+        average = self._run(tmp_path, total_steps=4)
+        assert os.path.exists(average.ema_path)
+        assert os.path.exists(average.swa_path)
+
+    def test_the_files_are_bare_state_dicts_the_submission_can_load(self,
+                                                                    tmp_path):
+        average = self._run(tmp_path, total_steps=4)
+        state = torch.load(average.ema_path, map_location="cpu")
+        # No "model." prefix: this is the bare KneeNet format
+        # notebook 10 loads, not a Lightning checkpoint.
+        assert set(state) == {"weight", "bias"}
+
+    def test_swa_averages_the_tail_not_the_whole_run(self, tmp_path):
+        # Four steps holding 1, 2, 3, 4; the last half is 3 and 4.
+        average = self._run(tmp_path, epochs=4, total_steps=4,
+                            swa_fraction=0.5)
+        swa = torch.load(average.swa_path, map_location="cpu")
+        assert swa["bias"].item() == pytest.approx(3.5)
+
+    def test_the_ema_lags_the_final_weights(self, tmp_path):
+        average = self._run(tmp_path, epochs=4, total_steps=4, decay=0.5)
+        ema = torch.load(average.ema_path, map_location="cpu")
+        assert ema["bias"].item() < 4.0
+
+    def test_no_swa_file_when_the_window_never_opened(self, tmp_path):
+        average = self._run(tmp_path, epochs=2, total_steps=1000)
+        assert os.path.exists(average.ema_path)
+        assert not os.path.exists(average.swa_path)
+
+    def test_it_updates_on_optimiser_steps_not_batches(self, tmp_path):
+        # With accumulation, most batches leave the weights untouched. Folding
+        # an unchanged model in `accumulate` times per step would make the
+        # effective decay decay**accumulate -- a shorter memory than asked
+        # for, set by a knob that is meant to be numerically neutral.
+        from torch.utils.data import DataLoader, TensorDataset
+
+        class Trivial(pl.LightningModule):
+            def __init__(self):
+                super().__init__()
+                self.model = torch.nn.Linear(1, 1)
+
+            def training_step(self, batch, _):
+                return self.model(batch[0]).mean() * 0.0
+
+            def configure_optimizers(self):
+                return torch.optim.SGD(self.parameters(), lr=0.0)
+
+        average = knee_lightning.WeightAverage(prefix=str(tmp_path / "f"),
+                                               total_steps=100)
+        data = DataLoader(TensorDataset(torch.randn(8, 1)), batch_size=1)
+        pl.Trainer(max_epochs=1, accelerator="cpu", devices=1, logger=False,
+                   enable_progress_bar=False, enable_model_summary=False,
+                   num_sanity_val_steps=0, accumulate_grad_batches=4,
+                   callbacks=[average]).fit(Trivial(), data)
+        assert average.average.steps == 2      # 8 batches / 4 accumulation
+
+    def test_an_impossible_swa_fraction_is_refused(self):
+        with pytest.raises(ValueError, match="swa_fraction"):
+            knee_lightning.WeightAverage(prefix="x", swa_fraction=1.5)
+
+
+class TestWeightAverageCannotKillAFinishedRun:
+    """Hours of GPU time exist as the monitored checkpoint by the time
+    `on_train_end` fires. An exception raised there propagates out of `fit`
+    and takes the export and scoring cells with it."""
+
+    def test_a_failing_export_is_reported_not_raised(self, tmp_path, capsys):
+        from torch.utils.data import DataLoader, TensorDataset
+
+        class Trivial(pl.LightningModule):
+            def __init__(self):
+                super().__init__()
+                self.model = torch.nn.Linear(1, 1)
+
+            def training_step(self, batch, _):
+                return self.model(batch[0]).mean() * 0.0
+
+            def configure_optimizers(self):
+                return torch.optim.SGD(self.parameters(), lr=0.0)
+
+        # A directory that does not exist, so torch.save raises.
+        average = knee_lightning.WeightAverage(
+            prefix=str(tmp_path / "missing" / "fold0"), total_steps=2)
+        data = DataLoader(TensorDataset(torch.randn(2, 1)), batch_size=1)
+        pl.Trainer(max_epochs=1, accelerator="cpu", devices=1, logger=False,
+                   enable_progress_bar=False, enable_model_summary=False,
+                   num_sanity_val_steps=0,
+                   callbacks=[average]).fit(Trivial(), data)
+        assert "could not write its averages" in capsys.readouterr().out

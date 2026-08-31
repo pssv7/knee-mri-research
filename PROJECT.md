@@ -4,21 +4,48 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-26 (capacity ladder complete at 0.845 -> 0.869 -> 0.889 ->
-0.891; the slice axis is exhausted. **Phase C2 closed** — the report loss won
-val 0.881 / gold 0.867 but scored LB 0.880 against the aux-free 0.889, so both
-lambdas ship at 0.0. **Phase C closed entirely the same day** — prompt
-variants, a 3->5 sample bump, four ensembles and a 32B categorical
-re-extraction all fused at or below the shipped 0.891, and a replication
-showed the differences between them were sampling noise (run-to-run sd
-~0.004 against a between-config spread of 0.007). **The 58-study gold set
-cannot resolve a label change smaller than ~0.01, and the gate asked for
-0.005** — label quality is done as a lever. The gradient-similarity aux run also
-measured flat (val 0.874 / gold 0.856) and C2 is closed for good. Budget
-goes to Phase D — the five-fold ensemble, with notebook 08 instrumented to
-dump out-of-fold predictions — and then Phase E, self-distillation on the
-OOF matrix, the one supervision channel not yet tried. See `docs/plan.md`
-and worklog 2026-08-26 (c) through (l)).
+Last updated: 2026-08-31. **Synovitis is now judged on a different number.**
+Pooled AUC on that finding is reproducible from the effusion label alone
+(0.698, against the synovitis head's 0.701), so it cannot see the finding at
+all; the metric is **effusion-stratified conditional AUC**, which stands at
+0.630 with a 95% CI of [0.46, 0.79]. `plan.md` (repo root) holds the plan and
+its gates; `docs/worklog.md` 2026-08-31 holds what was measured implementing
+it. In short: contrast is genuinely absent from this collection (3 studies of
+4,407, none misrouted, none in the gold 58), the series-composition confound
+does not reproduce, the Stage 0 gate is still undecided because the frozen
+DINOv2 and silence-reweighting predictions on the 58 do not exist, and the
+Stage 1 training code is in and off by default. Never judge this finding on
+macro; never on pooled alone; paired bootstrap only.
+
+Last major shape change: 2026-08-28. **The plan changed shape.** `docs/plan.md` no
+longer runs Phases A-E; it is a model-selection and training-constraint plan,
+and the phase structure it replaced had closed its own levers (A and B done, C
+flat inside the gold set's resolution, C2 down 0.009 on the leaderboard).
+
+What is new, and what it rests on:
+
+- **The DINOv2 axis is closed.** Fine-tuned DINOv2-S measured gold 0.820
+  against fold 1's 0.861 gate, and at 24 slices converged level with ConvNeXt
+  while losing to its own frozen self on three findings. Both notebooks are
+  back on `convnext_tiny.fb_in22k_ft_in1k`.
+- **Four correctness bugs are fixed** (plan P0). Normalisation now travels in
+  the checkpoint; the submission picks series with `np.linspace` the way
+  training does, which was wrong for 32.5% of studies; checkpoint recovery no
+  longer resolves alphabetically; `MAX_SERIES` is 6.
+- **Checkpoint selection is the leading suspect.** Mined val rose to 0.860 at
+  epoch 9 and fell to 0.843 by epoch 20 while gold held flat at 0.864-0.869
+  over eleven epochs — the early-learning-then-memorisation signature of
+  training on noisy labels, which makes mined val a *biased* selector rather
+  than a noisy one. EMA and SWA now accumulate alongside the monitored
+  checkpoint, so a run ships three candidates and selects on none of them.
+- **58 gold studies cannot resolve 0.015.** Hanley-McNeil puts the per-finding
+  SE at 0.045-0.08 and the macro SE at 0.015-0.025. The run-to-run sd of 0.004
+  measures optimiser noise, not the gold estimate's error. Decisions inside
+  0.02 on gold are not decisions.
+
+**Nothing here has been measured yet.** The code changes are in; the 20-epoch
+fold-1 run that reads P1 and P2 has not been made. See `docs/plan.md` for the
+queue and the gates, and worklog 2026-08-28.
 
 ---
 
@@ -49,6 +76,7 @@ in train but **not** in test, so text is a training-time signal only.
 | **ConvNeXt-T, 24 slices, 5 series** (fold 1) | **0.891 ← best** |
 | ConvNeXt-T, 16 slices, 5 series + report loss 0.5 (fold 1) | 0.880 |
 | ConvNeXt-T, 16 slices, 5 series (**fold 3**) | 0.877 |
+| ConvNeXt-T, 16 x 5, 20 epochs + fixed warmup + P0 fixes (fold 1) | 0.888 |
 | Leaderboard top | 0.952 |
 | Leaderboard 20th | 0.941 |
 
@@ -213,11 +241,16 @@ src/
     embed.py             frozen DINOv2-S encoder, POOL_GRID variants
     dataset.py           study assembly, mirroring, collation
     net.py               attention pool -> FiLM -> series transformer -> 12 logits
+    conditional.py       effusion-stratified conditional AUC, paired bootstrap
+    averaging.py         EMA, SWA, uniform and greedy model soups
     splits.py            study-grouped folds, gold-leakage guard
     side_classifier.py   L/R prediction
     lightning.py         DDP training wrapper, DDP-safe metrics and export
 tools/
   make_notebook.py           generates every notebook from src/
+  synovitis_gate.py          conditional AUC, the Stage 0 gate, paired tests
+  series_audit.py            contrast inventory and series-composition check
+  error_analysis.py          per-finding table, subgroups, worst studies
   check_notebook.py          executes the Colab notebook's cells locally
   check_kaggle_notebooks.py  runs 01/02 against a fake mini-dataset
   check_submission.py        runs 07 or 10 end to end on a fake test set
@@ -225,9 +258,10 @@ docs/
   plan.md                the forward plan, with the gate at every step
   agent_playbook.md      how decisions get made here -- read before acting
   worklog.md             dated session records, with numbers
+  attempts/              parked sessions: what was measured, what is open
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   302 tests
+tests/                   577 tests
 ```
 
 ---
@@ -478,6 +512,33 @@ All guarded by tests now.
 - **Downloading ~10 GB from Kaggle to Colab fails** at ~5.5 GB with
   `IncompleteRead`, consistently. Notebook 09 exports a 3.2 GB thinned shard
   instead.
+- **A `persistent=False` buffer does not travel, and a strict load says
+  nothing about it.** `KneeNet` registered its input normalisation that way on
+  the argument that it is a backbone constant rather than learned state. Every
+  construction site then had to supply it again, two scoring sites did not,
+  and the strict load restored every weight while leaving normalisation off —
+  an ImageNet-normalised trunk scored on raw [0,1]. Measured symptom: gold
+  0.864 logged in training, 0.823 from the same weights reloaded. ConvNeXt hid
+  it completely, because its statistics are `None`. The buffers are persistent
+  now and `_load_from_state_dict` reconciles files written either side of the
+  change. Guarded by `tests/test_backbone_normalisation.py`.
+- **`sorted(glob(...))[0]` is alphabetical, and "-" sorts before "."** (45 <
+  46 < 95). So `lit_fold1-v1.ckpt` beats `lit_fold1.ckpt` beats
+  `lit_fold1_old.ckpt`, and Lightning writes those `-vN` suffixes on every
+  name collision — a session resumed after a crash silently recovers the
+  earlier attempt's weights. Prefer the exact name, then `os.path.getmtime`.
+- **Training and submission disagreed on which series to keep.** Training
+  spreads its pick with `np.linspace` (`StudyIndex.series_for`); the
+  submission took `volumes[:MAX_SERIES]`, a head truncation. For a seven-series
+  study that is positions [0, 2, 3, 4, 6] against [0, 1, 2, 3, 4], and 32.5% of
+  studies carry more than five series. Shapes agree, nothing raises, and the
+  prediction is simply built from the wrong images. Guarded by
+  `tests/test_notebook.py::TestTrainingAndSubmissionAgree`.
+- **A glob that averages checkpoints will average a fold with itself.**
+  Notebook 08 writes three weights per fold (best-val, EMA, SWA), and notebook
+  10 averages every `convnext_fold*.pt` it can see. The averages are therefore
+  named `avg_fold{N}_ema.pt` / `_swa.pt`, outside that glob, and notebook 10
+  refuses to load two families at once.
 
 ---
 

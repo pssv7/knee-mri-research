@@ -4,6 +4,7 @@
 *.npy
 *.parquet
 *.pt
+*.ckpt
 *.dcm
 /weights/
 /outputs/

@@ -5,6 +5,608 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-31 — the synovitis plan: metric, Stage 0, and the Stage 1 code
+
+`plan.md` implemented. Every §1 figure re-derived from the local artifacts
+first, and all of them reproduce exactly: pooled 0.701, conditional 0.630,
+the pair decomposition 44.4 / 30.0 / 14.4 / 11.2, the conversions 0.755 and
+0.867. `tests/test_conditional.py::TestTheReferenceNumbers` now holds them, so
+a change to the metric fails a test rather than surfacing six weeks later.
+
+### The metric (§3), and what it costs to ignore it
+
+    pooled AUC, synovitis head            0.701
+    pooled AUC, EFFUSION head             0.722   <- the same studies
+    pooled AUC, gold effusion label       0.698
+    conditional AUC (gold strata)         0.630   95% CI [0.457, 0.791]
+    conditional AUC (predicted strata)    0.617
+
+`src/model/conditional.py`, torch-free so the tools, the notebooks and the
+training loop's validation hook all read the same definition. The plan's
+"stratify on predicted effusion gives 0.617" is a **median split** of the
+effusion score -- that is what reproduces it, and a median is what the module
+defaults to, because a fixed 0.70 cut that balances one model's studies puts
+80% of another's on one side.
+
+`gold_Synovitis_conditional` and `gold_Synovitis_pooled` are now logged every
+epoch beside `gold_macro`, on both validation loaders. Monitoring only.
+
+### 0c — contrast: present in three studies, not misrouted
+
+    7 series in 3 studies of 4,407 name contrast ("+C", all T1 TSE FS)
+    routed as fluid-sensitive: 0
+    none of the three is in the gold 58
+    blind spot: 4,322 series (17.7%) carry no usable description
+
+So the routing branch does not fire and the **non-contrast ceiling applies**:
+effusion-synovitis is defined in the literature as fluid distension that
+cannot be separated from synovitis without contrast, and this collection is
+essentially without it. The plan's warning is honoured rather than waved at --
+a description-free control (a repeated T1-like acquisition in one plane, which
+is what a pre/post pair looks like without a typed string) finds 269 studies,
+an upper bound on what the description scan could be missing, since a repeat
+for motion looks identical. `ContrastBolusAgent` is now in `HEADER_FIELDS`; the
+existing `index_train.parquet` predates it, so the next scan answers the
+question directly instead of by inference.
+
+### 0d — the premise was wrong, the test still ran
+
+`worst05_317032662220` does not carry two series labelled `sag fluid fatsat R`.
+It carries `sag t1`, `sag pd fs`, `sag t2 fs`, `cor t2 fs`, `ax t2 fs`. The
+two identical panel captions on the failure sheet come from
+`inspect.describe_series`, which prints the *metadata vector the model was
+conditioned on* -- plane, fluid, fat-sat, side -- so two distinct sequences
+sharing those flags print the same caption. Not a duplicated series.
+
+The underlying question is still worth asking, and on 4,349 out-of-fold studies:
+
+    corr(n fluid+fatsat series, synovitis logit)   +0.132
+      partial, controlling predicted effusion      +0.108
+    the mined label's own correlation              +0.151
+
+The model tracks protocol *no harder than the labels do*, which is what
+separates an aggregation artefact from the real fact that sicker knees get
+scanned with more sequences. **No series-type-aware aggregation is indicated.**
+The gold 58 gives +0.106 against the label's -0.073 and is not readable -- a
+correlation on 58 studies carries SE 0.13, and the tool now refuses to read one
+below 200 studies rather than printing an eye-catching verdict.
+
+### 0a and 0b — blocked, exactly as §9 said
+
+No frozen DINOv2 predictions on the 58 and no saved silence-reweighting
+predictions exist, here or in `models_train/`. No DINOv2 checkpoint either.
+Both checks are one notebook-11 run per checkpoint away -- point `CHECKPOINT`
+at it, take `gold_predictions.parquet`, then:
+
+    python tools/synovitis_gate.py --predictions frozen_gold.parquet \
+        --baseline failures/gold_predictions.parquet
+
+which prints both readings paired on the same 58 studies. Until then the gate
+is undecided and the reference run reads **AMBIGUOUS** -- the expected outcome
+at n=58, and the plan's own instruction for that branch is Stage 1 at reduced
+confidence with Stage 2 prioritised.
+
+### §6's interim proxy, which is not blocked
+
+Out-of-fold predictions over all 4,349 mined studies, stratified on predicted
+effusion:
+
+    conditional 0.801   95% CI [0.773, 0.829]   P(<= 0.5) = 0.000
+    pooled      0.899   (the effusion head alone scores 0.874)
+
+Reads CLEAR, with 484,654 within-stratum pairs behind it instead of 376. What
+it is worth: it measures agreement with the extractor, and its 251 positives
+are the report-mentioned cases, which are the severe ones. What it is still
+evidence for: the trunk *can* order synovitis within an effusion stratum when
+the labels it is scored against are high-precision. §2.4's worry -- that the
+residual task is unlearnable because the labels are 82.2% silent -- is not
+supported by the one reading available, but the reading cannot rule it out
+either, because the silent studies are exactly the ones this proxy drops.
+
+### Stage 1 — the code, all of it off by default
+
+A reference fold is unchanged; every knob below is inert at its default and
+the ensemble-config check in notebook 08 flags any of them being set.
+
+- **`net.stratified_rank_loss`** -- RankNet over pairs whose *predicted*
+  effusion scores lie within a caliper (0.15), restricted to the named
+  findings. Conditional AUC is within-stratum pair concordance, so this is the
+  metric, differentiably, not an analogy to it. Both ranking losses share one
+  cross-batch queue and it is pushed once per step; the queue now carries each
+  study's effusion score, because deciding comparability needs the reference
+  studies' effusion and they have left the batch.
+- **`KneeNet.couple`** -- `syn_logit = beta * stopgrad(eff_logit) + g(features)`,
+  built into the model so it **travels in the checkpoint** and a bare
+  `KneeNet(backbone, dim)` at a scoring site adopts it. That is the
+  input-normalisation lesson applied before it costs a run rather than after.
+  The parent is detached: the synovitis objective must not reshape the one
+  head on this pair that is reliable.
+- **`net.coupling_penalty`** -- aims at an explicit target, and the module
+  *raises* if a coupling weight is set without one. Independence is the wrong
+  target: gold OR 6.09, p = 0.003, label correlation 0.403 against the model's
+  0.65.
+
+Calibrating beta (`conditional.calibrate_coupling`, IRLS, label on parent
+logit):
+
+    gold labels, n=58     0.64
+    mined labels, n=4349  1.14   (82% silent, biased to severity)
+    the model's own self-coupling, logit space   0.93
+
+The last is what the residual head is meant to replace, so it is not the
+target; 0.64 is the truth-supported figure and the one to start from, with the
+caveat that it rests on 58 studies.
+
+### Pre-registration, before any of this is run
+
+Conditional AUC 0.630 -> **>= 0.75**, tested by paired bootstrap on the same
+58 studies (`tools/synovitis_gate.py --baseline`). That is pooled ~0.755. A
+pooled-only reading of the same run would show +0.054 and be dismissed as
+noise, which is the whole reason the metric changed.
+
+Two things fixed by decision rather than by the plan, both flagged:
+
+1. The plan says "clearly > 0.5", "= 0.5" and "ambiguous" without cutoffs.
+   Fixed in `gate_reading`: clear = bootstrap 2.5th percentile > 0.5 and
+   P(<= 0.5) < 0.05; chance = point <= 0.55 and P(<= 0.5) >= 0.25; ambiguous
+   otherwise. In code so they cannot be chosen after seeing a number.
+2. §4's gate table sends a chance reading to Stage 3, §10's decision table
+   sends it to Stage 4. The tool prints both and says the plan gives both.
+
+### What shipped
+
+    src/model/conditional.py        the metric, paired bootstrap, beta calibration
+    src/model/net.py                stratified rank loss, coupling penalty,
+                                    residual coupling in KneeNet
+    src/model/lightning.py          the three knobs, shared queue, conditional
+                                    AUC logged every epoch
+    src/data/dicom_io.py            ContrastBolusAgent in the header scan
+    tools/synovitis_gate.py         §3 report, 0a/0b, the pre-registered rule
+    tools/series_audit.py           0c and 0d
+    notebooks/11                    section 8: the same analysis where the
+                                    cache and the index live
+    notebooks/08                    LAMBDA_STRATIFIED_RANK, RESIDUAL_BETA,
+                                    LAMBDA_COUPLING, all 0/None
+
+62 new tests, 577 pass. Not measured: nothing above has been trained. The
+metric change, 0c and 0d are measurements; Stage 1 is code awaiting a run.
+
+---
+
+## 2026-08-29 (d) — the Synovitis fix measures null; seven consecutive nulls
+
+    Synovitis   0.682 -> 0.694   (+0.012)      gate was 0.78
+
+Per-finding gold SE on 58 studies is 0.045-0.08, so this is noise. The
+correlation between how much silent weight a finding lost and how its AUC
+moved is **-0.08** -- nothing happened, to any finding, in either direction.
+macro 0.877 -> 0.870, also noise.
+
+**What this rules out, which is the useful part.** Removing 57% -> 19% of
+Synovitis's gradient from silent studies changed nothing. So silent false
+negatives dragging the ranking down was *not* the mechanism, and the diagnosis
+behind the fix was wrong. What remains: the 18% of reports that *do* mention
+synovitis are presumably the severe cases, and a model trained on those cannot
+rank the mild ones a radiologist grades positive. **Loss weighting cannot fix
+a biased positive sample.** Only image-derived labels for the silent studies
+can -- the old plan's Phase E.
+
+Note also that frozen DINOv2 still beats the fine-tuned model on Synovitis
+across all three runs (0.746 vs 0.682, 0.694). Not actionable -- picking a
+per-finding blend on gold is the fitted-on-gold overfit this project banned --
+but it is consistent with fine-tuning destroying general features while
+fitting noisy labels.
+
+**Experimental-design error, mine.** The per-finding baseline came from the
+16 x 6 run, so this comparison carries the series-cap change as well as the
+reweighting. I should have had the 16 x 5 table before running. The reading is
+unaffected -- everything is inside noise either way -- but the comparison was
+not the clean one I set up.
+
+### P2, third reading
+
+    best mined-val epoch   0.870
+    EMA                    0.870   (-0.000)
+    SWA                    0.870   (-0.000)
+
+Exactly flat. Three readings, three ties or losses. P2 is closed for good.
+
+### The tally
+
+    change                          val      gold        LB
+    P0.1 normalisation travels        -         -         -   (ConvNeXt-invisible)
+    P0.2 series linspace              -         -    bundled
+    P0.3 checkpoint glob              -         -         -   (hygiene)
+    P0.4 MAX_SERIES 6            +0.003    -0.005    -0.003   REVERTED
+    P1   20 ep + warmup          +0.002    +0.021    -0.001   killed
+    P2   EMA / SWA                    -    -0.003         -   killed
+    silence reweighting          -0.003    -0.012         -   REVERTED
+
+Seven changes, no improvement. Best LB remains **0.891** (24 x 5, 2026-08-25),
+which predates every one of them.
+
+**The binding constraint is the instrument, not the ideas.** Gold's macro SE is
+0.015-0.025, per-finding 0.045-0.08, val has disagreed with the LB twice, and
+every remaining item in the plan is worth <= 0.02 macro. Seven nulls in a row
+is what running experiments below the noise floor looks like.
+
+---
+
+## 2026-08-29 (c) — the per-finding table, and the Synovitis fix
+
+### Where the 0.053 actually is
+
+Fold 1, 16 x 6, selected checkpoint, gold 58:
+
+    Baker's          0.964    Effusion          0.919
+    Medial OA        0.950    Medial Meniscus   0.897
+    ACL              0.947    Contusion         0.852
+    Lateral OA       0.925    Fracture          0.838
+    MCL              0.900    PF OA             0.837
+                             Lateral Meniscus  0.809
+                             Synovitis         0.682   <- and falling
+    macro 0.877
+
+**The resolution hypothesis is refuted in its strong form and is withdrawn.**
+It rested on small structures being catastrophic; Lateral Meniscus is 0.809
+and Medial Meniscus 0.897. Fixing Lateral Meniscus perfectly is worth +0.012
+macro. A 49 GB cache rebuild is not justified by that, and the recommendation
+to do one was made before this table existed -- reasoning where a measurement
+was available and cheap.
+
+Fixing every finding under 0.87 to 0.95 gives macro 0.877 -> 0.938. **Synovitis
+alone is 37% of that headroom.**
+
+### P2 is killed
+
+    best mined-val epoch   0.877
+    EMA                    0.874   (-0.003)
+    SWA                    0.875   (-0.002)
+
+Gate was "EMA/SWA gold >= best-mined-val gold". Both below; the kill condition
+("averaging underperforms argmax on the clean set") fired. Consistent with P1
+-- no memorisation drift, so nothing for averaging to correct. **P0 measured
+null-to-negative, P1 killed, P2 killed: the entire top of the plan is closed.**
+
+### Synovitis: a label problem, quantified
+
+    82.2% of studies are SILENT about Synovitis
+    mined target, overall            0.087
+    mined target, when silent        0.011
+    TRUE prevalence on gold          0.466
+
+So ~1,666 of the 3,576 silent studies are true positives being trained toward
+zero, and because silence is so common here **they carry 57% of the finding's
+gradient**. The model is being taught to rank real positives low. Synovitis is
+the only finding where the fine-tuned model is WORSE than the retired frozen
+path (0.682 vs 0.746) -- more capacity fits the noise harder.
+
+**The fix: `fuse.rescale_silent_weights`.** The silent weight becomes
+`WEIGHT_SILENT x (1 - silence_rate(finding))`, with the rate measured on the
+4,349 mined studies.
+
+    finding            silent%   weight        silent share of gradient
+    Synovitis            82.2%   0.250 -> 0.044        57% -> 19%
+    Lateral OA           54.8%   0.250 -> 0.113        28% -> 15%
+    ACL                   9.2%   0.250 -> 0.227         3% ->  3%
+
+**Why this is not the rule the module already rejected.** `fuse` removed
+per-finding silence priors once before: 24 numbers fitted on 58 gold studies,
+0.860 in-sample against 0.812 leave-one-out. This is one rule with no free
+parameters, evaluated on the mined corpus, and it touches **weights only** --
+fabricating P(positive | silent) as a *target* measured worse on every variant
+tried, and that finding stands.
+
+Near-neutral by construction for the 8 findings where reports are thorough:
+silence already carries 3-5% of their gradient and still does.
+
+`SILENCE_REWEIGHT = True` in notebook 08; the reference labels are one flag
+away. No label regeneration and no re-upload -- the rescale runs at load time
+against the existing `train_labels.parquet`.
+
+**Untested.** The change cannot be scored locally: weights do not alter the
+targets' ranking, so label gold AUC is identical either way. It needs one
+fold-1 training run, read on Synovitis specifically.
+
+---
+
+## 2026-08-29 (b) — P0.4 measures null; the selector verdict replicates
+
+Fold 1, 16 x 6, 20 epochs, A100, 5.0 min/epoch. The series cap was the only
+change against the P1 run.
+
+    at each run's selected checkpoint      P1 (16x5)   P0.4 (16x6)   delta
+    val                                        0.874        0.877   +0.003
+    gold                                       0.882        0.877   -0.005
+    min/epoch                                    4.8          5.0     +4%
+
+**Null.** The two signals disagree in sign and both deltas are inside their
+noise. My +20% runtime estimate was wrong by a factor of five: only ~17% of
+studies have a sixth series to gain, so the mean series/study rises 6.7% and
+the wall clock with it, not 6/5.
+
+**The plan's gate technically passes** -- "gold up or flat with no cost
+blowup", and flat with +4% is exactly that. The kill needs "no gain AND
+inference budget pressure", and there is no pressure. So by the letter of the
+plan, `MAX_SERIES` stays at 6. Recorded because the reading is a null and the
+gate is generous, not because the change earned anything.
+
+**The series axis is now closed.** The plan's own accounting put the total
+remaining headroom at +14%; 5 -> 6 was half of it and measured nothing.
+
+### P1's kill replicates
+
+Second independent run, same conclusion:
+
+    run          pearson r   val peak      gold peak     selection cost
+    P1 (16x5)        0.979   0.874 @ep10   0.882 @ep10           +0.000
+    P0.4 (16x6)      0.974   0.877 @ep13   0.887 @ep6            +0.010
+
+Two runs, no divergence, r ~ 0.975 both times. The biased-selector hypothesis
+is closed on replication rather than on one run.
+
+The 0.010 "selection cost" here is one epoch-6 gold excursion to 0.887 against
+a plateau mean near 0.872 -- gold's sd over epochs 10-20 is 0.004 and its macro
+SE is ~0.02, so a single reading 0.010 above the plateau is ordinary. **Do not
+read a single epoch's gold.** The P1 run's 0.000 and this run's 0.010 are the
+same measurement.
+
+### Still unread, twice now
+
+Notebook 08's scoring cell prints the P2 comparison -- selected vs EMA vs SWA
+on the gold 58. `avg_fold1_ema.pt` and `avg_fold1_swa.pt` are on disk from both
+runs. It is the last free measurement and the only thing standing between P2
+and a verdict.
+
+---
+
+## 2026-08-29 — P1 killed; P0.4 configured; the plan's remaining gaps closed
+
+### P1: no divergence. The hypothesis is dead.
+
+Fold 1, ConvNeXt-T, 16 x 5, 20 epochs, fixed warmup, aux-free. 4.8 min/epoch on
+one GPU, ~1.6 h.
+
+    val   peak 0.874 at epoch 10, final 0.870
+    gold  peak 0.882 at epoch 10, final 0.870
+    pearson r over 20 epochs      0.979
+    SELECTION COST                0.000
+
+**Val and gold peaked at the same epoch.** The plan asserted mined-val
+selection was costing ~0.015 per fold; measured on ConvNeXt it costs nothing,
+and the two curves track at r = 0.979 including a shared dip at epoch 8. The
+plan's kill criterion -- "no divergence -> selection rule is fine, revisit" --
+has fired, and with it the premise of P2, which the plan headed "highest
+expected gain **given P1**".
+
+**Why the plan was wrong:** the divergence it diagnosed (val 0.860 -> 0.843
+with gold flat) came from the **DINOv2** run. It generalised that curve to
+ConvNeXt. ConvNeXt does not reproduce it, so the early-learning/memorisation
+argument in section 2.1 was fitted to a trunk this project has retired.
+
+**Do not read gold 0.882 as an improvement** over the 0.861 reference. Val moved
++0.002 at the same geometry while gold moved +0.021; val has ~870 studies and
+gold has 58 with a macro SE of ~0.02. The large sample says "same model".
+
+**Second negative result:** epochs 12-20 bought +0.003 gold and nothing on val.
+Run length is not a lever; 12 epochs was already converged.
+
+**Still unread:** notebook 08's scoring cell, which prints the P2 comparison
+(selected vs EMA vs SWA on the gold 58). Free -- the checkpoints are on disk.
+
+### The LB verdict: 0.888. Gold said +0.021; the leaderboard said -0.001.
+
+Submitted fold 1 solo. **LB 0.888** against the 16 x 5 reference's 0.889.
+
+    gold 0.861 -> 0.882   (+0.021)
+    val  0.872 -> 0.874   (+0.002)
+    LB   0.889 -> 0.888   (-0.001)
+
+**Val was the better forecaster, by a lot.** It has ~870 studies; gold has 58
+with a macro SE of 0.015-0.025, so +0.021 was one standard error and meant
+nothing. This was called before the submission -- "treat this as a
+reproduction of the reference, not an improvement" -- on exactly that
+arithmetic, and it is the first time the plan's Hanley-McNeil number has been
+used to predict rather than to explain.
+
+**The gold-forecast rule has now failed twice in five trials, and the newest
+miss is the largest:**
+
+    change                        gold      LB     verdict
+    8 -> 16 slices              +0.023  +0.024     tracked
+    3 -> 5 series               +0.021  +0.020     tracked
+    16 -> 24 slices             +0.004  +0.002     tracked
+    report loss 0.5             +0.006  -0.009     MISSED
+    20 ep + warmup + P0 fixes   +0.021  -0.001     MISSED
+
+The three that tracked were capacity changes with real gold movement behind
+them. Both misses had a gold delta inside one SE. **The operative rule: a gold
+delta under ~0.03 forecasts nothing. Read val, or accept that you cannot
+tell.**
+
+**What this run actually bundled.** Against the 0.889 reference it changed
+four things at once: 20 epochs instead of 12, absolute warmup, a fixed seed,
+and P0.2's series-selection fix in the submission (which changes the images
+scored for 32.5% of studies). The bundle is worth -0.001, and no single
+component can be attributed. That is a fair read for P1's purpose -- the
+divergence question is answered within-run -- but it is not a clean read of
+any of the four, and P0.2 in particular went in as a correctness fix whose
+effect is now known to be inside noise.
+
+**Run length is closed as a lever.** Epochs 12-20 moved gold +0.003, val
+nothing, and the LB -0.001. Twelve epochs was already converged. Future runs
+can drop back to 12 for a 40% saving once P0.4 is read.
+
+### P0.4 configured, and a documentation drift found
+
+`MAX_SERIES` 5 -> 6 in notebook 08, `TUNED_MAX_SERIES` with it. The only change
+in the next run; compare against the P1 numbers above.
+
+While making it: **notebook 08's markdown still said "24 of 24 slices, 6
+series, budget ~5.3 h" while its code ran 16 x 5.** The 2026-08-28 revert
+updated the constants, but the script carrying one of three prose blocks failed
+mid-way and only part was re-run. The run was correct and the documentation was
+not, which is the harder failure to notice. Now guarded by
+`test_the_geometry_prose_matches_the_geometry_constants`, which parses both and
+compares.
+
+### The plan's remaining implementable gaps, all default-off
+
+- **Augmentation (section 3.4)** -- `src/model/augment.py`. The pipeline had one
+  intensity scale. Now: photometric, series-shared noise, cutout with a fixed
+  box through the stack, slice reversal, and a study-level laterality flip that
+  swaps `LATERAL_LABEL_PAIRS` in the targets. `config.py` has carried that
+  constant and its warning since long before anything used it.
+- **Flip TTA (3.8)** and **member rank-averaging (3.9)** in notebook 10. The
+  rank gap was subtler than "not implemented": `to_ranks` already rank-blended
+  frozen vs tuned, but fold members were averaged as probabilities inside
+  `tuned_predict` -- so it was never applied across the only ensemble that
+  still exists.
+- **Checkpoint guard extended.** It separated EMA/SWA from selected but missed
+  a fold appearing under two names *within* a family -- `convnext_fold1.pt` and
+  `lit_fold1.ckpt` are the same weights and both match `TUNED_PATTERNS`. That
+  is the standing trap in PROJECT.md, and in a five-fold ensemble it gives one
+  fold 2/6 of the vote. Now keyed on `(family, fold)`.
+
+### A checker that was checking the wrong notebook
+
+`tools/check_submission.py` defaults to `07_submit.ipynb`. Every "submission
+notebook ran clean" this session was exercising notebook 07 -- including one
+cited as covering notebook 10's new `pick_series`. Notebook 10 has now been run
+end to end via `CHECK_NOTEBOOK=10_submit_ensemble.ipynb`, with the switches on
+and off. This is the fourth entry in the "a check that passes may be looking at
+the wrong thing" pattern the playbook names.
+
+476 tests, from 445.
+
+---
+
+## 2026-08-28 — new plan adopted; P0 correctness fixes and selection-free training
+
+No GPU run this session. `docs/plan.md` was replaced with a model-selection
+and training-constraint plan, and the code changes its P0-P3 items call for
+were made. **Nothing below has been measured** — the fold-1 20-epoch run that
+reads P1 and P2 is the next thing to spend a session on.
+
+### The plan that was replaced
+
+Phases A-E had closed their own levers: A (label delivery) and B (capacity)
+done, C (label quality) flat inside the gold set's resolution, C2 (auxiliary
+losses) down 0.009 on the leaderboard. The new plan is ordered by expected
+value rather than by phase, and its top items are bugs rather than ideas.
+
+### DINOv2 closed
+
+Fine-tuned DINOv2-S measured gold 0.820 against fold 1's 0.861 gate; at 24
+slices it converged level with ConvNeXt while losing to its own frozen self on
+Lateral OA (0.820 vs 0.899), Lateral Meniscus (0.621 vs 0.680) and PF OA
+(0.736 vs 0.772). That is what the literature predicts, not a surprise:
+DINOv2 transfers "on par or slightly better" than supervised CNNs on medical
+classification (Bassi et al., arXiv:2312.02366), and even DINOv3 only
+overtakes ImageNet initialisation at 512px, where ConvNeXt-B still beat
+ViT-B/16 (arXiv:2510.07191). Both notebooks are back on ConvNeXt-T, and a
+test asserts no ViT name can reappear in either.
+
+### P0 — four correctness fixes, all silent failures
+
+1. **Normalisation now travels in the checkpoint.** `input_mean`/`input_std`
+   were `persistent=False`, so a strict load restored every weight and left
+   normalisation off. `KneeNet._load_from_state_dict` now adopts a file's own
+   statistics and still accepts files written before the change. This is the
+   leading explanation for gold 0.864 logged in training against 0.823 from
+   the same weights reloaded.
+2. **The submission picks series by `np.linspace`**, matching
+   `StudyIndex.series_for`. It took `volumes[:MAX_SERIES]`, a head truncation,
+   which selected different series for the 32.5% of studies carrying more than
+   five.
+3. **Checkpoint recovery is no longer alphabetical.** `sorted(glob(...))[0]`
+   put `lit_fold1-v1.ckpt` ahead of `lit_fold1.ckpt`.
+4. **`MAX_SERIES` 5 -> 6** -- applied, then **reverted to 5 the next day** and
+   deferred to its own run. It lifts mean series/study 6.7% and cuts
+   truncation from 32.5% of studies to 16.7% (the whole remaining headroom on
+   this axis is +14%), but it adds capacity, and P1 has to be read against
+   fold 1's baseline at 16 x 5. One change at a time.
+
+### P1/P2 — the selector is the suspect
+
+Mined val rose to 0.860 at epoch 9 and fell to 0.843 by epoch 20 while gold
+held flat at 0.864-0.869 across eleven epochs. That is the
+early-learning-then-memorisation signature (Arpit ICML 2017, Liu ELR NeurIPS
+2020), and because mined val shares the training labels' ~18% systematic
+disagreement with image-derived truth, it makes mined val a **biased**
+selector rather than a noisy one.
+
+- Warmup is now an absolute step count rather than OneCycleLR's 0.3 fraction,
+  so a 12- and a 20-epoch run put the learning-rate peak in the same place and
+  are comparable. `schedule="cosine"` is available and removes the restretch
+  entirely.
+- `knee_lightning.WeightAverage` accumulates EMA (decay 0.999) and SWA (last
+  25% of steps) and writes both from inside `fit` — read back off disk,
+  because under `ddp_notebook` the object that accumulated them is in a forked
+  child. A run now ships three candidates and notebook 08 scores all three
+  against gold.
+- Folds are seeded identically, which is what makes a cross-fold weight soup
+  well-posed at all. `src/model/averaging.py` holds the soup maths; notebook
+  10 has a `SOUP` switch, defaulted off because it changes submission
+  semantics and every LB number on record came from probability averaging.
+
+### Geometry: reverted to the reference, 2026-08-29
+
+The P1 run was first configured at 24 x 6 -- 24 was left over from the DINOv2
+run and kept on the grounds that it holds the best LB (0.891 vs 0.889). Wrong,
+and not only on cost:
+
+- **The plan says otherwise.** Section 3.1: "past ~16-24 slices, expect
+  flattening ... treat slice count as roughly saturated and spend compute
+  elsewhere". P1 item 5 says "rerun **reference** ConvNeXt", and the reference
+  is 16 x 5.
+- **24 slices confounds the experiment.** The two 24-slice runs behaved
+  oppositely on gold. ConvNeXt at 24 x 5: val peaked at epoch 7 and fell to
+  0.871 while **gold fell 0.865 -> 0.842** -- both curves down, which is
+  overfitting. The DINOv2 24-slice run: val fell while **gold held flat at
+  0.864-0.869 for eleven epochs** -- which is the biased-selector signature the
+  plan's section 2.1 is built on. P1 asks ConvNeXt to distinguish those two,
+  and at 24 slices ConvNeXt has already produced the wrong one. At 16 its late
+  decay was mild (0.854 -> 0.849, epochs 9-12, with an aux loss on).
+
+Both notebooks are back at 16 x 5, ~3 h for twenty epochs instead of ~5.3.
+
+**Agreed with the user 2026-08-29:** hold `MAX_SERIES` at 5 for the P1 run,
+then **follow the plan as written** from there -- P0.4 (5 -> 6) is the next
+change, run alone so its gate can be read. The two departures taken silently
+the day before (24 slices, and MAX_SERIES 6 inside the P1 run) both had to be
+unwound; the rule now is to flag a departure and agree it, not to substitute
+reasoning for the plan. `docs/plan.md` opens with this.
+
+### Also landed
+
+- Gated attention pooling (Ilse et al. eq. 9) as `gated_pool=True`. Note the
+  plan's premise was wrong on this point: the aggregation has always used
+  attention pooling, never mean pooling, so eq. 8 -> eq. 9 is the real move
+  and the expected gain is a fraction of what the plan quoted.
+- `label_smoothing`, `pos_weight` and `symmetric_beta` on `weighted_bce`, all
+  inert by default. **MixUp was not implemented**: at `BATCH_STUDIES = 1` a
+  within-batch permutation is the identity, and FiLM's per-series metadata
+  cannot be interpolated across studies. Recorded in `docs/plan.md`.
+- 428 tests, from 371.
+
+### Open, deliberately
+
+- **The metric is not confirmed from the official Evaluation tab.** Multiple
+  public trackers report macro ROC-AUC; RSNA 2024 used mean weighted log loss.
+  If it is log loss, calibration and per-finding weighting become first-order
+  and plan sections 3.5 and 3.9 flip. Verify before the final submission.
+- **Grouped-by-site folds are implemented but off.** `make_folds(groups=...)`
+  and `scanner_key` (manufacturer + model + field strength, from notebook 01's
+  index, since site is not given) are in, with `GROUPED_FOLDS` in notebook 08.
+  Off by default: turning it on re-cuts every fold and invalidates fold 1's
+  baseline, which P1 is being read against. Adopt it when the five-fold
+  ensemble is rebuilt, and expect validation to *drop* — that drop is the
+  ~0.053 of inflation coming out.
+- **A larger clean validation set** is the ceiling on every decision above.
+
+---
+
 ## 2026-08-26 (m) — fold 3 scores LB 0.877 solo: the first cross-split LB measurement
 
 **Fold 3, submitted alone, scored public LB 0.877** (submission 55801109,

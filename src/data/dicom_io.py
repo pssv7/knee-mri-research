@@ -39,6 +39,12 @@ HEADER_FIELDS = [
     "InversionTime",
     "ScanningSequence",
     "SequenceVariant",
+    # (0018,0010). The one header that states contrast administration
+    # outright, and the index built before 2026-08-31 does not carry it --
+    # so the contrast audit has to fall back on typed descriptions, 17.7% of
+    # which are anonymised away. Absence of a string is not absence of
+    # contrast; absence of this tag is at least a direct question asked.
+    "ContrastBolusAgent",
     "SeriesDescription",
     "ProtocolName",
     "BodyPartExamined",

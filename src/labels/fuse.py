@@ -51,6 +51,57 @@ WEIGHT_SINGLE = 0.7       # one informative, one silent
 WEIGHT_SILENT = 0.25      # neither informative; target is zero but barely counts
 
 
+def silence_rates(labels: pd.DataFrame) -> pd.Series:
+    """Per finding, the share of studies neither extractor said anything about.
+
+    Measured on the mined corpus -- 4,349 studies -- and never on gold. That
+    distinction is what separates this from the per-finding silence priors this
+    module removed: those were 24 numbers fitted on 58 samples and scored 0.860
+    in-sample against 0.812 leave-one-out. A rate over 4,349 studies is an
+    observation, not a fit.
+    """
+    return pd.Series(
+        {name: float((labels[f"{name}_weight"] == WEIGHT_SILENT).mean())
+         for name in config.LABELS})
+
+
+def rescale_silent_weights(labels: pd.DataFrame) -> pd.DataFrame:
+    """Down-weight silence in proportion to how uninformative it is.
+
+    **The problem, measured on Synovitis.** 82.2% of studies are silent about
+    it, the mined target averages 0.087, and the true prevalence on gold is
+    46.6%. So roughly 1,666 of the 3,576 silent studies are true positives
+    being trained toward zero -- and because silence is so common here, those
+    studies carry 57% of the finding's gradient. The model is being taught to
+    rank real positives low. Synovitis duly scores 0.682 on gold, the only
+    finding where the fine-tuned model is WORSE than the retired frozen one
+    (0.746), which is what fitting label noise harder looks like.
+
+    **The fix, and why it is not the one that failed.** Targets are untouched:
+    fabricating P(positive | silent) as a target measured worse on every
+    variant tested, and that stands. What changes is the *weight*, which this
+    module's own docstring already names as the mechanism for silence being an
+    unconfident negative. The weight becomes
+
+        WEIGHT_SILENT x (1 - silence_rate(finding))
+
+    which is one rule with no free parameters, evaluated on the mined corpus.
+    Silence about ACL (9.2% of studies) stays worth nearly the full 0.25,
+    because a report that discusses ligaments and omits the ACL is saying
+    something. Silence about Synovitis (82.2%) falls to 0.044, because a
+    corpus that mentions it in one study out of six is not saying anything.
+
+    Returns a copy; the target columns are passed through unchanged.
+    """
+    rates = silence_rates(labels)
+    out = labels.copy()
+    for name in config.LABELS:
+        column = f"{name}_weight"
+        silent = out[column] == WEIGHT_SILENT
+        out.loc[silent, column] = WEIGHT_SILENT * (1.0 - rates[name])
+    return out
+
+
 def _informative(present) -> bool:
     """False when an extractor said nothing about this finding."""
     if present is None:

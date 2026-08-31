@@ -1,0 +1,347 @@
+<title>Where the Model Loses</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Spectral:wght@500;600&display=swap">
+
+<style>
+:root{
+  --ground:#F2F5F7; --surface:#FFFFFF; --surface-sunk:#EAEFF2;
+  --ink:#14181C; --ink-2:#3B454E; --muted:#59656F; --rule:#D9E0E5;
+  --accent:#0B6C7D; --accent-soft:#E2F0F3;
+  --bad:#A03A22; --ok:#2C6E52; --warn:#8A6410;
+  --shadow:0 1px 2px rgba(20,24,28,.05),0 8px 24px -14px rgba(20,24,28,.22);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#101418; --surface:#171C21; --surface-sunk:#12171B;
+    --ink:#E4EAEE; --ink-2:#BAC5CD; --muted:#8E9BA5; --rule:#28313A;
+    --accent:#4FBBD0; --accent-soft:#152B31;
+    --bad:#DF8163; --ok:#63B58E; --warn:#C79B45;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#101418; --surface:#171C21; --surface-sunk:#12171B;
+  --ink:#E4EAEE; --ink-2:#BAC5CD; --muted:#8E9BA5; --rule:#28313A;
+  --accent:#4FBBD0; --accent-soft:#152B31;
+  --bad:#DF8163; --ok:#63B58E; --warn:#C79B45;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -14px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);
+  font:400 16.5px/1.65 "IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px 96px}
+.col{max-width:64ch}
+header{padding:72px 0 40px;border-bottom:1px solid var(--rule);margin-bottom:44px}
+.kicker{font:500 11.5px/1 "IBM Plex Mono",ui-monospace,monospace;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--accent);margin-bottom:20px}
+h1{font:600 clamp(38px,6vw,58px)/1.02 Spectral,Georgia,serif;letter-spacing:-.02em;
+  margin:0 0 20px;text-wrap:balance}
+.standfirst{font-size:19px;line-height:1.55;color:var(--ink-2);max-width:60ch;margin:0}
+.byline{margin-top:28px;font:400 13px/1.5 "IBM Plex Mono",monospace;color:var(--muted);
+  display:flex;flex-wrap:wrap;gap:8px 20px}
+section{margin-bottom:56px}
+h2{font:600 27px/1.2 Spectral,Georgia,serif;letter-spacing:-.01em;margin:0 0 6px;text-wrap:balance}
+h2 .n{font:500 13px/1 "IBM Plex Mono",monospace;color:var(--accent);display:block;
+  margin-bottom:10px;letter-spacing:.08em}
+h3{font:600 17px/1.35 "IBM Plex Sans",sans-serif;margin:32px 0 8px}
+p{margin:0 0 16px} strong{font-weight:600} code{font:400 .92em/1 "IBM Plex Mono",monospace}
+figure{margin:28px 0;background:var(--surface);border:1px solid var(--rule);border-radius:6px;
+  padding:24px;box-shadow:var(--shadow)}
+figcaption{margin-top:16px;font-size:13.5px;line-height:1.55;color:var(--muted);
+  padding-top:14px;border-top:1px solid var(--rule)}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
+th,td{text-align:right;padding:9px 12px;border-bottom:1px solid var(--rule);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+thead th{font:500 11px/1 "IBM Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);border-bottom:1.5px solid var(--rule);padding-bottom:10px}
+tbody td{font-family:"IBM Plex Mono",monospace}
+tbody td:first-child{font-family:"IBM Plex Sans",sans-serif}
+tr.flag td{color:var(--bad);font-weight:500}
+tr.flag td:first-child{font-weight:600}
+tr.good td{color:var(--ok)}
+.stats{display:grid;gap:2px;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));
+  background:var(--rule);border:1px solid var(--rule);border-radius:6px;overflow:hidden;margin:28px 0}
+.stat{background:var(--surface);padding:20px}
+.stat .v{font:500 30px/1 "IBM Plex Mono",monospace;letter-spacing:-.02em;display:block}
+.stat .v.bad{color:var(--bad)} .stat .v.ok{color:var(--ok)}
+.stat .l{display:block;margin-top:8px;font-size:13px;line-height:1.4;color:var(--muted)}
+.callout{background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--accent);
+  border-radius:0 6px 6px 0;padding:20px 24px;margin:28px 0}
+.callout.alarm{border-left-color:var(--bad)}
+.callout p:last-child{margin-bottom:0}
+.callout .h{font:600 15px/1.3 "IBM Plex Sans",sans-serif;margin-bottom:8px;display:block}
+.verdict{list-style:none;padding:0;margin:20px 0;display:grid;gap:2px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:6px;overflow:hidden}
+.verdict li{background:var(--surface);padding:18px 20px;display:grid;
+  grid-template-columns:96px 1fr;gap:18px;align-items:start}
+.verdict .mark{font:500 10.5px/1.5 "IBM Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase}
+.verdict .mark.out{color:var(--bad)} .verdict .mark.open{color:var(--ok)}
+.verdict .mark.hold{color:var(--warn)}
+.verdict .t{font-weight:600;display:block;margin-bottom:4px}
+.verdict .d{color:var(--muted);font-size:14.5px;line-height:1.55}
+footer{border-top:1px solid var(--rule);padding-top:24px;margin-top:64px;
+  font:400 13px/1.6 "IBM Plex Mono",monospace;color:var(--muted)}
+footer p{margin:0 0 8px}
+@media (max-width:640px){header{padding:44px 0 28px}.verdict li{grid-template-columns:1fr;gap:6px}
+  figure{padding:16px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+<header>
+  <div class="kicker">RSNA Knee MRI · Failure analysis</div>
+  <h1>Where the Model Loses</h1>
+  <p class="standfirst">Seven consecutive changes measured null against a macro score that cannot
+  resolve them. This is what the per-study analysis found instead — including one question that turned
+  out to have a hard answer.</p>
+  <div class="byline">
+    <span>Fold 1 · ConvNeXt-T · 16 × 5</span><span>Gold n=58</span>
+    <span>Mined n=4,349</span><span>2026-08-30</span>
+  </div>
+</header>
+
+<section class="col">
+  <h2><span class="n">00 — HEADLINE</span>Four results</h2>
+  <div class="stats">
+    <div class="stat"><span class="v bad">0</span><span class="l">post-contrast series in the entire dataset. Two independent checks</span></div>
+    <div class="stat"><span class="v bad">20.0%</span><span class="l">of all error is Synovitis alone</span></div>
+    <div class="stat"><span class="v ok">3 SE</span><span class="l">the series-count effect — the only signal all session above its noise band</span></div>
+    <div class="stat"><span class="v">0</span><span class="l">pipeline bugs found in the failing images</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2><span class="n">01 — PER FINDING</span>Where the score actually comes from</h2>
+    <p><strong>SE</strong> is the Hanley–McNeil standard error at n=58. It runs 0.03–0.07, so most
+    differences in this table are not resolvable. <strong>Share of error</strong> is each finding's
+    portion of the total discordant-pair mass — the fraction of the model's total loss it owns.</p>
+  </div>
+  <figure>
+    <div class="scroll"><table>
+      <thead><tr><th>Finding</th><th>AUC</th><th>± SE</th><th>Pos</th><th>Neg</th><th>Share of error</th><th>Frozen DINOv2</th></tr></thead>
+      <tbody>
+        <tr class="flag"><td>Synovitis</td><td>0.701</td><td>0.070</td><td>27</td><td>31</td><td>20.0%</td><td>0.746</td></tr>
+        <tr><td>Lateral Meniscus</td><td>0.821</td><td>0.060</td><td>23</td><td>35</td><td>12.0%</td><td>0.680</td></tr>
+        <tr><td>PF OA</td><td>0.826</td><td>0.061</td><td>21</td><td>37</td><td>11.6%</td><td>0.772</td></tr>
+        <tr><td>Contusion</td><td>0.843</td><td>0.061</td><td>19</td><td>39</td><td>10.5%</td><td>0.711</td></tr>
+        <tr><td>Fracture</td><td>0.849</td><td>0.061</td><td>18</td><td>40</td><td>10.1%</td><td>0.683</td></tr>
+        <tr><td>Medial Meniscus</td><td>0.888</td><td>0.046</td><td>26</td><td>32</td><td>7.5%</td><td>0.698</td></tr>
+        <tr><td>Effusion</td><td>0.888</td><td>0.043</td><td>35</td><td>23</td><td>7.5%</td><td>0.897</td></tr>
+        <tr><td>Lateral OA</td><td>0.899</td><td>0.064</td><td>11</td><td>47</td><td>6.7%</td><td>0.899</td></tr>
+        <tr><td>MCL</td><td>0.921</td><td>0.064</td><td>9</td><td>49</td><td>5.3%</td><td>0.671</td></tr>
+        <tr class="good"><td>ACL</td><td>0.952</td><td>0.032</td><td>24</td><td>34</td><td>3.2%</td><td>0.728</td></tr>
+        <tr class="good"><td>Medial OA</td><td>0.955</td><td>0.038</td><td>15</td><td>43</td><td>3.0%</td><td>0.895</td></tr>
+        <tr class="good"><td>Baker's</td><td>0.964</td><td>0.039</td><td>12</td><td>46</td><td>2.4%</td><td>0.862</td></tr>
+      </tbody>
+    </table></div>
+    <figcaption>macro <strong>0.876</strong>. The last column is the retired frozen DINOv2 baseline.
+    Fine-tuning wins everywhere by wide margins — up to +0.25 on MCL — <strong>except on the three
+    fluid-adjacent findings</strong>: Lateral OA (+0.000), Effusion (−0.009) and Synovitis (−0.045).
+    Synovitis is the only one where the gap is consistent across all three runs.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <h2><span class="n">02 — SEPARATION</span>Which findings the model can actually tell apart</h2>
+    <p>Mean predicted score on true positives minus mean on true negatives. This distinguishes a model
+    that ranks correctly at the wrong level from one that does not rank at all — they need different
+    fixes.</p>
+  </div>
+  <figure>
+    <div class="scroll"><table>
+      <thead><tr><th>Finding</th><th>AUC</th><th>mean pred | pos</th><th>mean pred | neg</th><th>Separation</th></tr></thead>
+      <tbody>
+        <tr class="good"><td>Baker's</td><td>0.964</td><td>0.575</td><td>0.065</td><td>0.509</td></tr>
+        <tr class="good"><td>ACL</td><td>0.952</td><td>0.597</td><td>0.075</td><td>0.522</td></tr>
+        <tr><td>PF OA</td><td>0.826</td><td>0.595</td><td>0.212</td><td>0.383</td></tr>
+        <tr><td>Contusion</td><td>0.843</td><td>0.601</td><td>0.244</td><td>0.358</td></tr>
+        <tr><td>Lateral Meniscus</td><td>0.821</td><td>0.308</td><td>0.061</td><td>0.246</td></tr>
+        <tr><td>Fracture</td><td>0.849</td><td>0.141</td><td>0.019</td><td>0.123</td></tr>
+        <tr class="flag"><td>Synovitis</td><td>0.701</td><td>0.203</td><td>0.102</td><td>0.101</td></tr>
+      </tbody>
+    </table></div>
+    <figcaption>Synovitis error is split exactly evenly — <strong>0.299 on positives, 0.299 on
+    negatives</strong> — so there is no directional bias to correct. <strong>26% of true positives
+    score below the median negative.</strong> Gold prevalence is 46.6%; the model's mean predicted score
+    is 0.149. It is not miscalibrated, it is not separating.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <h2><span class="n">03 — THE CONTRAST QUESTION</span>Answered, and the answer is zero</h2>
+    <p>Synovitis is normally identified by gadolinium enhancement: inflamed synovium takes up contrast,
+    joint fluid does not. Without it, thickened synovium and simple effusion both read as high signal in
+    the same place. So the question that decides everything downstream is whether this dataset contains
+    any post-contrast imaging.</p>
+    <p>Checked two independent ways, on <code>index_train.parquet</code> — 819,078 instance rows over
+    24,371 series and 4,407 studies.</p>
+  </div>
+
+  <figure>
+    <div class="scroll"><table>
+      <thead><tr><th>Sequence type (metadata flags)</th><th>Series</th><th>Share</th><th>Reading</th></tr></thead>
+      <tbody>
+        <tr><td>Fluid-sensitive + fat-sat</td><td>14,010</td><td>57.5%</td><td>PD/T2 FS — the workhorse</td></tr>
+        <tr><td>T1-like, no fat-sat</td><td>10,361</td><td>42.5%</td><td>anatomy</td></tr>
+        <tr class="flag"><td>T1-like + fat-sat</td><td>0</td><td>0.0%</td><td>post-contrast signature</td></tr>
+      </tbody>
+    </table></div>
+    <figcaption>The dataset contains exactly <strong>two</strong> sequence types. The combination that
+    marks a post-contrast T1 series — not fluid-sensitive, fat-suppressed — has <strong>zero</strong>
+    instances across all 4,407 studies, and zero in the gold 58. The independent text search of
+    <code>SeriesDescription</code> and <code>ProtocolName</code> agrees: 7 series across 3 studies
+    mention contrast, out of 4,407. (18% of descriptions are scrubbed to <code>dummyseriesdesc!</code>
+    or blank, which is why the flag check is the one that settles it.)</figcaption>
+  </figure>
+
+  <div class="callout alarm col">
+    <span class="h">What this closes</span>
+    <p>There is no enhancement anywhere in this data to separate inflamed synovium from joint fluid.
+    <strong>Synovitis has a hard imaging ceiling</strong> — it is not a pipeline gap where enhanced
+    series are being mislabelled as ordinary fluid-sensitive ones, because there are none to mislabel.
+    It should be planned around rather than attacked.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2><span class="n">04 — SERIES COMPOSITION</span>The one effect above its noise band</h2>
+    <p>Correlation of each study's total error with its composition, n=58. At this sample
+    <strong>|r| &gt; 0.26 is p&lt;0.05</strong>; treat anything smaller as nothing.</p>
+  </div>
+  <figure>
+    <div class="scroll"><table>
+      <thead><tr><th>Feature</th><th>r, all findings</th><th>r, Synovitis only</th><th></th></tr></thead>
+      <tbody>
+        <tr><td>Number of fluid-sensitive series</td><td>−0.289</td><td>−0.034</td><td>significant, all findings</td></tr>
+        <tr><td>Number of series</td><td>−0.253</td><td>−0.300</td><td>significant for Synovitis</td></tr>
+        <tr><td>Slice thickness</td><td>+0.251</td><td>+0.273</td><td>borderline</td></tr>
+        <tr><td>Median slices per series</td><td>+0.042</td><td>−0.095</td><td>nothing</td></tr>
+        <tr><td>In-plane pixel spacing</td><td>+0.015</td><td>+0.151</td><td>nothing</td></tr>
+        <tr><td>Field strength</td><td>−0.089</td><td>−0.124</td><td>nothing</td></tr>
+      </tbody>
+    </table></div>
+    <figcaption>More series and more fluid-sensitive series both mean less error; thicker slices mean
+    more. In-plane resolution and field strength do not matter at all — which is a mark against the
+    higher-resolution hypothesis. <code>n_planes</code> is omitted: all 58 gold studies carry all three
+    planes, so there is no variance to correlate against.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="scroll"><table>
+      <thead><tr><th>Bucket</th><th>Macro AUC</th><th>n</th><th>Macro SE</th></tr></thead>
+      <tbody>
+        <tr><td>4–5 series</td><td>0.844</td><td>32</td><td>~0.022</td></tr>
+        <tr class="good"><td>6+ series</td><td>0.911</td><td>26</td><td>~0.020</td></tr>
+      </tbody>
+    </table></div>
+    <figcaption>A gap of <strong>0.067 against SEs near 0.021</strong> — roughly 3 SE, and the first
+    thing measured this session that sits outside its own noise. Note this is the opposite of what
+    P0.4 tested: raising the series <em>cap</em> from 5 to 6 only helps studies that have a sixth series,
+    and it lost 0.003 on the leaderboard. The studies failing here have 4 or 5 series in total. There is
+    nothing to uncap — they are thin, not truncated.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <h2><span class="n">05 — THE FAILING STUDIES</span>Ten worst, and what the pictures showed</h2>
+  </div>
+  <figure>
+    <div class="scroll"><table>
+      <thead><tr><th>Study (last 12)</th><th>Total error</th><th>Worst finding</th><th>Its error</th><th>Series</th><th>Fluid-sens.</th></tr></thead>
+      <tbody>
+        <tr><td>453216559395</td><td>2.81</td><td>Contusion</td><td>0.53</td><td>4</td><td>2</td></tr>
+        <tr><td>791472465039</td><td>2.75</td><td>Synovitis</td><td>0.81</td><td>4</td><td>3</td></tr>
+        <tr><td>294734101132</td><td>2.46</td><td>Contusion</td><td>0.87</td><td>4</td><td>2</td></tr>
+        <tr><td>055955725945</td><td>2.38</td><td>Synovitis</td><td>0.71</td><td>5</td><td>3</td></tr>
+        <tr><td>156570466645</td><td>2.37</td><td>Lateral Meniscus</td><td>0.86</td><td>4</td><td>3</td></tr>
+        <tr><td>317032662220</td><td>2.36</td><td>Synovitis</td><td>0.96</td><td>5</td><td>4</td></tr>
+        <tr><td>182670080450</td><td>2.34</td><td>Lateral OA</td><td>0.64</td><td>5</td><td>3</td></tr>
+        <tr><td>456139890254</td><td>2.20</td><td>Lateral OA</td><td>0.73</td><td>8</td><td>3</td></tr>
+        <tr><td>275217521662</td><td>2.19</td><td>Synovitis</td><td>0.52</td><td>5</td><td>2</td></tr>
+        <tr><td>654766826710</td><td>2.13</td><td>Lateral Meniscus</td><td>0.57</td><td>7</td><td>3</td></tr>
+      </tbody>
+    </table></div>
+    <figcaption>Six of the ten have only 4–5 series. Synovitis is the worst finding in four of them.
+    Study <code>317032662220</code> is the clearest single illustration: fat-suppressed fluid-sensitive
+    sequences bright throughout the joint, model predicts Synovitis <strong>0.76</strong>, radiologist
+    labelled <strong>0</strong> — exactly the effusion/synovitis confusion the missing contrast
+    predicts.</figcaption>
+  </figure>
+
+  <div class="callout col">
+    <span class="h">What the images ruled out</span>
+    <p>The contact sheets were checked for the silent data-plumbing bugs this project has been bitten by
+    before — reversed slice order, mirroring on the wrong axis, blank or corrupted series. <strong>None
+    were present.</strong> Orientation correct, laterality resolved on every series, mirroring
+    consistent within each study, plane labels matching the pictures. One observation worth following
+    up: in several studies the first and last of the 24 cached slices sit outside the joint entirely
+    (femoral shaft, soft tissue), so uniform sampling spends part of its 16-slice budget on frames with
+    no joint in them.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2><span class="n">06 — LEDGER</span>What was measured, and what it cost</h2>
+    <p>Every change tried against the plan, with all three signals. Best leaderboard score remains
+    <strong>0.891</strong> from 2026-08-25, which predates all of them.</p>
+  </div>
+  <figure>
+    <div class="scroll"><table>
+      <thead><tr><th>Change</th><th>val</th><th>gold</th><th>LB</th><th>Outcome</th></tr></thead>
+      <tbody>
+        <tr><td>P0.1 normalisation travels in checkpoint</td><td>—</td><td>—</td><td>—</td><td>invisible on ConvNeXt</td></tr>
+        <tr><td>P0.2 series selection by linspace</td><td>—</td><td>—</td><td>bundled</td><td>correctness fix, no gain</td></tr>
+        <tr><td>P0.3 checkpoint glob</td><td>—</td><td>—</td><td>—</td><td>hygiene</td></tr>
+        <tr class="flag"><td>P0.4 MAX_SERIES 5 → 6</td><td>+0.003</td><td>−0.005</td><td>−0.003</td><td>reverted</td></tr>
+        <tr class="flag"><td>P1 20 epochs + fixed warmup</td><td>+0.002</td><td>+0.021</td><td>−0.001</td><td>killed</td></tr>
+        <tr class="flag"><td>P2 EMA / SWA</td><td>—</td><td>−0.003</td><td>—</td><td>killed</td></tr>
+        <tr class="flag"><td>Silence reweighting</td><td>−0.003</td><td>−0.012</td><td>—</td><td>reverted</td></tr>
+      </tbody>
+    </table></div>
+    <figcaption>Seven changes, no improvement. Note P1: gold said <strong>+0.021</strong> and the
+    leaderboard said <strong>−0.001</strong>. Gold's macro SE is 0.015–0.025, so +0.021 was one standard
+    error and meant nothing. <strong>The operative rule: a gold delta under ~0.03 forecasts
+    nothing.</strong></figcaption>
+  </figure>
+</section>
+
+<section class="col">
+  <h2><span class="n">07 — WHAT FOLLOWS</span>Closed, and open</h2>
+  <ul class="verdict">
+    <li><span class="mark out">Closed</span><div><span class="t">Contrast-aware handling of synovitis</span>
+      <span class="d">There is no post-contrast imaging in this dataset. Zero series, two independent checks.</span></div></li>
+    <li><span class="mark out">Closed</span><div><span class="t">Loss weighting for Synovitis</span>
+      <span class="d">Measured null. The classes are not separated at all, so changing which examples count cannot help.</span></div></li>
+    <li><span class="mark out">Closed</span><div><span class="t">Higher input resolution</span>
+      <span class="d">In-plane pixel spacing correlates +0.015 with error — nothing. The earlier case for a 288/384 cache rebuild rested on meniscus being catastrophic; it is 0.821, and fixing it perfectly is worth +0.012 macro.</span></div></li>
+    <li><span class="mark hold">Hold</span><div><span class="t">Single-variable experiments on gold</span>
+      <span class="d">Gold's macro SE is 0.015–0.025 and every remaining plan item is worth less than that. Seven nulls is what running below the noise floor looks like, not bad luck.</span></div></li>
+    <li><span class="mark open">Open</span><div><span class="t">Get more out of thin studies</span>
+      <span class="d">The 3-SE finding. Studies with 4–5 series score 0.844 against 0.911 for 6+, and they have nothing to uncap. Slice thickness points the same way. Worth testing: centre-weighted slice sampling, since uniform sampling currently spends budget on frames outside the joint.</span></div></li>
+    <li><span class="mark open">Open</span><div><span class="t">Image-derived labels for silent studies</span>
+      <span class="d">The only route that addresses a biased positive sample rather than a contaminated negative one. It was in an earlier version of the plan and was dropped.</span></div></li>
+    <li><span class="mark open">Open</span><div><span class="t">The five-fold ensemble</span>
+      <span class="d">+0.005–0.010 historically, and the only remaining item with a positive track record. Private-leaderboard variance insurance rather than a public climb.</span></div></li>
+  </ul>
+</section>
+
+<footer>
+  <p>Sources — predictions: <code>failures/gold_predictions.parquet</code> (fold 1 ConvNeXt-T, 16 slices
+  × 5 series, 2026-08-30). Truth: <code>data/meta/gold_truth_58.parquet</code>, 58 × 12 int8. Series
+  metadata: <code>data/meta/train_series.csv</code>. DICOM headers:
+  <code>index_train.parquet</code>, 819,078 rows. Label statistics: 4,349 mined training studies.</p>
+  <p>Tools — <code>tools/error_analysis.py</code> (tables, subgroups),
+  <code>src/model/inspect.py</code> (per-study error, contact sheets),
+  <code>notebooks/11_error_analysis.ipynb</code> (the whole thing, where the cache lives).</p>
+  <p>Companion document: <code>docs/synovitis.html</code>.</p>
+</footer>
+</div>

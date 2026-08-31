@@ -362,3 +362,272 @@ class TestColabFinetuneNotebook:
                    if "CACHE_DATASETS" in c][0]
         assert "shards staged" in staging
         assert "len(shards) < 3" in staging
+
+
+class TestGeneratorHasNoDocstringsInCells:
+    """A triple-quoted string in a cell body terminates the generator.
+
+    `nb.code('''...''')` holds the cell source as one string, so a docstring
+    inside it closes that string early. PROJECT.md records this as having
+    happened twice; it has now happened five times, and the symptom is a
+    SyntaxError pointing at the NEXT nb.code call with the message "invalid
+    syntax. Perhaps you forgot a comma?", which names neither the file nor the
+    cause. This test names both.
+    """
+
+    def test_the_generator_still_parses(self):
+        import ast
+        path = os.path.join(ROOT, "tools", "make_notebook.py")
+        with open(path) as handle:
+            source = handle.read()
+        try:
+            ast.parse(source)
+        except SyntaxError as exc:
+            near = source.splitlines()[max(exc.lineno - 12, 0):exc.lineno]
+            raise AssertionError(
+                f"tools/make_notebook.py does not parse at line {exc.lineno}. "
+                "The usual cause is a docstring inside an nb.code(...) cell "
+                "body, which closes the cell string early -- use a comment "
+                "instead. Preceding lines:\n" + "\n".join(near)) from None
+
+    def test_every_generated_cell_body_parses_as_python(self):
+        import ast
+        import json as _json
+        for name in sorted(os.listdir(os.path.join(ROOT, "notebooks"))):
+            if not name.endswith(".ipynb"):
+                continue
+            with open(os.path.join(ROOT, "notebooks", name)) as handle:
+                cells = _json.load(handle)["cells"]
+            for i, cell in enumerate(cells):
+                if cell["cell_type"] != "code":
+                    continue
+                body = "\n".join(
+                    line for line in "".join(cell["source"]).splitlines()
+                    if not line.lstrip().startswith(("!", "%")))
+                try:
+                    ast.parse(body)
+                except SyntaxError as exc:
+                    raise AssertionError(
+                        f"{name} cell {i} does not parse: {exc}") from None
+
+
+class TestTrainingAndSubmissionAgree:
+    """The P0 correctness fixes, held in place.
+
+    Each of these ran clean and merely scored worse, which is why each needs a
+    test rather than a comment: nothing about them raises, and the cost only
+    appears on the leaderboard weeks later.
+    """
+
+    def sources(self, name):
+        with open(os.path.join(ROOT, "notebooks", name)) as handle:
+            notebook = json.load(handle)
+        return ["".join(c["source"]) for c in notebook["cells"]
+                if c["cell_type"] == "code"]
+
+    def test_the_submission_picks_series_the_way_training_does(self):
+        # Training spreads its pick with np.linspace (StudyIndex.series_for);
+        # the submission took volumes[:TUNED_MAX_SERIES], a head truncation,
+        # which selects a different subset for the 32.5% of studies carrying
+        # more than five series.
+        joined = "\n".join(self.sources("10_submit_ensemble.ipynb"))
+        assert "def pick_series(" in joined
+        assert "np.linspace(0, count - 1, TUNED_MAX_SERIES)" in joined
+        # The docstring names the old expression, so match the statement.
+        assert "picked = volumes[:TUNED_MAX_SERIES]" not in joined
+
+    def test_pick_series_agrees_with_series_for_at_every_count(self):
+        """The two rules must select the same positions, not merely both use
+        linspace. Extracted from the generated notebook and run against
+        `StudyIndex.series_for`'s expression directly."""
+        import numpy as np
+
+        joined = "\n".join(self.sources("10_submit_ensemble.ipynb"))
+        start = joined.index("def pick_series(")
+        end = joined.index("def tuned_predict(")
+        namespace = {"np": np, "TUNED_MAX_SERIES": 6}
+        exec(compile(joined[start:end], "<pick_series>", "exec"), namespace)
+        pick_series = namespace["pick_series"]
+
+        for count in range(1, 16):
+            expected = list(range(count))
+            if count > 6:
+                # src/model/dataset.py, StudyIndex.series_for.
+                keep = np.linspace(0, count - 1, 6).round().astype(int)
+                expected = np.unique(keep).tolist()
+            assert pick_series(count) == expected, count
+
+    def test_no_checkpoint_is_recovered_alphabetically(self):
+        # sorted(glob(...))[0] picks lit_fold1-v1.ckpt over lit_fold1.ckpt,
+        # because "-" sorts before ".". Lightning writes those -vN suffixes on
+        # every name collision.
+        for name in ("08_finetune.ipynb", "08_finetune_colab.ipynb"):
+            joined = "\n".join(self.sources(name))
+            assert "sorted(glob.glob(f\"/kaggle/working/lit_fold" not in joined
+            assert "def recover_checkpoint(" in joined
+            assert "os.path.getmtime" in joined
+
+    def test_the_averaged_weights_do_not_join_the_fold_glob(self):
+        # Notebook 10 averages every convnext_fold*.pt it can see. An EMA
+        # named convnext_fold0_ema.pt would silently enter the ensemble as an
+        # extra member of a run already in it.
+        joined = "\n".join(self.sources("08_finetune.ipynb"))
+        assert 'AVERAGE_PREFIX = f"/kaggle/working/avg_fold{FOLD}"' in joined
+        assert "convnext_fold{FOLD}_ema" not in joined
+
+    def _checkpoint_identity(self):
+        """The real function, lifted out of the generated notebook."""
+        import os as _os
+        import re as _re
+        joined = "\n".join(self.sources("10_submit_ensemble.ipynb"))
+        start = joined.index("def checkpoint_identity(")
+        end = joined.index("_seen = {}")
+        namespace = {"os": _os, "re": _re}
+        exec(compile(joined[start:end], "<identity>", "exec"), namespace)
+        return namespace["checkpoint_identity"]
+
+    def test_one_fold_under_two_names_is_one_identity(self):
+        # The standing trap: convnext_fold1.pt is a bit-exact export of
+        # lit_fold1.ckpt, and BOTH match TUNED_PATTERNS. Averaging a fold with
+        # itself gives it 2/6 of a five-fold ensemble instead of 1/5.
+        identity = self._checkpoint_identity()
+        same = ["convnext_fold1.pt", "lit_fold1.ckpt", "lit_fold1-v1.ckpt",
+                "lit_fold1_old.ckpt"]
+        assert len({identity(n) for n in same}) == 1
+        assert identity("convnext_fold1.pt") == ("selected", "1")
+
+    def test_different_folds_stay_distinct(self):
+        identity = self._checkpoint_identity()
+        folds = [f"convnext_fold{n}.pt" for n in range(5)]
+        assert len({identity(n) for n in folds}) == 5
+
+    def test_the_averages_are_their_own_families(self):
+        identity = self._checkpoint_identity()
+        assert identity("avg_fold1_ema.pt") == ("ema", "1")
+        assert identity("avg_fold1_swa.pt") == ("swa", "1")
+        # Same fold, three families -- none of them collide.
+        assert len({identity("convnext_fold1.pt"), identity("avg_fold1_ema.pt"),
+                    identity("avg_fold1_swa.pt")}) == 3
+
+    def test_a_name_without_a_fold_number_only_collides_with_itself(self):
+        identity = self._checkpoint_identity()
+        assert identity("mystery.pt") != identity("other.pt")
+
+    def test_the_submission_refuses_a_fold_under_two_names(self):
+        joined = "\n".join(self.sources("10_submit_ensemble.ipynb"))
+        assert "the same fold matched TUNED_PATTERNS under more than one name" \
+            in joined
+
+    def test_the_submission_refuses_to_mix_checkpoint_families(self):
+        joined = "\n".join(self.sources("10_submit_ensemble.ipynb"))
+        assert "more than one family matched TUNED_PATTERNS" in joined
+
+    def test_the_dinov2_axis_is_not_still_wired_anywhere(self):
+        # Closed at gold 0.820 against a 0.861 gate. A leftover ViT name in
+        # either notebook trains or scores a trunk the project has retired.
+        for name in ("08_finetune.ipynb", "10_submit_ensemble.ipynb"):
+            for source in self.sources(name):
+                for line in source.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith(("BACKBONE =", "TUNED_BACKBONE =")):
+                        assert "convnext" in stripped, stripped
+
+    def test_the_training_run_accumulates_selection_free_weights(self):
+        joined = "\n".join(self.sources("08_finetune.ipynb"))
+        assert "knee_lightning.WeightAverage(" in joined
+        assert "swa_fraction" in joined
+        # And the averages are read back off disk, not off the callback: under
+        # ddp_notebook the object that accumulated them is in a forked child.
+        assert "AVERAGES = {kind:" in joined
+
+    def test_the_geometry_prose_matches_the_geometry_constants(self):
+        """Notebook 08's markdown states the geometry it runs at.
+
+        It drifted once: the constants reverted from 24 x 6 to 16 x 5 and one
+        of three prose blocks was left behind, so the notebook told the reader
+        "24 of 24 slices, 6 series, budget ~5.3 h" while the code ran 16 x 5.
+        The run was correct and the documentation was not, which is the harder
+        failure to notice -- nothing errors, and the numbers you plan around
+        are wrong.
+        """
+        import json as _json
+        import re as _re
+
+        with open(os.path.join(ROOT, "notebooks", "08_finetune.ipynb")) as fh:
+            cells = _json.load(fh)["cells"]
+        code = "\n".join("".join(c["source"]) for c in cells
+                          if c["cell_type"] == "code")
+        prose = "\n".join("".join(c["source"]) for c in cells
+                           if c["cell_type"] == "markdown")
+
+        constants = {}
+        for name in ("SLICES_PER_SERIES", "MAX_SERIES"):
+            match = _re.search(rf"^{name} = (\d+)$", code, _re.M)
+            assert match, f"{name} not found in the code cells"
+            constants[name] = match.group(1)
+
+        # The knobs table: "SLICES_PER_SERIES  16 of 24" / "MAX_SERIES  6 of ~5.5"
+        for name, value in constants.items():
+            row = _re.search(rf"^\s+{name}\s+(\d+) of ", prose, _re.M)
+            assert row, f"{name} has no row in the knobs table"
+            assert row.group(1) == value, (
+                f"markdown says {name} is {row.group(1)}, the code says "
+                f"{value} -- the notebook is documenting a run it does not do")
+
+    def test_the_submission_switches_default_to_the_measured_behaviour(self):
+        # Both change the submission's numbers, and every LB score on record
+        # was produced with them off. They ship off so that turning one on is
+        # a decision someone made, not a default they inherited.
+        joined = "\n".join(self.sources("10_submit_ensemble.ipynb"))
+        for switch in ("MEMBER_RANK_AVERAGE = False", "FLIP_TTA = False",
+                       "SOUP = False"):
+            assert switch in joined, switch
+
+    def test_flip_tta_swaps_the_medial_lateral_findings_back(self):
+        # A mirrored knee puts the medial compartment where the lateral one
+        # was. TTA that averages the flipped prediction without permuting it
+        # corrupts four of the twelve findings and raises nothing.
+        joined = "\n".join(self.sources("10_submit_ensemble.ipynb"))
+        assert "knee_augment.lateral_swap_order()" in joined
+        assert "knee_augment.flip_volume(" in joined
+
+    def test_members_are_combined_once_over_the_whole_test_set(self):
+        # Rank-averaging needs every study's score for a member before it can
+        # rank any of them, so tuned_predict must NOT average members itself.
+        joined = "\n".join(self.sources("10_submit_ensemble.ipynb"))
+        assert "averaging.rank_average(list(per_member))" in joined
+        assert "transpose(1, 0, 2)" in joined
+
+    def test_the_training_cell_names_its_missing_prerequisites(self):
+        """A restarted kernel must be told what to run, not given a NameError.
+
+        The five-fold sweep changes FOLD and re-runs from the training cell,
+        which only works while the kernel still holds the cells above. A
+        reclaimed Colab runtime loses them and the first symptom was
+        `NameError: name 'make_loader' is not defined`, twenty lines into the
+        cell, saying nothing about the cause.
+        """
+        joined = "\n".join(self.sources("08_finetune.ipynb"))
+        start = joined.index("_required = {")
+        cell = joined[start:joined.index("# The measurement run reached", start)]
+
+        with pytest.raises(SystemExit) as raised:
+            exec(compile(cell, "<guard>", "exec"), {})
+        message = str(raised.value)
+        for name in ("make_loader", "index", "FEATURE_DIM", "DEVICES"):
+            assert name in message
+        assert "Run all" in message
+
+    def test_the_guard_passes_when_the_kernel_is_warm(self):
+        joined = "\n".join(self.sources("08_finetune.ipynb"))
+        start = joined.index("_required = {")
+        cell = joined[start:joined.index("# The measurement run reached", start)]
+        warm = {n: object() for n in
+                ("DEVICES", "knee_lightning", "index", "make_loader",
+                 "FEATURE_DIM")}
+        exec(compile(cell, "<guard>", "exec"), warm)   # must not raise
+
+    def test_the_warmup_is_an_absolute_step_count(self):
+        joined = "\n".join(self.sources("08_finetune.ipynb"))
+        assert "WARMUP_STEPS = " in joined
+        assert "warmup_steps=WARMUP_STEPS" in joined
