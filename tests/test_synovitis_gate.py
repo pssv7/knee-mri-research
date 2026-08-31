@@ -85,6 +85,62 @@ class TestTheGateCutoffs:
         assert "Stage 3" in action and "Stage 4" in action
 
 
+class TestTheSanityGapIsPerModel:
+    """Each model's gap must be read off its own parent head.
+
+    The gap between "the effusion head as a synovitis classifier" and the
+    synovitis head is the argument for the whole metric change. Computing it
+    from a *different* model's effusion column is meaningless, and doing so
+    once made a run look as though its synovitis head had become more gated
+    when what had actually happened was its effusion head getting better.
+    """
+
+    @staticmethod
+    def sanity_rows(output):
+        """The rows of the sanity table, which is the block after its header.
+
+        Matched by position rather than by name: the scores section above it
+        starts its lines with the same model names.
+        """
+        lines = output.splitlines()
+        start = next(i for i, l in enumerate(lines) if "sanity:" in l)
+        rows = []
+        for line in lines[start + 2:]:
+            if not line.strip() or line.strip().startswith("A gap"):
+                break
+            rows.append(line.strip())
+        return rows
+
+    def test_each_row_uses_its_own_parent_column(self, tmp_path):
+        meta, gated = synthetic(tmp_path, gated=True)
+        _, real = synthetic(tmp_path, gated=False)
+        result = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "synovitis_gate.py"),
+             "--predictions", str(real), "--baseline", str(gated),
+             "--meta-dir", str(meta), "--draws", "200"],
+            capture_output=True, text=True, cwd=ROOT)
+        assert result.returncode == 0, result.stderr
+        rows = self.sanity_rows(result.stdout)
+        assert len(rows) == 2, result.stdout
+        # The two models differ in their synovitis column, so the gaps must
+        # differ too; one shared number would mean a shared parent was used.
+        gaps = [float(r.split()[-1]) for r in rows]
+        assert gaps[0] != gaps[1]
+
+    def test_the_parents_own_auc_is_reported_beside_the_gap(self, tmp_path):
+        meta, path = synthetic(tmp_path)
+        result = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "synovitis_gate.py"),
+             "--predictions", str(path), "--meta-dir", str(meta),
+             "--draws", "200"],
+            capture_output=True, text=True, cwd=ROOT)
+        assert "Effusion" in result.stdout and "gap" in result.stdout
+        # Four numbers per row: the parent's own AUC, then the two readings
+        # the gap is taken between, then the gap.
+        row = self.sanity_rows(result.stdout)[0]
+        assert len(row.split()) == 5, row
+
+
 class TestItRefusesTheUnsafeCombination:
     def test_gold_strata_against_mined_labels(self, tmp_path):
         meta, path = synthetic(tmp_path)

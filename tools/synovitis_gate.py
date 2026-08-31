@@ -228,15 +228,26 @@ def main(argv=None):
     print_conversion(y, scored, strata)
     print()
 
-    # The claim that motivates the whole metric change: on this finding the
-    # effusion head is as good a synovitis classifier as the synovitis head.
-    effusion_as_synovitis = cond.auc(y, reference[args.stratify_by].to_numpy())
-    print(f"  sanity: the {args.stratify_by} head used directly as a "
-          f"{args.finding} classifier scores pooled "
-          f"{effusion_as_synovitis:.3f}")
-    print(f"          against the {args.finding} head's "
-          f"{cond.auc(y, reference[args.finding].to_numpy()):.3f}. If those "
-          "are close, pooled AUC is not measuring this finding.")
+    # The claim that motivates the whole metric change: on this finding a
+    # model's own effusion head is as good a synovitis classifier as its
+    # synovitis head. Reported PER MODEL -- reading one model's gap off
+    # another's effusion column is meaningless, and doing exactly that once
+    # made a run look more gated than it was when its effusion head had simply
+    # got better.
+    print(f"  sanity: each model's own {args.stratify_by} head, used directly "
+          f"as a {args.finding} classifier")
+    print(f"    {'model':28s} {args.stratify_by:>10s} "
+          f"{'as ' + args.finding:>14s} {args.finding:>10s} {'gap':>7s}")
+    for frame, name in candidates:
+        parent = frame[args.stratify_by].to_numpy()
+        child = frame[args.finding].to_numpy()
+        own = cond.auc(truth[args.stratify_by].to_numpy(), parent)
+        print(f"    {name[:28]:28s} {own:10.3f} {cond.auc(y, parent):14.3f} "
+              f"{cond.auc(y, child):10.3f} {cond.auc(y, parent) - cond.auc(y, child):+7.3f}")
+    print("    A gap that widens because the parent head IMPROVED is not the "
+          "same as one that")
+    print("    widens because the child got more gated. The parent's own AUC "
+          "is there to tell them apart.")
     print()
 
     if args.baseline:

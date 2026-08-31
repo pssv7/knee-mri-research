@@ -44,6 +44,47 @@ of total error rose from 55.6% to 60.4%, and the Eff=1 vs Eff=1 cell -- the one
 carrying most of the metric -- went from 38.8% misranked to 41.6%. Same
 direction the frozen path took in Stage 0a: slightly more gated, not less.
 
+### The thing this run actually did: Effusion 0.888 -> 0.986
+
+The notebook printed "the Effusion head as a Synovitis classifier: 0.763"
+against the baseline's 0.722, which reads as a head that has become far more
+gated. It is not, and finding out why exposed a bug in `synovitis_gate.py`:
+with `--baseline` given it computed that line from the *baseline's* effusion
+column for every model. One model's gap read off another model's parent is
+meaningless. It now prints per model with the parent's own AUC beside it, and
+`TestTheSanityGapIsPerModel` holds it there.
+
+With the right columns, per finding, paired on the same 58 studies:
+
+    finding          baseline  residual   delta      paired 95% CI   P(not better)
+    Effusion            0.888     0.986  +0.098   [+0.026, +0.186]      0.002
+    Medial OA           0.955     0.978  +0.023   [+0.000, +0.062]      0.037
+    Baker's             0.964     0.986  +0.022   [-0.002, +0.059]      0.056
+    Synovitis           0.701     0.707  +0.006   [-0.072, +0.086]      0.458
+    PF OA               0.826     0.773  -0.053   [-0.126, +0.016]      0.926
+    Fracture            0.849     0.787  -0.061   [-0.142, +0.012]      0.949
+    Lateral OA          0.899     0.820  -0.079   [-0.238, +0.056]      0.877
+    macro               0.876     0.865  -0.010
+
+So the gap widened because the **parent improved**, not because the child got
+more gated -- a distinction the tool now prints rather than leaving to be
+worked out. And the residual parameterisation, aimed squarely at synovitis,
+did nothing for synovitis and produced the largest paired per-finding gain this
+project has measured on **effusion**: +0.098, P = 0.002, which survives a
+Bonferroni correction across all twelve findings (0.05/12 = 0.004).
+
+A mechanism that fits: the parent is detached, so effusion's own training
+signal is untouched, but the synovitis head no longer needs the trunk to encode
+effusion on its behalf. Freed of representing it twice, effusion sharpens.
+
+**Not a result to act on yet.** One fold, one run, 58 studies, macro down 0.010
+with the losses spread across Lateral OA, Fracture and PF OA. Effusion at 0.986
+is also near ceiling, where an AUC is easy to move by a study or two. What
+would make it a result is replication on a second fold -- and unlike the
+synovitis question, this one has a cheap and well-powered check available: the
+out-of-fold conditional and pooled effusion numbers over 4,349 studies, which
+this run already wrote.
+
 The mined validation fold is the reading that settles it. `val_Synovitis_
 conditional` sits between 0.77 and 0.81 for **all twelve epochs** and lands at
 0.803 against the out-of-fold baseline's 0.801. That instrument carries ~870
