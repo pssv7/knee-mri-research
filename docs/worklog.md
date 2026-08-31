@@ -77,13 +77,34 @@ A mechanism that fits: the parent is detached, so effusion's own training
 signal is untouched, but the synovitis head no longer needs the trunk to encode
 effusion on its behalf. Freed of representing it twice, effusion sharpens.
 
-**Not a result to act on yet.** One fold, one run, 58 studies, macro down 0.010
-with the losses spread across Lateral OA, Fracture and PF OA. Effusion at 0.986
-is also near ceiling, where an AUC is easy to move by a study or two. What
-would make it a result is replication on a second fold -- and unlike the
-synovitis question, this one has a cheap and well-powered check available: the
-out-of-fold conditional and pooled effusion numbers over 4,349 studies, which
-this run already wrote.
+**It did not replicate, and the check took ten minutes.** The same two models
+on this fold's 871 out-of-fold studies, paired, against mined labels:
+
+    finding          baseline  residual   delta      paired 95% CI   P(not better)  pos
+    Effusion            0.893     0.885  -0.008   [-0.027, +0.012]      0.788       124
+    MCL                 0.904     0.872  -0.032   [-0.060, -0.007]      0.994        45
+    Synovitis           0.899     0.903  +0.004   [-0.018, +0.028]      0.354        46
+    macro               0.873     0.873  +0.001
+
+**Effusion moves -0.008 here against +0.098 on gold.** With 124 positives
+instead of ~30 and an interval a third the width, this is the better
+instrument for that finding -- effusion is one of the reliably mined labels
+(12.0% report silence), so agreement with the extractor is close to agreement
+with truth. The gold gain was 58-study noise. It was flagged as needing
+replication before the check was run, and it failed it.
+
+MCL at -0.032 is the only interval clear of zero, and with twelve findings
+tested one crossing is what chance produces. Read it as nothing until it
+replicates too.
+
+Synovitis on the same set: pooled +0.004, conditional 0.803 against 0.809, a
+paired +0.011 with 95% CI [-0.034, +0.059]. Flat, on the instrument with 871
+studies rather than 58.
+
+So the residual parameterisation changed **nothing, anywhere**. Not synovitis,
+which it was aimed at; not effusion, which briefly looked like a windfall; not
+macro. That is a cleaner result than the one it appeared to be: one lever, one
+run, and no surviving effect to chase.
 
 The mined validation fold is the reading that settles it. `val_Synovitis_
 conditional` sits between 0.77 and 0.81 for **all twelve epochs** and lands at
