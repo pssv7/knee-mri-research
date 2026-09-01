@@ -5312,8 +5312,8 @@ print(f"  forward {forward_seconds / _n:.2f}s/study"
 print(f"  FAST_DECODE {'on' if FAST_DECODE else 'off'}")
 if AB_CHECK and FAST_DECODE:
     print("  AB_CHECK is ON: every study is also scored the reference way, "
-          "which is untimed but\n  inflates the loop total and therefore the "
-          "projection below. Set AB_CHECK = False\n  before reading a runtime "
+          "which is untimed but\\n  inflates the loop total and therefore the "
+          "projection below. Set AB_CHECK = False\\n  before reading a runtime "
           "figure; the decode and forward lines above are unaffected.")
 if ab_deltas:
     print(f"\\nA/B against the reference decode path, {len(ab_deltas)} studies:")
