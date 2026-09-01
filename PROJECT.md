@@ -24,7 +24,13 @@ plan it answers. **Only two things reopen this, and neither is compute:** ~150
 more gold labels, or contrast-enhanced series.
 
 **The leaderboard is 0.906 — the five-fold ensemble** (submission 55908661,
-2026-08-31 06:05, confirmed). Against the 16x5 single fold's 0.889 that is
+2026-08-31 06:05, confirmed). **Its five members are the checkpoints in
+`models_train/fold{0..4}/convnext_fold*.pt`**, confirmed 2026-09-01, at
+selected-epoch val / gold of 0.8814/0.8683, 0.8726/0.8747, 0.8675/0.8659,
+0.8736/0.8915 and 0.8697/0.8753. All aux-free, 12 epochs, 16 x 5. Fold 3 is
+the 2026-08-31 run, *not* the retired 2026-08-26 one the notebook's bookkeeping
+used to name — a fold-3 retrain on 2026-09-01 came in below it on both val and
+gold and was not swapped in. Against the 16x5 single fold's 0.889 that is
 +0.017, above what the ensemble was expected to be worth. Every comparison
 below that treats 0.891 as the ceiling predates it. **Notebook 10 is done.**
 

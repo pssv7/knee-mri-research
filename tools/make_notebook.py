@@ -3530,20 +3530,25 @@ print(f"synovitis: stratified rank {LAMBDA_STRATIFIED_RANK} "
 # when a fold finishes and its .pt is safely off the VM -- it is the only
 # record a cold session has of what is left to run.
 #
-# Verified by opening each checkpoint's stored hyper_parameters rather than
-# trusting the filenames: folds 0, 1, 2 all report total_steps 5220 (12 epochs
-# at 435 steps/epoch), both auxiliary lambdas 0.0, gated_pool False.
+# **These five are the LB 0.906 ensemble**, confirmed by the user 2026-09-01,
+# and the numbers below are read from each fold's own metrics.csv at its
+# selected epoch rather than from recollection. The previous version of this
+# dict was wrong about fold 3 -- it recorded the retired 2026-08-26 run at val
+# 0.8686 while the member actually used is the 2026-08-31 run at 0.8736 -- and
+# a wrong entry here is worse than none, because this dict is the only record a
+# cold session has of what produced the project's best score.
 #
-# Fold 3 is the older 2026-08-26 checkpoint: 5232 steps, also 12 epochs and
-# also aux-free, but predating both `gated_pool` and `seed_everything`. Kept.
-# The 12-step difference is nothing, and the missing seed matters only for
-# weight-space souping -- notebook 10 averages probabilities, so it does not
-# apply. Retraining it would buy homogeneity nobody can measure.
-ENSEMBLE_DONE = {0: "2026-08-30, 12 ep, val 0.8814",
-                 1: "2026-08-30, 12 ep, val 0.8726",
-                 2: "2026-08-30, 12 ep, val 0.8675",
-                 3: "2026-08-26, 12 ep, val 0.8686 (LB 0.877 solo)",
-                 4: "2026-08-30, 12 ep, val 0.8697"}
+# Verified from the stored hyper_parameters rather than the filenames: all
+# aux-free, gated_pool False, 12 epochs (5220 steps for folds 0-2, 5232 for 3
+# and 4; the 12-step difference is one epoch's rounding and nothing else).
+#
+# A fold-3 retrain on 2026-09-01 reached val 0.8710 / gold 0.8760 -- BELOW the
+# member on disk on both. Do not swap it in.
+ENSEMBLE_DONE = {0: "2026-08-31, 12 ep, val 0.8814, gold 0.8683",
+                 1: "2026-08-31, 12 ep, val 0.8726, gold 0.8747",
+                 2: "2026-08-31, 12 ep, val 0.8675, gold 0.8659",
+                 3: "2026-08-31, 12 ep, val 0.8736, gold 0.8915",
+                 4: "2026-08-31, 12 ep, val 0.8697, gold 0.8753"}
 ENSEMBLE_TODO = [f for f in range(5) if f not in ENSEMBLE_DONE]
 
 # The reference config, spelled out. Every member of an average must be the

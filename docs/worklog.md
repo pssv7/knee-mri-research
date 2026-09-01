@@ -5,6 +5,44 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-09-01 (b) — which five checkpoints are the 0.906 ensemble
+
+Confirmed by the user: the members are the five in
+`models_train/fold{0..4}/convnext_fold*.pt`. Read from each fold's own
+metrics.csv at its selected epoch:
+
+    fold  sel epoch   val_macro   gold_macro   steps
+      0        6        0.8814      0.8683      5220
+      1        6        0.8726      0.8747      5220
+      2        8        0.8675      0.8659      5220
+      3        8        0.8736      0.8915      5232
+      4        6        0.8697      0.8753      5232
+
+All aux-free with `gated_pool` False, verified from the stored
+hyper_parameters rather than from filenames. The 12-step difference between
+folds 0-2 and folds 3-4 is one epoch's rounding.
+
+**The bookkeeping was wrong about fold 3.** `ENSEMBLE_DONE` recorded the
+retired 2026-08-26 run at val 0.8686 (LB 0.877 solo); the member actually used
+is the 2026-08-31 run at val 0.8736 / gold 0.8915. That dict is described in
+its own comment as "the only record a cold session has", and it was
+misdescribing a member of the project's best result. Now corrected, with the
+gold column added -- the previous entries carried val only, which is what let
+the error stand.
+
+**A fold-3 retrain the same day came in below the member on disk** -- val
+0.8710 / gold 0.8760 against 0.8736 / 0.8915. It was run on an older copy of
+notebook 08 (its banner still listed folds 0, 2 and 4 as outstanding), though
+at the reference config, so it is a valid member; it is simply worse. Not
+swapped in, and the dict now says so.
+
+Worth naming the near-miss: the retrain looked like an improvement because it
+was being compared against the 0.8686 in the bookkeeping rather than against
+the 0.8736 on disk. Swapping it in would have quietly degraded the ensemble
+that holds the project's best score, and nothing would have raised.
+
+---
+
 ## 2026-09-01 — the Efficiency Prize, and a submission-wide failure caught in time
 
 The AUC track is close to finished -- 0.906 from the five-fold ensemble, nine
