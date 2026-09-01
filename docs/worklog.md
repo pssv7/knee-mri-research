@@ -30,6 +30,31 @@ Lateral Meniscus -- the finding this was aimed at, weight 2.85 -- is the single
 largest move and it is *down* 0.114. That is not a weak mechanism, it is 58
 studies with a per-finding SE of 0.045-0.08. **Null.**
 
+### The powered instrument confirms it, and identifies the gold swings as noise
+
+The same two models on 871 out-of-fold studies, paired:
+
+    finding            prev    wt   baseline    posw    delta      paired 95% CI
+    Lateral OA        11.3%  2.81     0.821    0.841   +0.020   [-0.012,+0.053]
+    Fracture           2.5%  4.00     0.932    0.946   +0.014   [-0.013,+0.049]
+    Baker's           10.3%  2.95     0.920    0.933   +0.013   [-0.009,+0.036]
+    Effusion          14.2%  2.46     0.893    0.882   -0.011   [-0.028,+0.006]
+    MCL                5.1%  4.00     0.904    0.889   -0.015   [-0.058,+0.023]
+    ACL               11.8%  2.73     0.919    0.898   -0.022   [-0.052,+0.008]
+    macro                             0.873    0.872   -0.000
+
+    rare (<12% prevalence)   mean delta  +0.000
+    common (>= 20%)          mean delta  -0.001
+
+Flat everywhere. Every interval straddles zero and the largest move is Lateral
+OA at +0.020, P(not better) = 0.10.
+
+**And it settles what the gold table was showing.** Lateral Meniscus -0.114 on
+gold is -0.008 here; Contusion +0.078 is +0.009; MCL +0.054 is -0.015. Three
+swings of 0.05 to 0.11 on 58 studies, all of them within 0.015 of zero on 871.
+That is what the gold set's per-finding noise looks like when something with
+power is put beside it, and it is worth keeping as the calibration.
+
 ### The stale constant this run exposed
 
 The notebook compared against `REFERENCE_GOLD = 0.861` and by that number the
@@ -56,9 +81,21 @@ is 0.015-0.025. The pattern is not about the ideas. `pos_weight` was the
 best-motivated of them -- implemented, never used, aimed at a weakness measured
 on 4,349 studies rather than guessed -- and it still could not be read on 58.
 
-The out-of-fold set resolved both synovitis questions in ten minutes each and
-is the only instrument here with power. Any further per-finding work should be
-judged there first and on gold second, or not run.
+The out-of-fold set has now resolved three questions in ten minutes each --
+both synovitis levers and this one -- while the gold 58 gave an ambiguous or
+misleading answer to all three. Any further per-finding work should be judged
+there first and on gold second, or not run.
+
+**And the wider read, which is not about pos_weight.** The reference
+configuration sits where single-variable changes do not move it. The one thing
+that has worked since 2026-08-25 is the five-fold ensemble, at +0.017, and it
+worked by reducing variance rather than by changing the model. The leaderboard
+cluster is 0.941 at 20th against this project's 0.906; that gap is not a
+lambda, a weight or a loss term away. Anything aimed at it has to be
+structurally different -- more input (24 slices was worth +0.002 on one fold
+and is blocked at five folds by the 9 h inference cap), or an input the model
+does not currently get. That is a decision about what to spend seven weeks on,
+not a next run.
 
 ---
 
