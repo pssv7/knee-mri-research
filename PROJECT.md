@@ -23,13 +23,21 @@ with the ceiling arguments and the citations; `plan.md` in the repo root is the
 plan it answers. **Only two things reopen this, and neither is compute:** ~150
 more gold labels, or contrast-enhanced series.
 
-**The leaderboard number throughout this file is stale.** The submissions list
-shows **0.906** (2026-08-31 06:05, submission 55908661) and 0.895 twice,
-against the 0.891 recorded here and in the worklog. *Provenance not verified* --
-`pssv27/submission-2`'s latest log is a later run (single fold,
-`convnext_fold3.pt`), so which run produced 0.906 is open, and this project's
-rule is to read it from the log rather than assume. Every comparison below that
-treats 0.891 as the ceiling needs re-reading in that light.
+**The leaderboard is 0.906 — the five-fold ensemble** (submission 55908661,
+2026-08-31 06:05, confirmed). Against the 16x5 single fold's 0.889 that is
++0.017, above what the ensemble was expected to be worth. Every comparison
+below that treats 0.891 as the ceiling predates it. **Notebook 10 is done.**
+
+**The remaining headroom is PF OA and Lateral Meniscus**, measured out of fold
+over 4,349 studies rather than on the gold 58: PF OA 0.773 on 925 positives is
+now the weakest finding in the model, Lateral Meniscus 0.825 on 476. The
+medial/lateral gap that runs through both compartment pairs is **not**
+laterality (identical among studies whose side came from the DICOM tag) and
+**not** label quality (the lateral labels are the better ones on gold) -- it is
+positives: on Medial Meniscus the model beats its own labels by 0.123, on
+Lateral Meniscus it lands on them exactly. Next run is `POS_WEIGHT`, which
+`KneeLitModule` has always accepted and no run has ever set; pre-registered in
+worklog 2026-08-31 (h).
 
 Last major shape change: 2026-08-28. **The plan changed shape.** `docs/plan.md` no
 longer runs Phases A-E; it is a model-selection and training-constraint plan,

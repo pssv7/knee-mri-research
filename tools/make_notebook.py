@@ -3258,6 +3258,43 @@ SEED = 0
 # ever changes that.
 pl.seed_everything(SEED, workers=True)
 
+# POS_WEIGHT -- scale the positive term per finding by sqrt(neg/pos), capped.
+#
+# The metric is macro AUC, so a finding present in 2.5% of studies counts
+# exactly as much as one present in 32.5%; without this the loss is dominated
+# by whatever is prevalent. `KneeLitModule` has taken `pos_weight` since it was
+# written and **no run has ever set it** -- every fold's hparams.yaml says
+# None.
+#
+# Measured motivation (2026-08-31), out-of-fold over 4,349 studies: every
+# medial/lateral pair has the rarer lateral side worse by the same margin --
+# Meniscus 0.869 / 0.825, OA 0.883 / 0.832 -- and it is not laterality (the gap
+# is identical among the 2,544 studies whose side came from the DICOM tag, so
+# no mirroring error is possible there) and not label quality (on gold the
+# lateral labels are the *better* ones, 0.816 against 0.765). What separates
+# them is positives: on Medial Meniscus the model beats its own labels by
+# 0.123, and on Lateral Meniscus it lands on them exactly -- enough data to
+# imitate the extractor, not enough to generalise past it.
+#
+# The cap is load-bearing. Raw neg/pos reaches 38.9 for Fracture and 18.7 for
+# MCL; at those weights the rare findings would swamp the loss the way the
+# stratified ranking term did on 2026-08-31. The square root is the standard
+# damping and 4.0 binds only the three rarest findings.
+POS_WEIGHT_CAP = 4.0      # None disables the term and restores the reference
+if POS_WEIGHT_CAP is None:
+    POS_WEIGHT = None
+else:
+    _positives = (labels[config.LABELS] >= 0.5).sum()
+    _negatives = len(labels) - _positives
+    POS_WEIGHT = [float(min((n / max(p, 1)) ** 0.5, POS_WEIGHT_CAP))
+                  for p, n in zip(_positives, _negatives)]
+    print("pos_weight (sqrt of neg/pos, capped at "
+          f"{POS_WEIGHT_CAP}):")
+    for _name, _w in zip(config.LABELS, POS_WEIGHT):
+        _p = int((labels[_name] >= 0.5).sum())
+        print(f"  {_name:18s} {_w:5.2f}   ({_p} positives, "
+              f"{_p / len(labels):.1%})")
+
 # Two auxiliary objectives, both training-time only and both dropped at
 # export, so notebook 10 is untouched. Either is disabled by setting its
 # weight to 0.0, which is how a single-variable ablation is run.
@@ -3466,7 +3503,7 @@ module = knee_lightning.KneeLitModule(
     stratified_caliper=STRATIFIED_CALIPER,
     lambda_coupling=LAMBDA_COUPLING,
     coupling_target=COUPLING_TARGET if LAMBDA_COUPLING > 0 else None,
-    residual_beta=RESIDUAL_BETA,
+    residual_beta=RESIDUAL_BETA, pos_weight=POS_WEIGHT,
     **BACKBONE_DEFAULTS)
 print(f"trunk lr: {LR * BACKBONE_DEFAULTS['backbone_lr_scale']:.1e}  "
       f"head lr: {LR:.1e}  "
@@ -3515,6 +3552,7 @@ _expected = {"SLICES_PER_SERIES": (SLICES_PER_SERIES, 16),
              "LAMBDA_STRATIFIED_RANK": (LAMBDA_STRATIFIED_RANK, 0.0),
              "RESIDUAL_BETA": (RESIDUAL_BETA, None),
              "LAMBDA_COUPLING": (LAMBDA_COUPLING, 0.0),
+             "POS_WEIGHT_CAP": (POS_WEIGHT_CAP, None),
              "SILENCE_REWEIGHT": (SILENCE_REWEIGHT, False),
              "BACKBONE": (BACKBONE, "convnext_tiny.fb_in22k_ft_in1k")}
 _wrong = {k: v for k, (v, want) in _expected.items() if v != want}

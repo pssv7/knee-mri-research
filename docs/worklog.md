@@ -5,6 +5,96 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-31 (h) — the ensemble scored 0.906; next run is POS_WEIGHT, pre-registered
+
+**LB 0.906 is the five-fold ensemble** (confirmed by the user; submission
+55908661, 2026-08-31 06:05). Against the 16x5 single fold's 0.889 that is
++0.017, above the +0.005-0.010 the ensemble was expected to be worth, and it is
+the project's best result. `PROJECT.md` had it flagged as unverified; that is
+now settled. **Notebook 10 is done -- do not re-run it.**
+
+### Where the headroom is, measured rather than assumed
+
+Per finding over the 4,349 out-of-fold studies, which carries 100x the
+positives of the gold 58:
+
+    finding             OOF     pos     gold 58
+    PF OA              0.773    925      0.826
+    Lateral Meniscus   0.825    476      0.821
+    Lateral OA         0.832    490      0.899
+    Contusion          0.847    533      0.843
+    Medial Meniscus    0.869   1412      0.888
+    Synovitis          0.899    251      0.701
+
+Synovitis reads 0.899 against the extractor and 0.701 against radiologists --
+its problem was never the images, which is the descope in one line. **PF OA is
+now the weakest thing in the model**, on 925 positives, and Lateral Meniscus is
+second with both instruments agreeing.
+
+### Two hypotheses killed for free before spending a session
+
+**Every medial/lateral pair has the rarer lateral side worse by the same
+margin** -- Meniscus 0.869/0.825, OA 0.883/0.832. Two candidate mechanisms,
+both testable from files already on disk:
+
+*Laterality.* Left knees are mirrored to a canonical side using a predicted
+side, and a wrong mirror swaps medial with lateral. **Refuted:** the gap is the
+same among the 2,544 studies whose side came from the DICOM tag for every
+series (-0.039, -0.043), where no prediction error is possible. Only 26 studies
+have series that disagree internally.
+
+*Label quality.* The reports are German, Spanish and Dutch, and an extractor
+confusing Innenmeniskus with Aussenmeniskus would poison the lateral labels.
+**Refuted, and the replacement is more interesting.** On gold the lateral
+labels are the *better* ones:
+
+    finding             labels vs gold   model vs gold   mined positives
+    Medial Meniscus         0.765            0.888            1412
+    Lateral Meniscus        0.816            0.821             476
+
+On medial the model **beats its own labels by 0.123**; on lateral it lands on
+them exactly. Enough positives to imitate the extractor, not enough to
+generalise past it.
+
+### The lever that follows, and has never been used
+
+`KneeLitModule` has accepted `pos_weight` since it was written and **every
+fold's hparams.yaml says None**. Its own docstring already made the argument:
+the metric is macro AUC, so a finding present in 2.5% of studies counts as much
+as one present in 32.5%, and without this the loss is dominated by whatever is
+prevalent. It is now wired into notebook 08, computed from the labels rather
+than hard-coded so it cannot drift:
+
+    POS_WEIGHT = min(sqrt(neg / pos), POS_WEIGHT_CAP)   cap 4.0
+
+    Fracture 4.00 (2.5%)   MCL 4.00 (5.1%)   Synovitis 4.00 (5.8%)
+    Baker's 2.95   L Meniscus 2.85   L OA 2.81   ACL 2.73   Contusion 2.68
+    Effusion 2.46   PF OA 1.92   M OA 1.84   M Meniscus 1.44 (32.5%)
+
+**The cap is load-bearing.** Raw neg/pos is 38.9 for Fracture and 18.7 for MCL;
+at those weights the rare findings swamp the loss the way the stratified
+ranking term did earlier today. The square root is the standard damping and 4.0
+binds only the three rarest findings.
+
+### Pre-registered, before the run
+
+- Fold 1, 16 x 5, 12 epochs, everything else at reference. One variable.
+- **Judged on macro**, not on one finding, because it touches all twelve. Pass
+  if fold-1 gold macro clears 0.861 by more than the 0.02 noise floor.
+- **The per-finding table is the diagnostic**, whatever macro does: the rare
+  findings should rise and the common ones should not collapse. If Fracture,
+  MCL and Lateral Meniscus move up while Medial Meniscus and Medial OA hold,
+  the mechanism worked even if macro reads null.
+- **Honest prior: modest.** Seven single-variable changes have measured null on
+  this gold set, and this one is worth perhaps +0.01 macro. It is on the list
+  because it is implemented, untested, and aimed at a weakness that was
+  measured rather than guessed.
+- `pos_weight` lives on the Lightning wrapper, not on `KneeNet`, so it does not
+  reach the exported checkpoint and notebook 10 is untouched. Held by
+  `tests/test_notebook.py::TestPosWeightReachesTheLossAndNotTheCheckpoint`.
+
+---
+
 ## 2026-08-31 (g) — Stage 4: synovitis is descoped, on the literature rather than on exhaustion
 
 The plan's §10 sent a Stage 1 conditional under 0.70 to Stage 3 -- crops on

@@ -411,6 +411,52 @@ class TestGeneratorHasNoDocstringsInCells:
                         f"{name} cell {i} does not parse: {exc}") from None
 
 
+class TestPosWeightReachesTheLossAndNotTheCheckpoint:
+    """`pos_weight` is a training-time term and must stay one.
+
+    It scales the positive term per finding so a 2.5%-prevalent finding is not
+    drowned by a 32.5%-prevalent one under a macro-AUC metric. Two things have
+    to hold: the notebook must actually pass it to the module -- it has existed
+    in `KneeLitModule` since it was written and no run has ever set it -- and it
+    must NOT reach the exported state dict, or notebook 10 would be loading a
+    training artefact it knows nothing about.
+    """
+
+    def sources(self, name="08_finetune.ipynb"):
+        with open(os.path.join(ROOT, "notebooks", name)) as handle:
+            notebook = json.load(handle)
+        return ["".join(c["source"]) for c in notebook["cells"]
+                if c["cell_type"] == "code"]
+
+    def test_the_notebook_passes_it_to_the_module(self):
+        joined = "\n".join(self.sources())
+        assert "pos_weight=POS_WEIGHT" in joined
+        assert "POS_WEIGHT_CAP" in joined
+
+    def test_the_labels_are_loaded_before_the_weights_are_computed(self):
+        cells = self.sources()
+        loads = next(i for i, c in enumerate(cells)
+                     if "labels = pd.read_parquet" in c)
+        uses = next(i for i, c in enumerate(cells) if "POS_WEIGHT_CAP" in c)
+        assert loads < uses, "prevalence is computed from labels loaded later"
+
+    def test_it_is_listed_in_the_reference_config_check(self):
+        # A run with it on is an experiment, not an ensemble member, and the
+        # notebook has to say so before the hours are spent.
+        joined = "\n".join(self.sources())
+        assert '"POS_WEIGHT_CAP": (POS_WEIGHT_CAP, None)' in joined
+
+    def test_it_does_not_travel_in_the_exported_weights(self):
+        import torch
+        from src import config
+        from src.model import lightning as knee_lightning
+        module = knee_lightning.KneeLitModule(
+            torch.nn.Identity(), 8, pos_weight=[1.0] * len(config.LABELS))
+        assert module.pos_weight is not None
+        assert not any(k.startswith("pos_weight")
+                       for k in module.model.state_dict())
+
+
 class TestTheArchivedReferenceStaysAtReference:
     """The fallback copy has to stay a fallback.
 
