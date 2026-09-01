@@ -3442,25 +3442,22 @@ REPORT_DIM = (len([c for c in reports.columns if c != "StudyInstanceUID"])
 # member of the average a different model. The banner below states which run
 # this is.
 #
-# CURRENT RUN: fold 4, the last of the five. Folds 0, 1, 2 and 3 are done and
-# verified from their checkpoints; the banner below prints what is outstanding.
-# ~1 h at 12 epochs.
+# CURRENT RUN: fold 1, an EXPERIMENT and not an ensemble member. The
+# five-fold ensemble is complete (folds 0-4 all trained aux-free) and scored
+# **LB 0.906** on 2026-08-31 -- the project's best result, and the reason
+# nothing here is waiting on a fold.
 #
-# This is the only remaining item with a positive track record in this project
-# (+0.005-0.010 historically). It is variance insurance for the private
-# leaderboard rather than a public climb: a five-fold result at ~0.890 is a
-# SUCCESS, because the cross-split spread on a single fold is ~0.012 and the
-# average removes it.
+# **Fold 1, and the fold is not free to choose.** It is the only split with a
+# measured baseline (val 0.8726 / gold 0.8747 / LB 0.889 at 16 x 5), and
+# per-finding scores move more across splits than any of these treatments do.
+# The same run on another fold has nothing to be compared against; fold 3's
+# LB 0.877 against fold 1's 0.889 on an identical configuration is what that
+# costs when ignored.
 #
-# NOTHING ELSE CHANGES BETWEEN THESE THREE RUNS. Seven single-variable
-# experiments have now measured null against a gold set whose macro SE is
-# 0.015-0.025; the instrument cannot read them, so do not slip one in here.
-#
-# **Fold 1 for the Stage 1 experiment, and the fold is not free to choose.**
-# The conditional AUC being beaten -- 0.630 -- is a fold-1 model's number, and
-# per-finding scores move by more than the treatment across splits. A Stage 1
-# run on another fold cannot be compared to it at all. The ensemble is
-# complete (folds 0-4 all trained, aux-free), so nothing is waiting on this.
+# NOTHING ELSE CHANGES IN AN EXPERIMENT. Eight single-variable changes have
+# now measured null against a gold set whose macro SE is 0.015-0.025 and whose
+# per-finding SE is 0.045-0.08; the instrument cannot read them, so do not
+# slip a second variable in beside the one being tested.
 FOLD = 1
 CHECKPOINT = f"/kaggle/working/convnext_fold{FOLD}.pt"
 
@@ -3840,8 +3837,16 @@ FROZEN = dict(zip(config.LABELS,
 
 # The comparisons that actually decide anything. Both are fold 1 at 16 x 5,
 # so a fold-1 run is directly comparable and any other fold is not.
-REFERENCE_GOLD = 0.861     # fold 1, 16 x 5, no aux losses -> LB 0.889
-BEST_GOLD = 0.865          # fold 1, 24 x 5              -> LB 0.891 (best)
+#
+# REFERENCE_GOLD was 0.861 until 2026-08-31 and that number was stale by
+# 0.014: it came from the 2026-08-26 era, while the fold-1 checkpoint every
+# current comparison is actually made against -- the 2026-08-30 run in
+# models_train/fold1 -- logged gold_macro 0.8747 at its selected epoch, and
+# its saved predictions score macro 0.876. Using 0.861 flattered the
+# pos_weight run by exactly the gap: it read +0.014 against the constant and
+# -0.001 against the predictions, paired. Read the paired number.
+REFERENCE_GOLD = 0.875     # fold 1, 16 x 5, no aux losses, 2026-08-30 run
+BEST_GOLD = 0.875          # the same; the 24 x 5 run's 0.865 predates it
 
 print(f"{'finding':18s} {'this run':>9s}  {'frozen (retired)':>16s}")
 print("-" * 47)

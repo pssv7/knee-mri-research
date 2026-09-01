@@ -5,6 +5,63 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-31 (i) — POS_WEIGHT measures null, and the reference constant was stale
+
+Fold 1, `POS_WEIGHT_CAP = 4.0`, everything else at reference. Paired on the
+gold 58 against the fold-1 predictions:
+
+    finding            prev    wt   baseline   pos_weight   delta      paired 95% CI
+    Lateral Meniscus  10.9%  2.85     0.821       0.707    -0.114   [-0.242,+0.004]
+    Contusion         12.3%  2.68     0.843       0.922    +0.078   [-0.025,+0.206]
+    MCL                5.1%  4.00     0.921       0.975    +0.054   [-0.006,+0.140]
+    Medial Meniscus   32.5%  1.44     0.888       0.934    +0.046   [-0.023,+0.122]
+    Lateral OA        11.3%  2.81     0.899       0.853    -0.046   [-0.146,+0.024]
+    Fracture           2.5%  4.00     0.849       0.889    +0.040   [-0.067,+0.164]
+    ACL               11.8%  2.73     0.952       0.918    -0.034   [-0.100,+0.021]
+    macro                             0.876       0.875    -0.001
+
+**Not one interval excludes zero**, and the pre-registered diagnostic came out
+backwards. The prediction was "rare findings rise, common ones hold":
+
+    rare (<12% prevalence, 7 findings)   mean delta  -0.019
+    common (>= 20%, 3 findings)          mean delta  +0.007
+
+Lateral Meniscus -- the finding this was aimed at, weight 2.85 -- is the single
+largest move and it is *down* 0.114. That is not a weak mechanism, it is 58
+studies with a per-finding SE of 0.045-0.08. **Null.**
+
+### The stale constant this run exposed
+
+The notebook compared against `REFERENCE_GOLD = 0.861` and by that number the
+run read **+0.014**. That constant dates from the 2026-08-26 era. The fold-1
+checkpoint every current comparison is actually made against -- the 2026-08-30
+run in `models_train/fold1` -- logged **gold_macro 0.8747** at its selected
+epoch, and its saved predictions score macro 0.876.
+
+So the constant understated the reference by 0.014, which is almost exactly the
+"gain" this run appeared to make. Every comparison drawn against it since
+2026-08-30 was flattered by the same amount. It is now 0.875, and the run reads
+what it actually is: **-0.001, paired**.
+
+Two other stale strings fixed in the same cell: the run banner still said
+"CURRENT RUN: fold 4, the last of the five" above `FOLD = 1`, and the ensemble
+paragraph still described the five-fold sweep as outstanding when it is
+complete and scored LB 0.906. A cell whose job is telling a cold session what
+run it is has to be right about that.
+
+### Where this leaves the ledger
+
+Eight single-variable changes, eight nulls, against a gold set whose macro SE
+is 0.015-0.025. The pattern is not about the ideas. `pos_weight` was the
+best-motivated of them -- implemented, never used, aimed at a weakness measured
+on 4,349 studies rather than guessed -- and it still could not be read on 58.
+
+The out-of-fold set resolved both synovitis questions in ten minutes each and
+is the only instrument here with power. Any further per-finding work should be
+judged there first and on gold second, or not run.
+
+---
+
 ## 2026-08-31 (h) — the ensemble scored 0.906; next run is POS_WEIGHT, pre-registered
 
 **LB 0.906 is the five-fold ensemble** (confirmed by the user; submission
