@@ -5,6 +5,86 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-09-01 — the Efficiency Prize, and a submission-wide failure caught in time
+
+The AUC track is close to finished -- 0.906 from the five-fold ensemble, nine
+consecutive single-variable nulls after it, and a gold set whose per-finding
+noise (+/-0.10 paired) is wider than anything left to chase. The Efficiency
+Prize is a separate $18,000 pool that has never been worked on, and its levers
+are mechanical rather than statistical.
+
+### The exchange rate the whole track turns on
+
+    Efficiency = AUC / (Benchmark - maxAUC) + RuntimeSeconds / 32400   (minimised)
+
+At Benchmark 0.5 and maxAUC 0.95 the first term is -2.22 x AUC, so:
+
+    **one hour of runtime == 0.050 AUC**
+
+For scale: the entire spread between this project's best and worst
+configurations is about 0.06 AUC, and the five-fold ensemble's advantage over a
+single fold is +0.017 -- **worth twenty minutes**. If four extra folds cost
+more than that, the ensemble is the wrong efficiency entry while remaining the
+right AUC entry. Nothing on this project has ever measured which it is.
+
+### What reading the submission loop found
+
+`build_volumes` decoded **every** series in a study, and only afterwards did
+`pick_series` keep five and `KEEP` keep 16 of 24 slices. On a seven-series
+study that is 7 x 24 = 168 slices decoded where 5 x 16 = 80 are used. 32.5% of
+studies carry more than five series.
+
+**Shipped: series are chosen before anything is read.** `pick_series` needs
+only the count, and both sides order by SeriesInstanceUID, so exactly the
+series the reference path keeps are the ones decoded. The end-to-end harness
+reports a **maximum absolute prediction difference of 0.0000** -- strictly less
+work, same answer.
+
+### The half that is blocked, and why the harness earned its keep
+
+Decoding each series to `TUNED_SLICES` instead of `CACHE_SLICES` would drop a
+third of the remaining pixel work. `cache.build_series_volume` now takes a
+`slices` argument that does it correctly, and "correctly" is doing real work
+there: `submission_indices` composes the coarse and fine selections, because
+picking 16 evenly across the raw stack **in one step lands on different files
+for 41 of the 44 series lengths between 16 and 60**. That is the
+`volumes[:MAX_SERIES]` head-truncation bug in a new costume -- shapes agree,
+nothing raises, and the model is scored on anatomy it was not trained to read.
+
+It is still switched off, because the **side classifier reads the slice axis as
+input channels and its first convolution has 24 of them**. A 16-deep volume
+raises, every study falls back to the training prior, and the submission scores
+**AUC 0.5**. `tools/check_submission.py` caught it on the first run against
+notebook 10.
+
+Two notes on that, both worth more than the optimisation:
+
+1. **The harness defaults to notebook 07.** The first run exercised none of
+   this and reported "ran clean". `CHECK_NOTEBOOK=10_submit_ensemble.ipynb` is
+   the invocation that tests the ensemble path, and it is not the default.
+2. The DICOM laterality tag would sidestep the side classifier, but only
+   **58.5% of studies** carry it on any series; 1,828 need the model.
+   Unblocking means retraining the side classifier at 16 slices -- minutes in
+   notebook 04 -- but that changes laterality behaviour, which silently
+   transposes four of the twelve findings when wrong. Its own experiment.
+
+### Stage E0 is now one run instead of two
+
+The loop times decode and forward apart and prints both per study. The plan had
+E0 inferring that split from two dry runs differenced against each other, each
+extrapolated from three studies on a cold GPU. One commit of notebook 10 now
+answers both questions directly: what a sixth fold costs, and whether the
+decode is worth attacking further.
+
+Set `AB_CHECK = False` before reading a runtime figure -- it scores every study
+both ways, which is untimed but inflates the loop total and the projection. The
+decode and forward lines are unaffected either way.
+
+**Not yet measured.** The local numbers (decode 5%, forward 95%) come from a
+CPU run on fake two-series studies and mean nothing for Kaggle.
+
+---
+
 ## 2026-08-31 (i) — POS_WEIGHT measures null, and the reference constant was stale
 
 Fold 1, `POS_WEIGHT_CAP = 4.0`, everything else at reference. Paired on the
