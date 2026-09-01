@@ -5,6 +5,64 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-09-01 (c) — the inference budget, measured: decode is half of it
+
+The dry run, five folds attached, `AB_CHECK` off:
+
+    tuned folds : 5
+      decode  2.74s/study   (52% of the loop)
+      forward 2.52s/study   over 5 model(s), 0.50s each
+    projected for 1,500 studies: 2.20 h (efficiency penalty 0.245)
+
+**Half the inference budget is DICOM reading, not the model.** Per fold the
+forward pass is 0.50 s/study -- 0.21 h over the test set -- against 1.14 h of
+decode that five folds share.
+
+### My earlier arithmetic was wrong by a factor of five, and it mattered
+
+On 2026-08-31 I estimated per-fold forward at 1.65 h by splitting a *projected*
+8.6 h five-fold total (itself a pre-run guess from an old worklog note) against
+a *projected* 2.00 h single fold. From that I concluded five folds at 24 slices
+would take 12.6 h and could not fit the cap. The real per-fold cost is 0.21 h,
+so:
+
+    5 folds, 24 slices:  2.74 + 5 x 0.50 x 1.5 = 6.5 s/study = **2.70 h**
+
+**It fits, with six hours to spare.** The claim that 24-slice ensembling is
+dead at the 9 h cap -- carried in `docs/plan.md` §3.8 and repeated by me -- is
+false, and it was never measured. The user pushed back on the arithmetic and
+was right to.
+
+### The efficiency entry should be ONE fold, not five
+
+At 1 hour == 0.050 AUC, and scoring `-AUC/(maxAUC-Benchmark) + seconds/32400`
+minimised:
+
+    configuration                              AUC   hours  penalty    score
+    5 folds, 16 slices (the 0.906 ensemble)  0.906    2.18    0.243   -1.771
+    5 folds, 24 slices                       0.906    2.70    0.300   -1.713
+    1 fold,  16 slices                       0.889    1.35    0.150   -1.826
+    1 fold,  + slice-depth decode            0.889    1.01    0.112   -1.864
+
+Four extra folds cost 0.83 h = **0.042 AUC-equivalent** and buy +0.017. Net
+**-0.025**: the ensemble is the right AUC entry and the wrong efficiency entry,
+which is exactly the question the exchange rate was derived to answer.
+
+### And the blocked optimisation is now worth unblocking
+
+Decode is 52% of a five-fold run and **84% of a single-fold one**, so on the
+efficiency entry the dominant cost is reading images the model never looks at.
+Cutting the decode by the ~30% the slice-depth change is worth improves the
+score by **0.038 -- more than twice what the whole five-fold ensemble buys.**
+
+What stands in the way is unchanged: the side classifier takes the slice axis
+as input channels with 24 of them, so it needs retraining at 16 (notebook 04,
+minutes), and that is a laterality behaviour change, which silently transposes
+four of the twelve findings when wrong. Now it has a number attached to it,
+which it did not before.
+
+---
+
 ## 2026-09-01 (b) — which five checkpoints are the 0.906 ensemble
 
 Confirmed by the user: the members are the five in
@@ -220,7 +278,8 @@ worked by reducing variance rather than by changing the model. The leaderboard
 cluster is 0.941 at 20th against this project's 0.906; that gap is not a
 lambda, a weight or a loss term away. Anything aimed at it has to be
 structurally different -- more input (24 slices was worth +0.002 on one fold
-and is blocked at five folds by the 9 h inference cap), or an input the model
+and was WRONGLY believed blocked at five folds by the 9 h cap -- measured
+2026-09-01 (c) at 2.70 h, it fits), or an input the model
 does not currently get. That is a decision about what to spend seven weeks on,
 not a next run.
 
