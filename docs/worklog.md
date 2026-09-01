@@ -76,6 +76,15 @@ run it is has to be right about that.
 
 ### Where this leaves the ledger
 
+**`POS_WEIGHT_CAP` is back at None** (2026-08-31, caught by the user before it
+cost anything). Every other lever was returned to reference the moment its
+experiment finished; this one was left on. Nothing had been retrained since, so
+the only cost was the risk: a fold trained now would have carried a null term
+into the ensemble, and an average mixing weighted with unweighted members is a
+blend of two models that the averaging hides. The notebook's `_expected` check
+would have printed OFF-REFERENCE, so it was not silent -- but the default was
+wrong, and the default is what gets run.
+
 Eight single-variable changes, eight nulls, against a gold set whose macro SE
 is 0.015-0.025. The pattern is not about the ideas. `pos_weight` was the
 best-motivated of them -- implemented, never used, aimed at a weakness measured

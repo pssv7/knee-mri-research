@@ -3280,7 +3280,15 @@ pl.seed_everything(SEED, workers=True)
 # MCL; at those weights the rare findings would swamp the loss the way the
 # stratified ranking term did on 2026-08-31. The square root is the standard
 # damping and 4.0 binds only the three rarest findings.
-POS_WEIGHT_CAP = 4.0      # None disables the term and restores the reference
+# Back to None. 4.0 was run on 2026-08-31 and measured null twice: paired
+# -0.001 on the gold 58 and -0.000 across 871 out-of-fold studies, with the
+# pre-registered diagnostic backwards -- the rare findings that took the
+# largest weights fell 0.019 on average while the common ones rose 0.007, and
+# Lateral Meniscus, the finding it was aimed at, read -0.114 on gold against
+# -0.008 out of fold. Left at None so a retrained ensemble member is
+# on-reference; an average mixing weighted and unweighted folds is a blend of
+# two models and the averaging hides it.
+POS_WEIGHT_CAP = None
 if POS_WEIGHT_CAP is None:
     POS_WEIGHT = None
 else:
