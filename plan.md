@@ -2,7 +2,33 @@
 
 **Backbone:** ConvNeXt-T · 16 slices × 5 series
 **Baseline:** Synovitis AUC 0.701 (fold 1, gold n=58, 27 pos / 31 neg)
-**Status:** diagnosis confirmed; intervention gated on one free check
+**Status: RESOLVED 2026-08-31 — Stage 4 (descope).** Every stage below was
+executed. The metric change in §3 stands and is now how this finding is judged;
+Stage 0 answered all four checks; both Stage 1 levers measured null; Stage 3
+was withdrawn when the published result motivating it turned out to be subtype
+classification among patients who all have synovitis, not detection. The
+verdict, its evidence and its citations are in `docs/synovitis.html` §08; the
+runs are in `docs/worklog.md` 2026-08-31 (a) through (g).
+
+**Read the rest as the record of a closed investigation, not as live work.**
+Two inputs would reopen it, and neither is compute: ~150 more radiologist
+labels, or contrast-enhanced series.
+
+| stage | outcome |
+|---|---|
+| §3 metric change | **Adopted.** Conditional AUC 0.630, CI [0.46, 0.79]. Logged every epoch, `tools/synovitis_gate.py`. |
+| 0a frozen path | **Answered.** 0.620, paired −0.011 — more gated, not better. Do not ship it for this finding. |
+| 0b reweighting re-score | **Not run.** Its predictions were never saved and the run was reverted; superseded by 0a. |
+| 0c contrast | **Answered.** 3 studies of 4,407, none misrouted, none in gold. Non-contrast ceiling applies. |
+| 0d series composition | **Answered.** +0.132 against the label's own +0.151. No aggregation artefact. |
+| §5 stratified ranking | **Diverged.** BCE ×10, head saturated, macro 0.86 → 0.71. A property of the labels. |
+| §5 residual head | **Null.** Paired −0.024 gold, +0.011 on 871 out-of-fold studies. |
+| §6 expand the gold set | **Open, and the binding constraint.** Untouched. |
+| §7 anatomical targeting | **Withdrawn.** Its motivation did not survive being read. |
+| §8 descope | **Done.** `docs/synovitis.html` §08. |
+
+---
+
 
 ---
 

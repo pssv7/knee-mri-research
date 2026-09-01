@@ -402,9 +402,113 @@ footer p{margin:0 0 8px}
   </div>
 </section>
 
+<section class="col">
+  <h2><span class="n">08 — THE VERDICT</span>Synovitis is reported as effusion-coupled</h2>
+
+  <p>Section 07 named one cheap unanswered question and one open route. Both were answered on
+  2026-08-31, and three interventions were run and measured. <strong>This finding is descoped.</strong>
+  What follows is the result, not an abandonment.</p>
+
+  <div class="callout">
+    <span class="h">Pooled AUC cannot measure this finding, and that is the whole story</span>
+    <p>On the same 58 studies: the synovitis head scores <strong>0.701</strong>, the model's own
+    <strong>effusion head scores 0.722</strong> as a synovitis classifier, and the <strong>gold effusion
+    label alone scores 0.698</strong>. A number in that region is obtainable with no synovitis-specific
+    skill at all. The metric that can see the finding is <strong>effusion-stratified conditional
+    AUC</strong> — concordance restricted to positive/negative pairs from the same effusion stratum —
+    and it stands at <strong>0.630, 95% CI [0.46, 0.79]</strong>, which does not separate from chance at
+    this sample size. Report the two together. Never the macro: a perfect fix moves it by 0.022.</p>
+  </div>
+
+  <ul class="verdict">
+    <li>
+      <span class="mark out">Answered</span>
+      <div><span class="t">Contrast-enhanced series are effectively absent</span><span class="d">Seven
+      series across three studies of 4,407 name contrast, all T1 fat-suppressed post-gadolinium, none
+      routed to the model as fluid-sensitive and none in the gold 58. There is no routing bug and there
+      is no contrast to exploit. Stated with its blind spot: 17.7% of series carry no usable
+      description, and a description-free control finds 269 studies holding a repeated T1-like
+      acquisition in one plane — an upper bound on what the scan could be missing.</span></div>
+    </li>
+    <li>
+      <span class="mark out">Answered</span>
+      <div><span class="t">The score does not track series composition</span><span class="d">Over 4,349
+      out-of-fold studies the synovitis score correlates with the count of fluid-sensitive
+      fat-suppressed series at +0.132, against the <em>label's</em> own +0.151. The model reads protocol
+      no harder than the truth does, so there is no aggregation artefact to fix.</span></div>
+    </li>
+    <li>
+      <span class="mark out">Measured null</span>
+      <div><span class="t">The frozen path is more gated, not better</span><span class="d">It was the
+      standing evidence that fine-tuning destroys this finding. On conditional AUC it scores 0.609–0.620
+      against the fine-tuned 0.630, a paired −0.011: <em>worse</em> inside the effusion strata (43.4% of
+      pairs misranked against 38.8%) and better across them. Its pooled advantage was effusion coupling
+      the whole time. Do not ship it for this finding.</span></div>
+    </li>
+    <li>
+      <span class="mark out">Measured null</span>
+      <div><span class="t">Training the conditional task directly</span><span class="d">A stratified
+      pairwise ranking loss — the metric, differentiably — diverged: BCE rose tenfold, the head
+      saturated until every study tied, and macro fell 0.86 → 0.71. The mechanism is a property of the
+      labels. A satisfied pair's loss decays as its margin grows while a violated pair's grows without
+      bound, and within-stratum synovitis pairs contradict each other, since the mined targets have a
+      median of 0.010 and the surviving pairs are "the report mentioned it" against "it did not".</span></div>
+    </li>
+    <li>
+      <span class="mark out">Measured null</span>
+      <div><span class="t">Residual parameterisation</span><span class="d">Handing the head
+      <code>β·stopgrad(effusion logit)</code> for free, so its own capacity can only learn the
+      remainder, changed nothing: paired conditional −0.024 on gold, +0.011 on 871 out-of-fold studies
+      where the interval is a third as wide. The coupling survives being given away.</span></div>
+    </li>
+    <li>
+      <span class="mark out">Withdrawn</span>
+      <div><span class="t">Anatomical targeting</span><span class="d">The plan for it rested on a
+      published result — AUC 0.76, level with senior radiologists — obtained by segmenting the
+      suprapatellar capsule and infrapatellar fat pad. That study classifies <em>three types of
+      synovitis among 376 patients who all have it</em>. It is subtype classification, not detection,
+      and the number does not transfer. No public segmentation of either structure exists to build on
+      either: SKM-TEA covers bone, cartilage and meniscus; OAI-ZIB bone and cartilage.</span></div>
+    </li>
+  </ul>
+
+  <div class="callout">
+    <span class="h">Why the ceiling is real, and not a modelling failure</span>
+    <p>Effusion-synovitis and Hoffa-synovitis are <em>surrogates</em> — the radiological literature calls
+    them "sensitive but non-specific" markers with "limited ability to characterize the degree of
+    synovitis", and states plainly that "absence of effusion does not rule out synovitis" while
+    "effusion may occur without synovitis". That is this model's coupling, described before any model
+    was trained. Hoffa-synovitis also carries the weakest reliability of any MOAKS feature:
+    <strong>intra-rater kappa 0.42 and 55% agreement</strong>, the only item below the 75% threshold. A
+    model cannot be scored reliably against a label a reader cannot reproduce against themselves — and
+    only 37% of this project's positive synovitis labels are mentioned in their report at all.</p>
+  </div>
+
+  <div class="callout">
+    <span class="h">What would reopen it — and it is not compute</span>
+    <p>Two inputs, neither of them a model change. <strong>More gold labels:</strong> the conditional
+    interval is ±0.17 on 58 studies, so a genuine move from 0.63 to 0.80 may not clear significance;
+    ~150 radiologist-labelled studies resolve the question outright and make every experiment above
+    re-readable. <strong>Contrast-enhanced series</strong>, which this collection does not have.</p>
+    <p>One idea was costed and declined rather than tried: cropping to Hoffa's fat pad and the
+    suprapatellar pouch. It is buildable without any segmentation model — 4,667 sagittal
+    fluid-sensitive fat-suppressed series over 4,150 of 4,407 studies, 5.6 GB at the existing geometry,
+    with the box derivable in millimetres from <code>ImageOrientationPatient</code> and
+    <code>PixelSpacing</code>. It is declined because the evidence for it did not survive being read,
+    not because it is hard.</p>
+  </div>
+</section>
+
 <footer>
   <p>Measurements from the fold-1 ConvNeXt-T run of 2026-08-30 (16 slices × 5 series), scored on the 58
-  radiologist-labelled studies. Label statistics from the 4,349 report-mined training studies.</p>
+  radiologist-labelled studies. Label statistics from the 4,349 report-mined training studies. Section
+  08 adds the 2026-08-31 runs: the frozen aggregation stack, the stratified ranking loss and the
+  residual parameterisation, each scored with <code>tools/synovitis_gate.py</code> and compared by
+  paired bootstrap on matched studies.</p>
+  <p>External claims in section 08 are cited rather than measured here: Wang et al.,
+  <em>Academic Radiology</em> 31(4):1518–1527 (2024) for the segmentation study;
+  <em>AJR</em> 218(3) (2022) for the surrogate markers; Hunter et al.,
+  <em>Osteoarthritis and Cartilage</em> 19(8):990–1002 (2011) for MOAKS reliability.</p>
   <p>Clinical background in section 01 is the standard radiological account and is not measured here;
   every claim tagged <span class="tag measured" style="vertical-align:0">Measured</span> comes from this
   project's own runs.</p>

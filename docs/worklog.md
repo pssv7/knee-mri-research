@@ -5,6 +5,93 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-08-31 (g) — Stage 4: synovitis is descoped, on the literature rather than on exhaustion
+
+The plan's §10 sent a Stage 1 conditional under 0.70 to Stage 3 -- crops on
+Hoffa's fat pad and the suprapatellar pouch. A literature search took that
+option off the table before it cost a session.
+
+### The result that motivated Stage 3 is a different task
+
+`plan.md` §7 cites "the best published result on this task (AUC 0.76, roughly
+matching senior radiologists at 0.77)" from "explicit segmentation of the
+synovial capsule and infrapatellar fat pad". That is Wang et al., *Academic
+Radiology* 31(4):1518-1527 (2024): **376 patients who all have synovitis,
+classified into three synovitis types.** Subtype classification, not detection.
+The number does not transfer to "does this knee have synovitis", and it was the
+only evidence for Stage 3 -- the plan itself files the stage as
+"literature-motivated only" and "not measured on this data".
+
+### Three more findings, all pointing the same way
+
+**The reference standard is the weakest item in MOAKS.** Hoffa-synovitis
+carries intra-rater kappa 0.42 and 55% percent agreement -- the only MOAKS
+feature under the 75% threshold. A label a reader cannot reproduce against
+themselves caps what any model can score against it. This project's own
+figure sits beside it: 37% report coverage for this finding.
+
+**The confusion is definitional.** The AJR review of synovial inflammation
+imaging calls Hoffa-synovitis and effusion-synovitis "sensitive but
+non-specific" surrogates with "limited ability to characterize the degree of
+synovitis", and states that "absence of effusion does not rule out synovitis"
+while "effusion may occur without synovitis". That is the coupling this project
+spent three experiments on, written down before any model was trained.
+
+**There is nothing public to build a crop on.** SKM-TEA segments bone,
+cartilage and meniscus; OAI-ZIB bone and cartilage. Every infrapatellar fat pad
+segmentation paper used private annotations. Stage 3 by segmentation is an
+annotation project, not a crop.
+
+### The crop was costed anyway, and declined rather than deemed impossible
+
+Worth recording so nobody re-derives it. It needs no segmentation model at all:
+`ImageOrientationPatient` gives the in-plane axes in patient coordinates and
+`PixelSpacing` the scale, so a box can be cut in millimetres -- the same header
+`dicom_io.mirror_axis` already reads for laterality. Restricted to the sequence
+the finding is defined on, it is **4,667 sagittal fluid-sensitive
+fat-suppressed series over 4,150 of 4,407 studies, 5.6 GB** at the existing
+geometry, against the 49 GB full rebuild this project rejected in August. 56 of
+the 58 gold studies are covered. Cropping the *existing* cache would add
+nothing -- `cache.resize_volume` already squashes each slice to 224x224, so the
+detail is spent; the crop has to happen before the resize, which is why it
+needs a build at all.
+
+It is declined because the evidence for it did not survive being read.
+
+### And the arithmetic that was true the whole time
+
+`plan.md` §3: a perfect synovitis fix moves macro by 0.022, inside one standard
+error. Meanwhile the leaderboard has moved without it -- the submissions list
+shows **0.906** on 2026-08-31 06:05 and 0.895 twice, against the 0.891 recorded
+as "best" in `PROJECT.md`, the worklog and the project memory. Which run
+produced 0.906 is **not verified**: `pssv27/submission-2`'s retrievable log is
+a later single-fold run (`convnext_fold3.pt`), and the rule here is to read it
+from the log rather than assume. Flagged in `PROJECT.md` rather than guessed.
+
+### What was written down
+
+`docs/synovitis.html` gains §08 -- the verdict, the four Stage 0 answers, the
+three null interventions with their paired intervals, the ceiling arguments
+with citations, and what would reopen it. `plan.md` is marked RESOLVED with a
+stage-by-stage outcome table so it stops reading as live work. Notebook 08 is
+back at the reference configuration (`RESIDUAL_BETA = None`,
+`LAMBDA_STRATIFIED_RANK = 0.0`) so the next ensemble member trains
+on-reference, and `ENSEMBLE_DONE` finally records fold 4.
+
+**No code was removed.** The Stage 1 levers are tested, default to off and cost
+nothing at those defaults; they are the record of what was tried. Two pieces
+stay in active use regardless of the descope: `src/model/conditional.py` with
+`tools/synovitis_gate.py`, whose paired-bootstrap machinery is not
+synovitis-specific and is the right instrument for any per-finding claim on 58
+studies; and the conditional AUC logged each epoch, which named the run-1
+divergence three epochs in where macro read as an ordinary bad run.
+
+**This is a negative result with a mechanism, not an abandonment.** What is
+open is §6 -- the gold set -- and it is the binding constraint on every
+synovitis experiment already run, not just the next one.
+
+---
+
 ## 2026-08-31 (f) — Stage 1 run 2: the residual head is a null, and the plan's own rule fires
 
 A clean run this time -- BCE falls monotonically 0.488 -> 0.234, nothing

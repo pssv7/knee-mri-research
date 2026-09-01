@@ -3342,15 +3342,12 @@ LAMBDA_STRATIFIED_RANK = 0.0
 STRATIFIED_FINDINGS = ("Synovitis",)
 STRATIFY_BY = "Effusion"
 STRATIFIED_CALIPER = 0.15
-# 0.64 for the Stage 1 residual run: the coefficient of the gold synovitis
-# label on the predicted effusion logit, fitted by IRLS on the 58 --
-# 0.636 +/- 0.245, so a wide interval, and it is still the right number to
-# start from. The alternatives are worse on their face: 1.14 comes from the
-# mined labels, whose silence IS the effusion coupling being escaped, and 0.93
-# is the model's own current self-coupling, which is the thing the residual
-# head is meant to replace rather than reproduce. Below both, deliberately:
-# it leaves room for g to add signal instead of re-deriving effusion.
-RESIDUAL_BETA = 0.64
+# Back to None. 0.64 was run on 2026-08-31 -- the gold synovitis label's
+# coefficient on the predicted effusion logit, 0.636 +/- 0.245 -- and measured
+# null on every instrument: paired conditional -0.024 on gold, +0.011 on 871
+# out-of-fold studies, macro +0.004. Synovitis is descoped (worklog 2026-08-31
+# (g)); this stays at None so the next ensemble member trains on-reference.
+RESIDUAL_BETA = None
 LAMBDA_COUPLING = 0.0
 COUPLING_TARGET = 0.403     # the observed truth coupling, not independence
 

@@ -4,18 +4,32 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-31. **Synovitis is now judged on a different number.**
-Pooled AUC on that finding is reproducible from the effusion label alone
-(0.698, against the synovitis head's 0.701), so it cannot see the finding at
-all; the metric is **effusion-stratified conditional AUC**, which stands at
-0.630 with a 95% CI of [0.46, 0.79]. `plan.md` (repo root) holds the plan and
-its gates; `docs/worklog.md` 2026-08-31 holds what was measured implementing
-it. In short: contrast is genuinely absent from this collection (3 studies of
-4,407, none misrouted, none in the gold 58), the series-composition confound
-does not reproduce, the Stage 0 gate is still undecided because the frozen
-DINOv2 and silence-reweighting predictions on the 58 do not exist, and the
-Stage 1 training code is in and off by default. Never judge this finding on
-macro; never on pooled alone; paired bootstrap only.
+Last updated: 2026-08-31. **Synovitis is descoped, and the leaderboard is
+0.906, not 0.891.**
+
+**Synovitis (closed).** Judge it on **effusion-stratified conditional AUC**,
+never on macro and never on pooled alone -- pooled 0.701 is reproducible from
+the gold effusion label alone (0.698), and the model's own effusion head scores
+0.722 as a synovitis classifier. Conditional stands at 0.630, 95% CI
+[0.46, 0.79]. Four measurements closed it: contrast is effectively absent
+(3 studies of 4,407, none misrouted, none in the gold 58); the frozen path is
+*more* gated, not less (0.620, paired -0.011, worse inside the effusion
+strata); a stratified ranking loss diverged on a property of the labels; and
+the residual parameterisation measured null (paired -0.024 on gold, +0.011 on
+871 out-of-fold studies). Anatomical targeting was withdrawn rather than run --
+the published result it rested on is subtype classification among patients who
+all have synovitis, not detection. `docs/synovitis.html` §08 is the write-up,
+with the ceiling arguments and the citations; `plan.md` in the repo root is the
+plan it answers. **Only two things reopen this, and neither is compute:** ~150
+more gold labels, or contrast-enhanced series.
+
+**The leaderboard number throughout this file is stale.** The submissions list
+shows **0.906** (2026-08-31 06:05, submission 55908661) and 0.895 twice,
+against the 0.891 recorded here and in the worklog. *Provenance not verified* --
+`pssv27/submission-2`'s latest log is a later run (single fold,
+`convnext_fold3.pt`), so which run produced 0.906 is open, and this project's
+rule is to read it from the log rather than assume. Every comparison below that
+treats 0.891 as the ceiling needs re-reading in that light.
 
 Last major shape change: 2026-08-28. **The plan changed shape.** `docs/plan.md` no
 longer runs Phases A-E; it is a model-selection and training-constraint plan,
@@ -73,7 +87,8 @@ in train but **not** in test, so text is a training-time signal only.
 | Fine-tuned ConvNeXt-T, dual-mode sharpened | 0.843 |
 | ConvNeXt-T, 16 slices, 3 series | 0.869 |
 | ConvNeXt-T, 16 slices, 5 series (fold 1) | 0.889 |
-| **ConvNeXt-T, 24 slices, 5 series** (fold 1) | **0.891 ← best** |
+| ConvNeXt-T, 24 slices, 5 series (fold 1) | 0.891 |
+| 2026-08-31 06:05, submission 55908661 (**run not yet verified**) | **0.906 ← best** |
 | ConvNeXt-T, 16 slices, 5 series + report loss 0.5 (fold 1) | 0.880 |
 | ConvNeXt-T, 16 slices, 5 series (**fold 3**) | 0.877 |
 | ConvNeXt-T, 16 x 5, 20 epochs + fixed warmup + P0 fixes (fold 1) | 0.888 |
