@@ -127,31 +127,67 @@ def canonicalize_side(volume: np.ndarray, side: Optional[str],
     return np.flip(volume, axis=axis).copy()
 
 
-def build_series_volume(headers: Sequence[dict]) -> Dict:
+def submission_indices(count: int, slices: int) -> List[int]:
+    """Raw slice indices a `slices`-deep submission actually reads.
+
+    **Not** `select_slices(count, slices)`, and the difference is the whole
+    reason this exists. The submission decodes `CACHE_SLICES` and then
+    subsamples with `np.linspace(0, CACHE_SLICES - 1, TUNED_SLICES)`; picking
+    `slices` evenly across the raw stack in one step lands on *different
+    files* for 41 of the 44 series lengths between 16 and 60. The model would
+    then be scored on anatomy it was not trained to read, and nothing would
+    raise -- the shapes agree either way. That is the same failure the
+    `volumes[:MAX_SERIES]` head truncation already cost this project.
+
+    So the two selections are composed rather than collapsed: the coarse pick
+    the cache would have made, then the fine pick the model applies to it.
+    """
+    coarse = select_slices(count)
+    if slices == config.CACHE_SLICES:
+        return coarse
+    return [coarse[i] for i in select_slices(config.CACHE_SLICES, slices)]
+
+
+def build_series_volume(headers: Sequence[dict],
+                        slices: Optional[int] = None) -> Dict:
     """Full pipeline for one series: sort, decode, normalise, resize.
 
     Mirroring is applied only when config.MIRROR_IN_CACHE is set, which it is
     not by default. The recorded `laterality` is what the loader mirrors on.
     Returns the volume plus the provenance needed to audit it later.
+
+    `slices` exists for the submission, which reads only `TUNED_SLICES` of the
+    `CACHE_SLICES` this decodes: at 16 of 24 that is a third of the pixel
+    decoding done for images the model never sees, and inference time is a
+    *scored quantity* in the Efficiency Prize. It defaults to None, so cache
+    construction is unchanged and every existing shard stays valid.
+
+    **It is not bit-identical to decoding the full depth.**
+    `normalize_intensity` scales each volume by its own 1st/99th percentiles,
+    computed over whatever was decoded, so a shallower stack shifts the
+    intensity mapping slightly. The slices themselves are the same files --
+    see `submission_indices` -- but the uint8 values differ a little, and the
+    submission notebook measures that difference rather than assuming it away.
     """
     if not headers:
         raise ValueError("no headers supplied")
 
+    depth = config.CACHE_SLICES if slices is None else slices
     ordered = dicom_io.sort_slices(headers)
     first_header = ordered[0]
     side = dicom_io.resolve_laterality(ordered)
     geometry_ok = dicom_io.has_geometry(ordered)
 
-    indices = select_slices(len(ordered))
+    indices = submission_indices(len(ordered), depth)
     selected = [ordered[i] for i in indices]
 
     raw = dicom_io.load_series_volume([h["path"] for h in selected])
 
-    # Slices skipped as unreadable leave the volume short of CACHE_SLICES, and
-    # the cache is a fixed-shape array. Re-select across whatever decoded so
-    # the depth is exact regardless of how many files were dropped.
-    if raw.shape[0] != config.CACHE_SLICES:
-        raw = raw[select_slices(raw.shape[0])]
+    # Slices skipped as unreadable leave the volume short of the requested
+    # depth, and the cache is a fixed-shape array. Re-select across whatever
+    # decoded so the depth is exact regardless of how many files were dropped.
+    if raw.shape[0] != depth:
+        raw = raw[select_slices(raw.shape[0], depth)]
 
     resized = resize_volume(raw.astype(np.float32))
     normalized = normalize_intensity(resized)

@@ -5076,13 +5076,65 @@ print(f"studies: {len(studies)}")
 
 KEEP = np.linspace(0, config.CACHE_SLICES - 1, TUNED_SLICES).round().astype(int)
 
+# FAST_DECODE -- stop decoding images the model never looks at.
+#
+# Runtime is a SCORED quantity in the Efficiency Prize, not merely a ceiling:
+# Efficiency = AUC / (Benchmark - maxAUC) + RuntimeSeconds / 32400, minimised,
+# which at Benchmark 0.5 and maxAUC 0.95 makes one hour of runtime worth
+# 0.050 AUC. For scale, the five-fold ensemble's whole advantage over a single
+# fold is +0.017 -- twenty minutes.
+#
+# The reference path decodes EVERY series in the study at CACHE_SLICES depth,
+# and only afterwards does `pick_series` keep TUNED_MAX_SERIES of them and
+# `KEEP` keep TUNED_SLICES of the 24. On a seven-series study that is 7 x 24 =
+# 168 slices decoded where 5 x 16 = 80 are used -- 52% of the pixel decoding
+# thrown away, plus a header read for every file of two series that are never
+# scored. 32.5% of studies carry more than five series.
+#
+# With this on, series are chosen before anything is read, so a seven-series
+# study reads and decodes five. Predictions are unchanged: `pick_series` needs
+# only the count, and both sides order by SeriesInstanceUID -- the sorted
+# directory name -- so exactly the series the reference path would have kept
+# are the ones decoded.
+#
+# **The slice-depth half of this is blocked, and it was the bigger half.**
+# Decoding each series to TUNED_SLICES instead of CACHE_SLICES would drop a
+# third of the remaining pixel work, and `cache.build_series_volume(headers,
+# slices=...)` implements it correctly -- `submission_indices` composes the
+# coarse and fine selections so the same raw files are read, which matters
+# because picking 16 evenly across the raw stack in one step lands on
+# different files for 41 of the 44 series lengths between 16 and 60.
+#
+# What stops it is the SIDE CLASSIFIER: it takes the slice axis as input
+# channels and its first convolution has 24 of them, so a 16-deep volume makes
+# every study raise and fall back to the training prior -- a submission-wide
+# AUC of 0.5, which is exactly what tools/check_submission.py caught. The
+# laterality DICOM tag would sidestep it, but only 58.5% of studies carry it
+# on any series; the other 1,828 need the model. Unblocking this means
+# retraining the side classifier at TUNED_SLICES depth (notebook 04, minutes),
+# and that is a behaviour change to laterality -- which silently transposes
+# four of the twelve findings when it is wrong -- so it is its own experiment,
+# not a rider on this one.
+FAST_DECODE = True
+AB_CHECK = True     # score both paths and report the difference
 
-def build_volumes(study_uid):
+
+def build_volumes(study_uid, fast=False):
     directory = test_root / study_uid
     if not directory.exists():
         return [], []
+    series_dirs = sorted(p for p in directory.iterdir() if p.is_dir())
+
+    # Choose the series BEFORE reading anything. `pick_series` needs only the
+    # count, and both sides order by SeriesInstanceUID -- which is the sorted
+    # directory name -- so this selects exactly what the reference path keeps.
+    if fast:
+        series_dirs = [series_dirs[i] for i in pick_series(len(series_dirs))]
+
+    # Full depth either way: the side classifier reads CACHE_SLICES as input
+    # channels. See the FAST_DECODE note above for what that costs.
     volumes, uids = [], []
-    for series_dir in sorted(p for p in directory.iterdir() if p.is_dir()):
+    for series_dir in series_dirs:
         paths = dicom_io.series_paths(series_dir)
         if not paths:
             continue
@@ -5142,9 +5194,14 @@ def pick_series(count):
     return np.unique(keep).tolist()
 
 
-def tuned_predict(volumes, uids, side):
+def tuned_predict(volumes, uids, side, fast=False):
     # Mirrored and subsampled exactly as during training.
-    chosen = pick_series(len(volumes))
+    #
+    # Under FAST_DECODE the series were already chosen in build_volumes, so
+    # picking again would take a subset of a subset and silently score the
+    # model on a fifth of the intended images. Slice depth is untouched, so
+    # KEEP still applies in both paths.
+    chosen = range(len(volumes)) if fast else pick_series(len(volumes))
     picked = [volumes[i] for i in chosen]
     picked_uids = [uids[i] for i in chosen]
     mirrored, planes = [], []
@@ -5190,20 +5247,43 @@ ids, frozen_rows, tuned_rows, failures = [], [], [], 0
 # it is noise against a real test set.
 loop_start = time.time()
 
+# Decode and forward timed apart. The only runtime figure this project has
+# ever had is a single projected total, which cannot answer either question
+# the efficiency work turns on: how much a sixth fold costs (forward only) and
+# how much FAST_DECODE saves (decode only). One dry run now answers both.
+decode_seconds = 0.0
+forward_seconds = 0.0
+ab_deltas = []
+
 for study in tqdm(studies, desc="studies", unit="study"):
     try:
-        volumes, uids = build_volumes(study)
+        _t = time.time()
+        volumes, uids = build_volumes(study, fast=FAST_DECODE)
         if not volumes:
             raise ValueError("no readable series")
         side = predict_side(volumes)
+        decode_seconds += time.time() - _t
 
         meta = meta_tensor(uids, side)
         mask = torch.ones(1, len(volumes), dtype=torch.bool, device=device)
 
+        _t = time.time()
         frozen_rows.append(frozen_predict(volumes, meta, mask)
                            if (frozen_models and USE_FROZEN) else None)
-        tuned_rows.append(tuned_predict(volumes, uids, side)
-                          if (tuned_models and USE_TUNED) else None)
+        row = (tuned_predict(volumes, uids, side, fast=FAST_DECODE)
+               if (tuned_models and USE_TUNED) else None)
+        forward_seconds += time.time() - _t
+        tuned_rows.append(row)
+
+        # Score the same study the reference way and compare. FAST_DECODE
+        # reads the same raw files but normalises over a shallower stack, so
+        # the predictions move a little; this reports how much instead of
+        # arguing about it.
+        if AB_CHECK and FAST_DECODE and row is not None:
+            slow_volumes, slow_uids = build_volumes(study, fast=False)
+            slow = tuned_predict(slow_volumes, slow_uids,
+                                 predict_side(slow_volumes), fast=False)
+            ab_deltas.append(np.abs(row - slow).max())
     except Exception as exc:  # noqa: BLE001
         failures += 1
         print(f"  fallback for {study[-12:]}: {str(exc)[:80]}")
@@ -5221,6 +5301,27 @@ setup = elapsed - loop_elapsed
 print(f"\\n{len(ids)} studies in {loop_elapsed / 60:.1f} min "
       f"({failures} fallbacks); setup took {setup / 60:.1f} min")
 print(f"per study: {loop_elapsed / max(len(ids), 1):.2f}s")
+
+_n = max(len(ids), 1)
+print(f"  decode  {decode_seconds / _n:.2f}s/study"
+      f"   ({decode_seconds / max(decode_seconds + forward_seconds, 1e-9):.0%} of the loop)")
+print(f"  forward {forward_seconds / _n:.2f}s/study"
+      f"   over {len(tuned_models)} model(s)"
+      + (f", {forward_seconds / _n / len(tuned_models):.2f}s each"
+         if tuned_models else ""))
+print(f"  FAST_DECODE {'on' if FAST_DECODE else 'off'}")
+if AB_CHECK and FAST_DECODE:
+    print("  AB_CHECK is ON: every study is also scored the reference way, "
+          "which is untimed but\n  inflates the loop total and therefore the "
+          "projection below. Set AB_CHECK = False\n  before reading a runtime "
+          "figure; the decode and forward lines above are unaffected.")
+if ab_deltas:
+    print(f"\\nA/B against the reference decode path, {len(ab_deltas)} studies:")
+    print(f"  max absolute prediction difference {max(ab_deltas):.4f}"
+          f"   mean {sum(ab_deltas) / len(ab_deltas):.4f}")
+    print("  This is the intensity-percentile shift, not a different slice "
+          "selection -- the raw files are the same. Anything above ~0.005 "
+          "means stop and re-read cache.submission_indices.")
 """)
 
     nb.md("""
