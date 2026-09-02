@@ -5,6 +5,99 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-09-02 — step 1 verified end to end: the cache is what the code says
+
+**Outcome: the 29 GB that trained the 0.906 ensemble reproduces byte for byte
+from raw DICOM. Step 1's foundation was assumed for four months and is now
+measured. The mirroring concern raised at the start of the session was
+investigated and closed at 24,371/24,371.**
+
+Step 1's entire evidence base was 49 synthetic unit tests and no real series --
+`tests/test_cache.py` has no `TestRealSeries` at all -- while every number this
+project has produced was measured on its output.
+
+### The Kaggle run (notebook 12, CPU kernel, no GPU hours)
+
+    [PASS] A1-A4  3 shards, 24,371 series / 4,407 studies, no duplicates
+    [PASS] A5     0 build errors          <- the manifest column never read
+    [PASS] B1     no study split across shards
+    [PASS] B2     md5(study_uid) % 3 reproduces at 100.00%
+    [PASS] C1/C2  0 blank, 0 degenerate volumes across ALL 24,371
+    [PASS] D1     500/500 series byte-identical when rebuilt from raw DICOM
+
+D1 covers 2% of the corpus, which is enough: the failure it guards against --
+shards and `src/data/` drifting apart -- is systematic, not per-series. A stale
+cache fails on essentially every series, not on a rare one.
+
+### Four corpus facts nobody had written down
+
+    build errors                    0 of 24,371
+    series lacking geometry         0 of 24,371
+    acquired depth                  median 30, range 11-320
+    shorter than 24 slices          4,247 (17.4%), median 4 duplicated of 24,
+                                    287 volumes over one-third duplicate
+    intensity (uint8)               mean 74.6 +/- 22.4, per-slice std 66.3
+
+The padding number is the one worth carrying: a series acquired at 11 slices is
+stored as 24, so more than half its depth is copies. Documented behaviour
+working as designed, but the magnitude was unknown.
+
+### The mirroring question, raised and closed the same day
+
+Two implementations decide which axis a left knee reflects through:
+`cache.mirror_axis` from `ImageOrientationPatient`, and
+`dataset.PLANE_MIRROR_AXIS` from the CSV's `Anatomical_Plane` string. **Only
+the second runs** -- `MIRROR_IN_CACHE` is False, so `canonicalize_side` is
+never reached and the geometry implementation is dead code. A wrong answer
+transposes Medial/Lateral Meniscus and Medial/Lateral OA rather than adding
+noise.
+
+`tools/audit_orientation.py` over the 819,078-header index:
+
+    24,371/24,371 agree; 0 disagree
+    obliquity   sagittal 0.0-40.9deg, coronal 50.3-90.0, axial 53.6-90.0
+                against the 45deg boundary where the answer changes
+    100% carry ImageOrientationPatient; 100% have a recognised plane
+    the mirror axis is constant down every series
+
+They can only diverge past 45 degrees of obliquity, i.e. only if the CSV's
+plane label is flatly wrong. It never is. **Collapsing the two implementations
+is now a tidy-up with no accuracy at stake, not a fix.** Real sagittal series
+are prescribed obliquely -- the dev series sits at 9.1 degrees, the corpus
+reaches 40.9 -- so the margin is real but never crossed.
+
+The Kaggle audit reproduced the local one exactly: identical decision columns,
+obliquity agreeing to 1.4e-14.
+
+### An independent corroboration worth more than either run
+
+The August cache build's own logs record 57+88+48 = **193** series recovered by
+study propagation and 10+11+5 = **26** conflicting studies. The audit derived
+both numbers today from the header index by a completely different route. Two
+computations three months apart agreeing exactly is much stronger evidence that
+the header pipeline is deterministic than either measurement alone.
+
+### Also fixed
+
+`docs/architecture.md` said 41.7% / 10,161 of 24,371 series have no side
+*after* propagation. That is the **before** figure; after propagation it is
+9,968 (40.9%), and the 193 difference is exactly what propagation recovers.
+
+### What this does NOT close
+
+**Laterality.** 9,968 series (40.9%) have no side from metadata and rest
+entirely on the classifier at 98.97% study accuracy -- roughly **45 of 4,407
+studies mirrored backwards**, four findings transposed on each, baked into
+every measurement including the 0.906. Plus the 26 conflicting studies. That is
+a measured limitation rather than a defect, it belongs to notebook 04, and it
+is the largest known exposure left in the image tributary.
+
+Tooling that stays: `tools/verify_cache.py`, `tools/audit_orientation.py`,
+`notebooks/12_verify_cache.ipynb`. Re-run 12 after any change under
+`src/data/`.
+
+---
+
 ## 2026-09-01 (c) — the inference budget, measured: decode is half of it
 
 The dry run, five folds attached, `AB_CHECK` off:

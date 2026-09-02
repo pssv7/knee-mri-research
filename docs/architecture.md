@@ -164,9 +164,20 @@ it transposes those four labels.
 
 And the side is largely missing. `ImageLaterality` is never populated,
 `Laterality` is present but empty on most rows, and `SeriesDescription` is
-anonymised to a placeholder. After propagating what can be propagated within a
-study, **41.7% of series — 10,161 of 24,371 — have no recoverable side from
-metadata.**
+anonymised to a placeholder. From the tags alone 14,210 of 24,371 series carry
+a side; study-level propagation recovers a further 193, leaving **40.9% of
+series — 9,968 of 24,371 — with no recoverable side from metadata.**
+
+Twenty-six studies are left unresolved deliberately: their own series
+contradict each other on the side, which breaks the one-knee-per-study
+assumption propagation rests on.
+
+*(Corrected 2026-09-02. This paragraph read "41.7%, 10,161 of 24,371 **after**
+propagation"; 10,161 is the count **before** it. The 193-series difference is
+exactly what propagation recovers. Verified twice by independent routes —
+`tools/audit_orientation.py` over the header index, and the cache build's own
+logs, which record 57+88+48 = 193 recovered and 10+11+5 = 26 conflicting
+across the three shards.)*
 
 The fix is a small CNN trained from scratch on the 14,210 series whose side
 *is* known, predicting the rest. It reaches **98.97% study-level accuracy**.
@@ -520,7 +531,7 @@ ambiguity in extraction resolves to "unknown" rather than "no".
 | Cached series volume | 24 x 224 x 224 uint8 |
 | Training geometry | 16 slices x 5 series |
 | Backbone | ConvNeXt-T, 27.8M params, 768 features |
-| Series with no side in metadata | 41.7% |
+| Series with no side in metadata | 40.9% (9,968 of 24,371, after propagation) |
 | Side classifier accuracy | 98.97% at study level |
 | Folds | 5, stratified, split by study |
 | Training cost | ~1 h per fold on 2 GPUs |

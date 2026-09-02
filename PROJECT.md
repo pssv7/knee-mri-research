@@ -4,8 +4,27 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
-Last updated: 2026-08-31. **Synovitis is descoped, and the leaderboard is
-0.906, not 0.891.**
+Last updated: 2026-09-02. **Synovitis is descoped, the leaderboard is 0.906,
+not 0.891, and step 1 is now verified against the shipped cache rather than
+assumed.**
+
+**Step 1 (ingest) is verified end to end, artifact as well as code
+(2026-09-02).** The 29 GB that trained the 0.906 ensemble reproduces byte for
+byte from raw DICOM: 500/500 rebuilt series exact, 0 blank or degenerate
+volumes across all 24,371, 0 build errors, no study split across shards, and
+`md5(study_uid) % 3` reproducing at 100.00%. Re-run `notebooks/12_verify_cache.ipynb`
+(CPU kernel, no GPU hours) after any change under `src/data/`. The mirroring
+concern that opened the session is closed: the geometry ruler and the
+`Anatomical_Plane` string agree on **24,371/24,371** series, so collapsing the
+two implementations is a tidy-up, not a fix. See worklog 2026-09-02.
+
+**The remaining exposure in the image tributary is laterality, not the cache.**
+9,968 series (40.9%) carry no side in the metadata and rest entirely on the
+side classifier's 98.97% study accuracy -- roughly **45 of 4,407 studies
+mirrored backwards**, which transposes four of the twelve findings on each and
+is baked into every measurement including the 0.906. Twenty-six further studies
+have series that contradict each other on the side and are left unresolved by
+design. This is a measured limitation, not a defect; it belongs to notebook 04.
 
 **Synovitis (closed).** Judge it on **effusion-stratified conditional AUC**,
 never on macro and never on pooled alone -- pooled 0.701 is reproducible from
