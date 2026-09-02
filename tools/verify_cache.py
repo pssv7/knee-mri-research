@@ -63,30 +63,38 @@ def find_inputs(pattern):
 
 
 def load_manifests(split):
-    """Every shard's manifest, tagged with the shard file it belongs to."""
+    """Every shard's manifest, tagged with the shard file when one is present.
+
+    Driven by the manifests rather than by the .npy files, because the
+    manifests answer most of this script's questions and are ~400 KB each
+    against ~10 GB. `kaggle kernels output <kernel> --file-pattern
+    'manifest.*parquet'` fetches them alone, so the inventory and sharding
+    checks run anywhere; only the volume and rebuild checks need the shards.
+
+    `cache_path` is NaN when the shard is absent, which is what the volume
+    checks test for before reading pixels.
+    """
     frames = []
-    for cache_path in find_inputs(f"cache_{split}_*.npy"):
-        manifest_path = cache_path.replace("cache_", "manifest_").replace(".npy", ".parquet")
-        if not os.path.exists(manifest_path):
-            stem = os.path.basename(cache_path)[len("cache_"):-len(".npy")]
-            hits = [m for m in find_inputs(f"manifest_{split}_*.parquet")
-                    if os.path.basename(m).startswith(f"manifest_{stem}")]
-            if not hits:
-                print(f"  WARNING: no manifest beside {cache_path}")
-                continue
-            manifest_path = hits[0]
+    for manifest_path in find_inputs(f"manifest_{split}_*.parquet"):
         frame = pd.read_parquet(manifest_path)
+        cache_path = manifest_path.replace("manifest_", "cache_").replace(".parquet", ".npy")
+        if not os.path.exists(cache_path):
+            stem = os.path.basename(manifest_path)[len("manifest_"):-len(".parquet")]
+            hits = [c for c in find_inputs(f"cache_{split}_*.npy")
+                    if os.path.basename(c).startswith(f"cache_{stem}")]
+            cache_path = hits[0] if hits else None
         frame["cache_path"] = cache_path
+        frame["manifest_path"] = manifest_path
         frames.append(frame)
     if not frames:
-        raise SystemExit(f"no cache shards found for split {split}")
+        raise SystemExit(f"no shard manifests found for split {split}")
     return pd.concat(frames, ignore_index=True)
 
 
 def check_inventory(manifest, expected_series, expected_studies):
     n_series = manifest["SeriesInstanceUID"].nunique()
     n_studies = manifest["StudyInstanceUID"].nunique()
-    n_shards = manifest["cache_path"].nunique()
+    n_shards = manifest["manifest_path"].nunique()
 
     check("A1 all three shards are attached", n_shards == 3, f"{n_shards} shard(s) found")
     check("A2 series count matches the documented cache",
@@ -131,7 +139,7 @@ def check_inventory(manifest, expected_series, expected_studies):
 
 def check_sharding(manifest):
     """Every series of a study must live in one shard, or study assembly is partial."""
-    per_study = manifest.groupby("StudyInstanceUID")["cache_path"].nunique()
+    per_study = manifest.groupby("StudyInstanceUID")["manifest_path"].nunique()
     split = per_study[per_study > 1]
     check("B1 no study is split across shards",
           len(split) == 0,
@@ -143,9 +151,9 @@ def check_sharding(manifest):
     def shard_of(study_uid):
         return int(hashlib.md5(str(study_uid).encode()).hexdigest(), 16) % 3
 
-    shard_index = {path: i for i, path in enumerate(sorted(manifest["cache_path"].unique()))}
+    shard_index = {path: i for i, path in enumerate(sorted(manifest["manifest_path"].unique()))}
     if len(shard_index) == 3:
-        actual = manifest["cache_path"].map(shard_index)
+        actual = manifest["manifest_path"].map(shard_index)
         expected = manifest["StudyInstanceUID"].map(shard_of)
         agree = float((actual == expected).mean())
         check("B2 shard assignment reproduces md5(study_uid) % 3",
@@ -157,8 +165,13 @@ def check_sharding(manifest):
 
 def check_volumes(manifest, sample):
     """Find volumes that are blank or degenerate -- normalize_intensity's silent path."""
-    rng = random.Random(0)
-    rows = manifest.sample(n=min(sample, len(manifest)), random_state=0)
+    if manifest["cache_path"].isna().all():
+        print("[SKIP] C  cache shards not attached (manifests only); the blank- and\n"
+              "         degenerate-volume checks need the .npy files")
+        return {}
+
+    rows = manifest[manifest["cache_path"].notna()]
+    rows = rows.sample(n=min(sample, len(rows)), random_state=0)
 
     blank, low_var, stats = 0, 0, []
     by_shard = {}
@@ -188,6 +201,11 @@ def check_volumes(manifest, sample):
 
 def check_rebuild(manifest, by_shard, count, split):
     """The decisive check: does today's code reproduce the shipped bytes?"""
+    if not by_shard:
+        print("[SKIP] D  cache shards not attached; the byte-for-byte rebuild needs "
+              "them alongside the raw DICOM")
+        return
+
     root = Path(config.DATA_ROOT) / split
     if not root.exists():
         print(f"[SKIP] D  competition data not attached ({root} missing); "
@@ -254,6 +272,17 @@ def main():
     if FAILURES:
         print(f"{len(FAILURES)} check(s) FAILED: {', '.join(FAILURES)}")
         raise SystemExit(1)
+
+    # A manifests-only run proves the bookkeeping, not the pixels. Saying
+    # otherwise would be the exact overclaim this script exists to prevent.
+    if not by_shard:
+        print("manifest checks passed: the bookkeeping is sound (inventory, "
+              "sharding, zero build errors).")
+        print("NOT verified: volume contents and the byte-for-byte rebuild. "
+              "Attach the cache shards")
+        print("and the competition data to settle whether the shipped pixels "
+              "match today's code.")
+        return
     print("all checks passed -- the shipped cache matches the code that reads it")
 
 
