@@ -6688,8 +6688,23 @@ if WRITE_PREDICTIONS:
     out = pd.concat([known, predicted], ignore_index=True)
     out.to_parquet("/kaggle/working/side_predictions_v2.parquet", index=False)
     print("wrote side_predictions_v2.parquet", out.shape)
-    print("The incumbent side_predictions.parquet is untouched. Swapping it "
-          "in requires retraining all five folds.")
+
+    # The WEIGHTS are the half that ships for free. Notebook 10 predicts the
+    # side of every test study at submission time, so a better classifier
+    # improves the leaderboard with no fold retraining at all -- only the
+    # training-side parquet above costs five retrains.
+    torch.save(model.state_dict(), "/kaggle/working/side_model_planeaware.pt")
+    print("wrote side_model_planeaware.pt")
+    print()
+    print("To ship the weights: put this file in the submission dataset as "
+          "side_model.pt")
+    print("(notebook 10 looks it up by that name) and keep the old one until "
+          "a submission")
+    print("confirms it. No fold retraining is needed for this half.")
+    print("The incumbent side_predictions.parquet is untouched -- swapping "
+          "THAT in is what")
+    print("costs five retrains, and the table above says it buys about one "
+          "study in 387.")
 else:
     print("WRITE_PREDICTIONS is off -- nothing was written.")
     print("Read the table above first; shipping costs five fold retrains.")
