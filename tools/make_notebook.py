@@ -6320,8 +6320,18 @@ index = pd.read_parquet(
     columns=["SeriesInstanceUID", "Manufacturer", "ImagePositionPatient"])
 # ImagePositionPatient's x is the patient left-right axis, so it separates the
 # two knees with no model at all. Averaged per series; one slice is noisy.
-index["x"] = [p[0] if isinstance(p, (list, tuple)) and len(p) == 3 else np.nan
-              for p in index["ImagePositionPatient"]]
+# np.ndarray matters here: parquet returns ImagePositionPatient as an
+# ndarray, not a list, and a (list, tuple) test silently rejects every row.
+# x then becomes NaN, NaN > threshold is False, and the rule degenerates to
+# predicting "R" for every study -- which scores exactly the R-prevalence and
+# looks like a real number. dicom_io.read_header returns a list, so notebook
+# 10's copy of this sees a different type from the same field.
+index["x"] = [p[0] if isinstance(p, (list, tuple, np.ndarray)) and len(p) == 3
+              else np.nan for p in index["ImagePositionPatient"]]
+_missing_x = int(np.isnan(index["x"]).sum())
+if _missing_x:
+    print(f"WARNING: {_missing_x:,} of {len(index):,} series have no "
+          f"ImagePositionPatient x -- the geometry arm is degenerate for them")
 index = index.groupby("SeriesInstanceUID", as_index=False).agg(
     Manufacturer=("Manufacturer", "first"), x=("x", "mean"))
 manifest = manifest.merge(index, on="SeriesInstanceUID", how="left")
@@ -6502,10 +6512,17 @@ def evaluate(model, rows):
     # The second, independent signal. Notebook 10 ships this same rule as a
     # cross-check; here it can be scored, because these studies have labels.
     geo = scored.groupby("StudyInstanceUID")["x"].mean()
+    # Built by explicit reindex on one shared index rather than by relying on
+    # the DataFrame constructor to align a dict-ordered Series against a raw
+    # numpy array -- and the uid is kept as a column, because the concat below
+    # discards the index and the file is useless without it.
+    uids = study_truth.index
     per_study = pd.DataFrame({
-        "truth": study_truth,
-        "cnn": pd.Series(votes),
-        "geometry": np.where(geo > GEOMETRY_THRESHOLD, "L", "R"),
+        "StudyInstanceUID": uids,
+        "truth": study_truth.reindex(uids).to_numpy(),
+        "cnn": pd.Series(votes).reindex(uids).to_numpy(),
+        "geometry": np.where(geo.reindex(uids).to_numpy() > GEOMETRY_THRESHOLD,
+                             "L", "R"),
     })
     return scored, float(scored["correct"].mean()), study_acc, per_study
 
@@ -6578,6 +6595,12 @@ for (mode, label), g in studies.groupby(["split", "augment"], sort=False):
           f"{(g['geometry'] == g['truth']).mean():>10.4f}"
           f"{agree.mean():>10.4f}"
           f"{len(d):>11}{cnn_wins:>10.2f}{geo_wins:>10.2f}")
+
+if studies["geometry"].nunique() < 2:
+    print()
+    print("WARNING: the geometry rule returned a single value for every study.")
+    print("         That is the degenerate case, not a result -- check that")
+    print("         ImagePositionPatient survived the parquet read.")
 
 print()
 print("cnn_wins and geo_wins are the fraction of DISAGREEMENTS each signal got")
