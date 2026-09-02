@@ -5892,6 +5892,187 @@ except ImportError:
     nb.write(NOTEBOOKS / "11_error_analysis.ipynb")
 
 
+# ---------------------------------------------------------------------------
+# 12 -- cache verification
+# ---------------------------------------------------------------------------
+
+def build_verify_notebook():
+    """The step-1 receipt: does the shipped cache match the code that reads it?
+
+    Everything this notebook runs is already committed under tools/. It exists
+    because both scripts need the 29 GB of shards and the raw DICOM in the same
+    place, which is only true on Kaggle. CPU only -- it spends no GPU hours.
+    """
+    nb = Notebook()
+
+    nb.md("""
+# 12 - Verify the Cache
+
+Step 1 reduces 570 GB of DICOM to a 29 GB cache and everything downstream
+reads only the cache. Its correctness has never been checked against the
+shards themselves: the local suite proves the *functions* are right, and the
+manifests prove the *bookkeeping* is right, but nothing has confirmed that the
+pixels in the shipped shards are what today's code produces.
+
+The shards were built 2026-08-23. `src/data/` changed afterwards. Every number
+this project has measured, the 0.906 included, was measured on these volumes.
+
+**Attach, in the sidebar:**
+
+| input | what for |
+|---|---|
+| competition `rsna-knee-abnormality-detection` | raw DICOM, for the rebuild |
+| notebook output `knee-cache-224-01-shard-1` | shard 0 + its manifest |
+| notebook output `knee-cache-224-01-shard-2` | shard 1 + its manifest |
+| notebook output `knee-cache-224-01-shard-3` | shard 2 + its manifest |
+| dataset `pssv27/knee-index` *(optional)* | header index, for the orientation audit |
+
+**Accelerator: None.** No GPU is used, so this costs nothing against the
+25 GPU-hour weekly quota. Internet is not needed.
+
+Everything runs from `tools/verify_cache.py` and `tools/audit_orientation.py`,
+embedded below from the repo rather than reimplemented -- reimplementing a
+preprocessing step in a notebook is how a train/test skew gets introduced.
+""")
+
+    nb.code(bootstrap_cell(
+        modules=KAGGLE_MODULES + [
+            "src/model/__init__.py",
+            "src/model/dataset.py",
+            "tools/verify_cache.py",
+            "tools/audit_orientation.py",
+        ],
+        require_raw_dicom=False))
+
+    nb.md("""
+## What is actually attached
+
+Printed before anything runs, because the commonest failure here is a missing
+input rather than a real defect -- and a missing shard makes the run *look*
+healthy while checking a third of the corpus.
+""")
+
+    nb.code("""
+import glob, os
+
+def show(pattern, label):
+    hits = []
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        hits += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    print(f"{label}: {len(hits)}")
+    for path in hits:
+        size = os.path.getsize(path) / 1e9
+        print(f"   {size:6.2f} GB  {path}")
+    return hits
+
+shards = show("cache_train_series_*.npy", "cache shards")
+manifests = show("manifest_train_series_*.parquet", "manifests")
+index = show("index_train.parquet", "header index (optional)")
+
+raw = any((config.DATA_ROOT / m).exists() for m in ("train_series", "test_series"))
+print()
+print("competition data:", "attached" if raw else "MISSING")
+print("data root:", config.DATA_ROOT)
+print()
+if len(shards) != 3:
+    print("WARNING: expected 3 cache shards. The rebuild check will only cover")
+    print("         what is attached, and the inventory check will fail on A1.")
+if not raw:
+    print("WARNING: no raw DICOM, so the byte-for-byte rebuild will skip. That")
+    print("         is the only check that can prove the pixels are correct.")
+""")
+
+    nb.md("""
+## The verification
+
+Two settings:
+
+- **`SAMPLE`** -- how many series to scan for blank or degenerate volumes.
+  Reads one mid slice per series, ~50 KB each, so the full corpus is about
+  1.2 GB of reads. Left at the full 24,371 rather than a sample: this closes
+  the check instead of estimating it.
+- **`REBUILD`** -- how many series to re-derive from raw DICOM and compare
+  byte for byte. This is the decisive one. Roughly 0.55 s/series, so 500 is
+  about five minutes. Raise it if you want tighter coverage; there is no
+  runtime cap worth respecting on a CPU kernel.
+
+A mismatch here means the cache and the code have diverged, and every
+measurement this project has taken was taken on the cache.
+""")
+
+    nb.code("""
+import subprocess, sys
+
+SAMPLE = 24371     # scan every series for blank/degenerate volumes
+REBUILD = 500      # series re-derived from raw DICOM and compared byte for byte
+
+command = [sys.executable, "tools/verify_cache.py",
+           "--sample", str(SAMPLE), "--rebuild", str(REBUILD)]
+print(" ".join(command), flush=True)
+
+result = subprocess.run(command, text=True, capture_output=True)
+report = result.stdout + result.stderr
+print(report)
+
+# Persist the receipt. Save & Run All captures /kaggle/working, so the result
+# survives the session rather than living in a scrollback nobody can cite.
+with open("/kaggle/working/cache_verification.txt", "w") as handle:
+    handle.write(report)
+print("exit status:", result.returncode, "(0 = every check passed)")
+""")
+
+    nb.md("""
+## Orientation audit (optional)
+
+Runs only if `index_train.parquet` is attached. It decodes no pixels and
+answers a different question: do the two implementations of *which axis a left
+knee reflects through* agree across all 24,371 series? They diverge only past
+45 degrees of obliquity, i.e. only when the CSV's plane label is flatly wrong,
+and a wrong answer transposes Medial/Lateral Meniscus and Medial/Lateral OA
+rather than adding noise.
+
+This already ran locally on 2026-09-02 and passed 24,371/24,371. It is here so
+the result can be reproduced where the index lives natively.
+""")
+
+    nb.code("""
+if index:
+    command = [sys.executable, "tools/audit_orientation.py",
+               "--index", index[0],
+               "--out", "/kaggle/working/orientation_audit.parquet"]
+    print(" ".join(command), flush=True)
+    audit = subprocess.run(command, text=True, capture_output=True)
+    print(audit.stdout + audit.stderr)
+    print("exit status:", audit.returncode)
+else:
+    print("index_train.parquet not attached -- skipping the orientation audit.")
+    print("Attach the dataset pssv27/knee-index to run it.")
+""")
+
+    nb.md("""
+## Reading the result
+
+`exit status: 0` on the verification cell means the shipped cache reproduces
+from raw DICOM and carries no blank volumes -- step 1 is then verified end to
+end, artifact as well as code.
+
+A **FAIL on D1** is the one that matters. It means the shards and `src/data/`
+have drifted apart, and the fix is a cache rebuild, not a code change. Read the
+per-series `mean |diff|` it prints: a max of 1 or 2 levels out of 255 is
+percentile drift from a differently-sized decode, while a large difference
+means different *slices*, which is a train/test skew.
+
+`cache_verification.txt` and `orientation_audit.parquet` are written to
+`/kaggle/working`. **Save & Run All** to keep them; Quick Save does not capture
+the working directory.
+""")
+
+    nb.write(NOTEBOOKS / "12_verify_cache.ipynb")
+
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
@@ -5907,6 +6088,7 @@ def main():
     build_ensemble_notebook()
     build_ensemble_notebook(colab=True)
     build_error_analysis_notebook()
+    build_verify_notebook()
 
 
 if __name__ == "__main__":
