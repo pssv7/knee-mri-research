@@ -6073,6 +6073,455 @@ the working directory.
 
 
 
+# ---------------------------------------------------------------------------
+# 13 -- side classifier: transfer validation and the plane-aware flip
+# ---------------------------------------------------------------------------
+
+def build_side_validation_notebook():
+    """Measure the two defects found in notebook 04 on 2026-09-02.
+
+    Deliberately a measurement, not a replacement. It never overwrites
+    `side_predictions.parquet` -- that file decides how every training volume
+    is mirrored, and the 0.906 ensemble was trained on it, so shipping a new
+    one is a separate decision that costs five retrains.
+    """
+    nb = Notebook(gpu=True)
+
+    nb.md("""
+# 13 - Side Classifier: Transfer and the Plane-Aware Flip
+
+Notebook 04's classifier reports **99.22% study accuracy** and the pipeline
+mirrors 9,968 series (40.9%) on its word. Two defects were found on
+2026-09-02, and this measures both. It changes nothing that ships.
+
+**Defect 1 - the augmentation is plane-blind.**
+`side_classifier.flip_input` exists to mirror along each series' own
+medial-lateral axis. Notebook 04 never calls it: it hardcodes a slice-axis
+reversal and flips the label with it. For coronal and axial series - **59.5%
+of the corpus** - the slice axis is not medial-lateral, so the transform does
+not change the side and the label flip is simply wrong. Measured effect on
+agreement with the study vote: sagittal 97.9%, axial 95.9%, coronal 95.2%.
+
+**Defect 2 - validated on one population, applied to another.**
+Training labels come from the DICOM side tag, and tag presence tracks the
+scanner almost perfectly:
+
+    manufacturer               tagged   predicted
+    Siemens Healthineers        5,304           5
+    SIEMENS                     3,168       1,292
+    Philips Medical Systems     1,715       1,899
+    GE MEDICAL SYSTEMS          1,041       3,873
+    TOSHIBA                         0       1,015   <- never seen labelled
+    CANON_MEC                       0         328   <- never seen labelled
+
+**1,343 series across 226 studies come from manufacturers with zero labelled
+training examples.** The 99.22% is measured overwhelmingly on Siemens and
+Philips; the work is done on GE, Toshiba and Canon. The model is *confident*
+there (0.886 and 0.967), which is what being confidently wrong looks like if
+it is wrong, and is no evidence either way.
+
+Toshiba and Canon cannot be scored directly - they carry no labels at all. So
+this holds out **GE** and **Philips Medical Systems** instead: both are large
+in the applied population and small enough in the training set that removing
+them does not confound "unseen scanner" with "less data". That estimates the
+penalty for a scanner unseen in training, and applies it to the 226 studies.
+
+**Attach:** the three `knee-cache-224-01-shard-*` notebook outputs, the
+competition (for `train_series.csv`), and the dataset `pssv27/knee-index`
+(for `Manufacturer`). **GPU on.**
+
+Six runs at roughly 20 minutes: three splits x two augmentations.
+""")
+
+    nb.code(bootstrap_cell(
+        modules=KAGGLE_MODULES + [
+            "src/model/__init__.py",
+            "src/model/side_classifier.py",
+            "src/model/dataset.py",
+        ],
+        require_raw_dicom=False))
+
+    nb.md("""
+## Load the cache, the plane, and the scanner
+
+Three joins. The manifest carries the training label (`laterality_resolved`);
+`train_series.csv` carries `Anatomical_Plane`, which notebook 04 never loaded
+and without which the plane-aware flip cannot be written; the header index
+carries `Manufacturer`.
+""")
+
+    nb.code("""
+import glob
+import os
+
+import numpy as np
+import pandas as pd
+
+# The bootstrap binds knee_dataset only when src/model/net.py is materialised,
+# which it is not here -- this notebook needs the plane table and nothing else
+# from the model package, so it imports it by name rather than carrying the
+# whole stack.
+from src.model import dataset as knee_dataset
+
+
+def find_inputs(pattern):
+    # The competition directory is skipped: ~820,000 DICOM files and never
+    # where these live. Same shape as notebook 04's helper.
+    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    return found
+
+
+def find_competition_file(name):
+    for candidate in (f"data/{name}", f"/kaggle/input/competitions/*/{name}",
+                      f"/kaggle/input/*/{name}"):
+        hits = sorted(glob.glob(candidate))
+        if hits:
+            return hits[0]
+    raise SystemExit(f"missing competition file: {name}")
+
+
+cache_files = find_inputs("cache_train_series_*.npy")
+if len(cache_files) != 3:
+    print(f"WARNING: {len(cache_files)} cache shards attached, expected 3.")
+    print("         A partial cache trains on part of the corpus and looks fine.")
+
+manifests = []
+for path in find_inputs("manifest_train_series_*.parquet"):
+    frame = pd.read_parquet(path)
+    frame["shard_file"] = path
+    manifests.append(frame)
+manifest = pd.concat(manifests, ignore_index=True)
+
+# Plane, for the flip axis.
+series_meta = pd.read_csv(find_competition_file("train_series.csv"))
+manifest = manifest.merge(
+    series_meta[["SeriesInstanceUID", "Anatomical_Plane"]],
+    on="SeriesInstanceUID", how="left")
+
+# Manufacturer, for the holdout. One row per series off the header index.
+index_files = find_inputs("index_train.parquet")
+if not index_files:
+    raise SystemExit("index_train.parquet not attached -- add the dataset "
+                     "pssv27/knee-index. The transfer arms need Manufacturer.")
+index = pd.read_parquet(index_files[0],
+                        columns=["SeriesInstanceUID", "Manufacturer"])
+index = index.groupby("SeriesInstanceUID", as_index=False).first()
+manifest = manifest.merge(index, on="SeriesInstanceUID", how="left")
+
+# The medial-lateral axis of the cached volume, per series. This is the whole
+# of defect 1: notebook 04 assumed it was 0 everywhere.
+manifest["plane_axis"] = manifest["Anatomical_Plane"].map(
+    knee_dataset.PLANE_MIRROR_AXIS).fillna(
+        knee_dataset.DEFAULT_MIRROR_AXIS).astype(int)
+
+shards = {}
+for path in cache_files:
+    shards[path] = np.load(path, mmap_mode="r")
+
+def locate(row):
+    stem = os.path.basename(row["shard_file"]).replace(
+        "manifest_", "cache_").replace(".parquet", ".npy")
+    for path in shards:
+        if path.endswith(stem):
+            return path
+    return None
+
+manifest["cache_path"] = manifest.apply(locate, axis=1)
+manifest = manifest[manifest["cache_path"].notna()].reset_index(drop=True)
+
+labelled = manifest[manifest["laterality_resolved"].notna()].reset_index(drop=True)
+print(f"series {len(manifest):,}  labelled {len(labelled):,}  "
+      f"studies {manifest['StudyInstanceUID'].nunique():,}")
+print()
+print("labelled series by plane and manufacturer:")
+print(pd.crosstab(labelled["Manufacturer"], labelled["Anatomical_Plane"]).to_string())
+""")
+
+    nb.md("""
+## The 3 x 2 design
+
+`SPLITS` are three ways of choosing what the model never sees:
+
+- **study-grouped** reproduces notebook 04 exactly (seed 0, 85/15 by study).
+  Its purpose is to confirm the harness lands near 99.22% before anything
+  else here is believed.
+- **hold out GE** and **hold out Philips Medical Systems** train on every
+  other manufacturer and score the held-out one. That is the Toshiba/Canon
+  situation, measured.
+
+`AUGMENTATIONS` is defect 1: `False` is notebook 04's blind slice flip,
+`True` calls `side_classifier.flip_input` with each series' own axis.
+
+Nothing here writes predictions. `WRITE_PREDICTIONS` at the bottom is off.
+""")
+
+    nb.code("""
+EPOCHS = 6
+SEED = 0
+
+SPLITS = ["study", "GE MEDICAL SYSTEMS", "Philips Medical Systems"]
+AUGMENTATIONS = [False, True]
+
+
+# Study-grouped is notebook 04's split, reproduced. The manufacturer arms hold
+# out one vendor entirely, which is the only way to ask what happens on a
+# scanner the model has never been shown a label for.
+def make_split(rows, mode):
+    if mode == "study":
+        rng = np.random.default_rng(SEED)
+        # np.asarray before shuffling. pandas returns an ArrowStringArray from
+        # .unique(), and numpy warns that shuffling a non-Sequence "may contain
+        # duplicates after shuffling" -- which on this line would put a study in
+        # both train and val and inflate the accuracy silently. No duplicates
+        # were observed on pandas 3.0.5, but this is the one line where the
+        # guarantee matters. Notebook 04 carries the same pattern unfixed, so
+        # that its source still matches the run that produced the shipped
+        # side_predictions.parquet.
+        studies = np.asarray(rows["StudyInstanceUID"].unique(), dtype=object)
+        rng.shuffle(studies)
+        cut = int(0.85 * len(studies))
+        train_studies = set(studies[:cut])
+        held = rows["StudyInstanceUID"].isin(train_studies)
+        return rows[held].reset_index(drop=True), rows[~held].reset_index(drop=True)
+
+    held = rows["Manufacturer"] == mode
+    if held.sum() == 0:
+        raise SystemExit(f"no labelled series for manufacturer {mode}")
+    return rows[~held].reset_index(drop=True), rows[held].reset_index(drop=True)
+
+
+for mode in SPLITS:
+    tr, va = make_split(labelled, mode)
+    print(f"{mode:<26} train {len(tr):>6,} series / "
+          f"{tr['StudyInstanceUID'].nunique():>5,} studies   "
+          f"val {len(va):>6,} / {va['StudyInstanceUID'].nunique():>5,}")
+""")
+
+    nb.md("""
+## Dataset
+
+The only difference from notebook 04 is the flip. Blind mode reverses the
+slice axis whatever the plane; aware mode calls `side_classifier.flip_input`,
+which takes the axis from the series' own acquisition plane. The label flips
+in both cases -- which is correct in aware mode by construction, and is
+exactly what is wrong in blind mode for coronal and axial.
+""")
+
+    nb.code("""
+import torch
+from torch.utils.data import Dataset, DataLoader
+
+
+class SideDataset(Dataset):
+    def __init__(self, rows, augment=False, plane_aware=False):
+        self.rows = rows.reset_index(drop=True)
+        self.augment = augment
+        self.plane_aware = plane_aware
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, i):
+        row = self.rows.iloc[i]
+        volume = np.asarray(shards[row["cache_path"]][int(row["position"])])
+        x = side_classifier.prepare_batch(volume)[0]
+        y = 1.0 if row.get("laterality_resolved") == "R" else 0.0
+
+        if self.augment and np.random.rand() < 0.5:
+            if self.plane_aware:
+                # The repo's own function, given this series' medial-lateral
+                # axis. Calling it rather than reimplementing is the point:
+                # notebook 04 reimplemented it and got it wrong.
+                x = side_classifier.flip_input(
+                    x[None], [int(row["plane_axis"])])[0]
+            else:
+                x = x[::-1]
+            y = 1.0 - y
+
+        x = np.ascontiguousarray(x)
+        return torch.from_numpy(x), torch.tensor(y, dtype=torch.float32)
+""")
+
+    nb.md("""
+## Train and score every arm
+
+Each arm trains from scratch. The reported numbers are series accuracy, study
+accuracy after the confidence-weighted vote, and the per-plane breakdown -
+which is the table notebook 04's markdown promised and its code replaced with
+slice-count bins, and which is why defect 1 went unnoticed.
+""")
+
+    nb.code("""
+import time
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+results = []
+
+
+def evaluate(model, rows):
+    model.eval()
+    probs = []
+    loader = DataLoader(SideDataset(rows), batch_size=64, num_workers=2)
+    with torch.no_grad():
+        for x, _ in loader:
+            probs.append(torch.sigmoid(model(x.to(device))).cpu().numpy())
+    probs = np.concatenate(probs)
+
+    scored = rows.copy()
+    scored["prob_right"] = probs
+    truth = (scored["laterality_resolved"] == "R").to_numpy().astype(int)
+    scored["correct"] = (probs >= 0.5).astype(int) == truth
+
+    votes = side_classifier.study_level_vote(
+        probs, scored["StudyInstanceUID"].tolist(),
+        confidences=np.abs(probs - 0.5))
+    study_truth = scored.groupby("StudyInstanceUID")["laterality_resolved"].first()
+    study_acc = float(np.mean([votes[s] == study_truth[s]
+                               for s in study_truth.index]))
+    return scored, float(scored["correct"].mean()), study_acc
+
+
+for mode in SPLITS:
+    train_rows, val_rows = make_split(labelled, mode)
+    for plane_aware in AUGMENTATIONS:
+        torch.manual_seed(SEED)
+        np.random.seed(SEED)
+
+        loader = DataLoader(
+            SideDataset(train_rows, augment=True, plane_aware=plane_aware),
+            batch_size=32, shuffle=True, num_workers=2, drop_last=True)
+
+        model = side_classifier.SideNet().to(device)
+        optimiser = torch.optim.AdamW(model.parameters(), lr=3e-4,
+                                      weight_decay=1e-4)
+        criterion = torch.nn.BCEWithLogitsLoss()
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimiser, max_lr=1e-3, total_steps=EPOCHS * len(loader))
+
+        label = "plane-aware" if plane_aware else "blind"
+        started = time.time()
+        for epoch in range(EPOCHS):
+            model.train()
+            for x, y in loader:
+                x, y = x.to(device), y.to(device)
+                optimiser.zero_grad()
+                loss = criterion(model(x), y)
+                loss.backward()
+                optimiser.step()
+                scheduler.step()
+
+        scored, series_acc, study_acc = evaluate(model, val_rows)
+        per_plane = scored.groupby("Anatomical_Plane")["correct"].agg(
+            ["mean", "size"])
+        results.append({"split": mode, "augment": label,
+                        "series_acc": series_acc, "study_acc": study_acc,
+                        "val_series": len(val_rows),
+                        "val_studies": val_rows["StudyInstanceUID"].nunique()})
+
+        print(f"[{mode} | {label}] series {series_acc:.4f}  "
+              f"study {study_acc:.4f}  ({time.time() - started:.0f}s)")
+        print(per_plane.to_string())
+        print()
+
+summary = pd.DataFrame(results)
+summary.to_csv("/kaggle/working/side_validation.csv", index=False)
+print(summary.to_string(index=False))
+""")
+
+    nb.md("""
+## Reading it
+
+Compare **down** each column, not across rows.
+
+- **study-grouped, blind** should land near notebook 04's 0.9922. If it does
+  not, the harness differs from 04 and nothing below is comparable - stop and
+  find out why before reading anything else.
+- **held-out manufacturer vs study-grouped**, blind: this is the transfer
+  penalty. It is the number that sizes the 226 studies from Toshiba and Canon.
+  Near zero means the 99.22% transfers and defect 2 is not a live problem. A
+  large drop means the mirroring exposure is bigger than the ~45 studies
+  currently estimated, and every measurement on this project sits on it.
+- **plane-aware vs blind**, within a split: defect 1's worth. Expect it to
+  show up on coronal and axial in the per-plane table rather than in the
+  headline, since those are the planes the blind flip mislabels.
+
+**A caveat that does not go away.** Toshiba and Canon carry no labels, so this
+estimates their risk from GE and Philips rather than measuring it. Nothing
+available can do better; that would need labels the dataset does not have.
+
+Shipping a corrected `side_predictions.parquet` is a **separate decision**.
+That file determines how every training volume is mirrored, the 0.906 ensemble
+was trained on the current one, and replacing it means retraining five folds
+to benefit. Set the flag below only once the table above justifies it -- and
+note it writes `side_predictions_v2.parquet`, never over the incumbent.
+""")
+
+    nb.code("""
+WRITE_PREDICTIONS = False   # measurement first; shipping costs five retrains
+
+if WRITE_PREDICTIONS:
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+    loader = DataLoader(SideDataset(labelled, augment=True, plane_aware=True),
+                        batch_size=32, shuffle=True, num_workers=2,
+                        drop_last=True)
+    model = side_classifier.SideNet().to(device)
+    optimiser = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+    criterion = torch.nn.BCEWithLogitsLoss()
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimiser, max_lr=1e-3, total_steps=EPOCHS * len(loader))
+    for epoch in range(EPOCHS):
+        model.train()
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            optimiser.zero_grad()
+            loss = criterion(model(x), y)
+            loss.backward()
+            optimiser.step()
+            scheduler.step()
+
+    unlabelled = manifest[manifest["laterality_resolved"].isna()].reset_index(
+        drop=True)
+    model.eval()
+    probs = []
+    with torch.no_grad():
+        for x, _ in DataLoader(SideDataset(unlabelled), batch_size=64,
+                               num_workers=2):
+            probs.append(torch.sigmoid(model(x.to(device))).cpu().numpy())
+    probs = np.concatenate(probs)
+
+    votes = side_classifier.study_level_vote(
+        probs, unlabelled["StudyInstanceUID"].tolist(),
+        confidences=np.abs(probs - 0.5))
+
+    predicted = unlabelled[["StudyInstanceUID", "SeriesInstanceUID"]].copy()
+    predicted["prob_right"] = probs
+    predicted["side_predicted"] = predicted["StudyInstanceUID"].map(votes)
+    predicted["source"] = "model"
+
+    known = labelled[["StudyInstanceUID", "SeriesInstanceUID"]].copy()
+    known["prob_right"] = np.nan
+    known["side_predicted"] = labelled["laterality_resolved"].values
+    known["source"] = "tag"
+
+    out = pd.concat([known, predicted], ignore_index=True)
+    out.to_parquet("/kaggle/working/side_predictions_v2.parquet", index=False)
+    print("wrote side_predictions_v2.parquet", out.shape)
+    print("The incumbent side_predictions.parquet is untouched. Swapping it "
+          "in requires retraining all five folds.")
+else:
+    print("WRITE_PREDICTIONS is off -- nothing was written.")
+    print("Read the table above first; shipping costs five fold retrains.")
+""")
+
+    nb.write(NOTEBOOKS / "13_side_validation.ipynb")
+
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
@@ -6089,6 +6538,7 @@ def main():
     build_ensemble_notebook(colab=True)
     build_error_analysis_notebook()
     build_verify_notebook()
+    build_side_validation_notebook()
 
 
 if __name__ == "__main__":
