@@ -290,7 +290,7 @@ docs/
   attempts/              parked sessions: what was measured, what is open
   rules_notes.md         verified competition constraints
   dev_data.md            how to get a local dev series
-tests/                   577 tests
+tests/                   597 tests
 ```
 
 ---
