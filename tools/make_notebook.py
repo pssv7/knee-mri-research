@@ -5034,6 +5034,32 @@ side_model = side_classifier.SideNet().to(device)
 side_model.load_state_dict(torch.load(find_one("side_model.pt"), map_location=device))
 side_model.eval()
 
+# GEOMETRY CROSS-CHECK on the side decision.
+#
+# The side classifier decides laterality for EVERY test study -- the DICOM tag
+# is never consulted here -- and a wrong side does not add noise, it transposes
+# Medial/Lateral Meniscus and Medial/Lateral OA for that study. Measured
+# 2026-09-02: the classifier loses 3.1% of studies on a manufacturer it never
+# saw labelled (Philips Medical Systems held out, 10 of 318), and 226 training
+# studies come from vendors with zero labelled examples at all.
+#
+# ImagePositionPatient's x is the patient left-right axis, so it separates the
+# two knees without a model. On the 14,403 tagged training series one threshold
+# gives 95.7% series / 96.9% study accuracy. It is not universally right either
+# -- FUJIFILM's convention is inverted -- but it fails on different vendors
+# than the CNN does, which makes it a check rather than a replacement. The
+# headers are already read in build_volumes, so it costs nothing.
+#
+# THE DEFAULTS ARE A PURE INSTRUMENT. The cross-check runs and reports, and
+# DISAGREE_POLICY "cnn" keeps the shipped behaviour byte for byte. Flip the
+# policy only once notebook 13 has measured which signal wins a disagreement,
+# on the training set, where labels exist.
+GEOMETRY_CROSSCHECK = True
+DISAGREE_POLICY = "cnn"      # "cnn" (no change) | "geometry" | "none"
+GEOMETRY_THRESHOLD = -34.0   # mm, fitted on the tagged training series
+
+side_disagreements = []
+
 print(f"frozen folds: {len(frozen_models)} (pool grid {embed.POOL_GRID})"
       + ("" if USE_FROZEN else "  [skipped, BLEND=1.0]"))
 print(f"tuned folds : {len(tuned_models)}"
@@ -5159,7 +5185,7 @@ def build_volumes(study_uid, fast=False):
 
     # Full depth either way: the side classifier reads CACHE_SLICES as input
     # channels. See the FAST_DECODE note above for what that costs.
-    volumes, uids = [], []
+    volumes, uids, positions = [], [], []
     for series_dir in series_dirs:
         paths = dicom_io.series_paths(series_dir)
         if not paths:
@@ -5167,14 +5193,57 @@ def build_volumes(study_uid, fast=False):
         headers = [dicom_io.read_header(p) for p in paths]
         volumes.append(cache.build_series_volume(headers)["volume"])
         uids.append(series_dir.name)
-    return volumes, uids
+
+        # Patient-frame x, free: these headers are already in memory. Averaged
+        # over the series because one slice's position is noisy.
+        xs = [h["ImagePositionPatient"][0] for h in headers
+              if isinstance(h.get("ImagePositionPatient"), (list, tuple))
+              and len(h["ImagePositionPatient"]) == 3]
+        positions.append(float(np.mean(xs)) if xs else float("nan"))
+    return volumes, uids, positions
 
 
-def predict_side(volumes):
+# Side from the DICOM patient frame alone -- no model, no training data, and
+# therefore no dependence on which vendors happened to carry a side tag.
+def geometry_side(positions):
+    xs = [x for x in positions if x == x]   # drop NaN
+    if not xs:
+        return None
+    return "L" if float(np.mean(xs)) > GEOMETRY_THRESHOLD else "R"
+
+
+def predict_side(volumes, positions=None, study=None):
     batch = np.stack([side_classifier.prepare_batch(v)[0] for v in volumes])
     with torch.no_grad():
         probs = torch.sigmoid(side_model(torch.from_numpy(batch).to(device)))
-    return "R" if float(probs.mean()) >= 0.5 else "L"
+    cnn = "R" if float(probs.mean()) >= 0.5 else "L"
+
+    if not GEOMETRY_CROSSCHECK or not positions:
+        return cnn
+
+    geo = geometry_side(positions)
+    if geo is None or geo == cnn:
+        return cnn
+
+    # Two independent signals disagree. One is wrong and nothing available here
+    # says which, so it is recorded and the policy decides.
+    #
+    # Recorded only when a study id is passed, which the main loop does and the
+    # AB_CHECK reference path deliberately does not: that path scores every
+    # study a second time, and counting it would double every disagreement and
+    # report a rate above 100%.
+    if study is not None:
+        side_disagreements.append({"study": study, "cnn": cnn, "geometry": geo,
+                                   "prob_right": float(probs.mean()),
+                                   "mean_x": float(np.nanmean(positions))})
+    if DISAGREE_POLICY == "geometry":
+        return geo
+    if DISAGREE_POLICY == "none":
+        # Leaves the volume unmirrored -- a known-unoriented study rather than
+        # a possibly-inverted one. mirror_volume and series_metadata both
+        # handle None, and the model is told the side is unknown.
+        return None
+    return cnn
 
 
 def meta_tensor(uids, side):
@@ -5284,10 +5353,10 @@ ab_deltas = []
 for study in tqdm(studies, desc="studies", unit="study"):
     try:
         _t = time.time()
-        volumes, uids = build_volumes(study, fast=FAST_DECODE)
+        volumes, uids, positions = build_volumes(study, fast=FAST_DECODE)
         if not volumes:
             raise ValueError("no readable series")
-        side = predict_side(volumes)
+        side = predict_side(volumes, positions, study)
         decode_seconds += time.time() - _t
 
         meta = meta_tensor(uids, side)
@@ -5306,9 +5375,11 @@ for study in tqdm(studies, desc="studies", unit="study"):
         # the predictions move a little; this reports how much instead of
         # arguing about it.
         if AB_CHECK and FAST_DECODE and row is not None:
-            slow_volumes, slow_uids = build_volumes(study, fast=False)
+            slow_volumes, slow_uids, slow_positions = build_volumes(
+                study, fast=False)
             slow = tuned_predict(slow_volumes, slow_uids,
-                                 predict_side(slow_volumes), fast=False)
+                                 predict_side(slow_volumes, slow_positions),
+                                 fast=False)
             ab_deltas.append(np.abs(row - slow).max())
     except Exception as exc:  # noqa: BLE001
         failures += 1
@@ -5327,6 +5398,22 @@ setup = elapsed - loop_elapsed
 print(f"\\n{len(ids)} studies in {loop_elapsed / 60:.1f} min "
       f"({failures} fallbacks); setup took {setup / 60:.1f} min")
 print(f"per study: {loop_elapsed / max(len(ids), 1):.2f}s")
+
+if GEOMETRY_CROSSCHECK:
+    _n_dis = len(side_disagreements)
+    print(f"\\nside cross-check: {_n_dis} of {len(ids)} studies "
+          f"({_n_dis / max(len(ids), 1):.1%}) had the classifier and the DICOM "
+          f"patient frame disagree")
+    print(f"  policy {DISAGREE_POLICY!r} -- "
+          + ("predictions unchanged from the shipped behaviour"
+             if DISAGREE_POLICY == "cnn" else "THE SIDE DECISION CHANGED"))
+    if _n_dis:
+        pd.DataFrame(side_disagreements).to_csv(
+            "/kaggle/working/side_disagreements.csv", index=False)
+        print("  wrote side_disagreements.csv")
+        print("  On the training corpus this rate was 3.3% (61 of 1,832 "
+              "model-decided studies). A rate far from that is worth "
+              "understanding before trusting the run.")
 
 _n = max(len(ids), 1)
 print(f"  decode  {decode_seconds / _n:.2f}s/study"
@@ -6228,9 +6315,15 @@ index_files = find_inputs("index_train.parquet")
 if not index_files:
     raise SystemExit("index_train.parquet not attached -- add the dataset "
                      "pssv27/knee-index. The transfer arms need Manufacturer.")
-index = pd.read_parquet(index_files[0],
-                        columns=["SeriesInstanceUID", "Manufacturer"])
-index = index.groupby("SeriesInstanceUID", as_index=False).first()
+index = pd.read_parquet(
+    index_files[0],
+    columns=["SeriesInstanceUID", "Manufacturer", "ImagePositionPatient"])
+# ImagePositionPatient's x is the patient left-right axis, so it separates the
+# two knees with no model at all. Averaged per series; one slice is noisy.
+index["x"] = [p[0] if isinstance(p, (list, tuple)) and len(p) == 3 else np.nan
+              for p in index["ImagePositionPatient"]]
+index = index.groupby("SeriesInstanceUID", as_index=False).agg(
+    Manufacturer=("Manufacturer", "first"), x=("x", "mean"))
 manifest = manifest.merge(index, on="SeriesInstanceUID", how="left")
 
 # The medial-lateral axis of the cached volume, per series. This is the whole
@@ -6283,6 +6376,7 @@ Nothing here writes predictions. `WRITE_PREDICTIONS` at the bottom is off.
     nb.code("""
 EPOCHS = 6
 SEED = 0
+GEOMETRY_THRESHOLD = -34.0   # mm; the value notebook 10 ships
 
 SPLITS = ["study", "GE MEDICAL SYSTEMS", "Philips Medical Systems"]
 AUGMENTATIONS = [False, True]
@@ -6381,6 +6475,7 @@ import time
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 results = []
+study_frames = []
 
 
 def evaluate(model, rows):
@@ -6403,7 +6498,16 @@ def evaluate(model, rows):
     study_truth = scored.groupby("StudyInstanceUID")["laterality_resolved"].first()
     study_acc = float(np.mean([votes[s] == study_truth[s]
                                for s in study_truth.index]))
-    return scored, float(scored["correct"].mean()), study_acc
+
+    # The second, independent signal. Notebook 10 ships this same rule as a
+    # cross-check; here it can be scored, because these studies have labels.
+    geo = scored.groupby("StudyInstanceUID")["x"].mean()
+    per_study = pd.DataFrame({
+        "truth": study_truth,
+        "cnn": pd.Series(votes),
+        "geometry": np.where(geo > GEOMETRY_THRESHOLD, "L", "R"),
+    })
+    return scored, float(scored["correct"].mean()), study_acc, per_study
 
 
 for mode in SPLITS:
@@ -6435,7 +6539,9 @@ for mode in SPLITS:
                 optimiser.step()
                 scheduler.step()
 
-        scored, series_acc, study_acc = evaluate(model, val_rows)
+        scored, series_acc, study_acc, per_study = evaluate(model, val_rows)
+        per_study["split"], per_study["augment"] = mode, label
+        study_frames.append(per_study)
         per_plane = scored.groupby("Anatomical_Plane")["correct"].agg(
             ["mean", "size"])
         results.append({"split": mode, "augment": label,
@@ -6451,6 +6557,33 @@ for mode in SPLITS:
 summary = pd.DataFrame(results)
 summary.to_csv("/kaggle/working/side_validation.csv", index=False)
 print(summary.to_string(index=False))
+
+# WHICH SIGNAL WINS A DISAGREEMENT -- the number that sets DISAGREE_POLICY in
+# notebook 10. Agreement alone cannot answer it; only labels can, which is why
+# this lives here and not in the submission notebook.
+studies = pd.concat(study_frames, ignore_index=True)
+studies.to_csv("/kaggle/working/side_study_votes.csv", index=False)
+
+print()
+print("SIDE DECISION BY POLICY (study level, held-out studies only)")
+header = "split                     augment        cnn      geom     agree"
+print(header + "   disagree  cnn_wins  geo_wins")
+for (mode, label), g in studies.groupby(["split", "augment"], sort=False):
+    agree = g["cnn"] == g["geometry"]
+    d = g[~agree]
+    cnn_wins = float((d["cnn"] == d["truth"]).mean()) if len(d) else float("nan")
+    geo_wins = float((d["geometry"] == d["truth"]).mean()) if len(d) else float("nan")
+    print(f"{mode[:24]:<26}{label:<11}"
+          f"{(g['cnn'] == g['truth']).mean():>8.4f}"
+          f"{(g['geometry'] == g['truth']).mean():>10.4f}"
+          f"{agree.mean():>10.4f}"
+          f"{len(d):>11}{cnn_wins:>10.2f}{geo_wins:>10.2f}")
+
+print()
+print("cnn_wins and geo_wins are the fraction of DISAGREEMENTS each signal got")
+print("right; they sum to 1.0. Whichever is reliably above 0.5 is the policy")
+print("notebook 10 should use. If neither is, DISAGREE_POLICY = 'none' -- do")
+print("not mirror -- trades a known-unoriented study for a coin flip.")
 """)
 
     nb.md("""
