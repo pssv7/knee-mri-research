@@ -1287,6 +1287,23 @@ if missing:
 Grouped by study, never by series. Series from one study are near-duplicates of
 each other — same knee, same session — so a random series split would put
 near-copies on both sides and report an accuracy that does not exist.
+
+**This notebook has diverged from the run that produced the shipped
+`side_predictions.parquet` (noted 2026-09-02).** The shuffle below now casts
+to a numpy object array first; the shipped run shuffled the `ArrowStringArray`
+that `.unique()` returns, which numpy warns "may contain duplicates". A
+duplicate here would put a study in *both* train and val and inflate the
+accuracy silently. Zero duplicates were observed over five trials on pandas
+3.0.5, so the shipped 0.9922 is not thought to be inflated — but this is the
+one line where the guarantee matters, and it is now guaranteed.
+
+**Nothing else was changed, deliberately.** The plane-blind augmentation below
+is a known defect — `side_classifier.flip_input` exists to mirror along each
+series' own medial-lateral axis and this notebook does not call it, so coronal
+and axial series get a label flip for a transform that does not change the
+side. It is left alone until `notebooks/13_side_validation.ipynb` measures
+whether fixing it is worth anything. Correcting it here on an unmeasured
+hypothesis would also destroy the only reproduction of the incumbent.
 """)
 
     nb.code("""
@@ -1294,7 +1311,11 @@ labelled = manifest[manifest["laterality_resolved"].notna()].reset_index(drop=Tr
 unlabelled = manifest[manifest["laterality_resolved"].isna()].reset_index(drop=True)
 
 rng = np.random.default_rng(0)
-studies = labelled["StudyInstanceUID"].unique()
+# np.asarray first: pandas returns an ArrowStringArray from .unique(), and
+# numpy warns that shuffling a non-Sequence "may contain duplicates after
+# shuffling". On this line that would leak a study into both sides of the
+# split. See the note above -- this diverges from the shipped run.
+studies = np.asarray(labelled["StudyInstanceUID"].unique(), dtype=object)
 rng.shuffle(studies)
 cut = int(0.85 * len(studies))
 train_studies = set(studies[:cut])

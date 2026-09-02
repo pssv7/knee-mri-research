@@ -5,6 +5,93 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-09-02 (b) — step 2 opened: two defects in the side classifier
+
+**Outcome: notebook 04's classifier is validated on a population it is barely
+applied to, and its augmentation mislabels 59.5% of the corpus. Neither is a
+demonstrated error in the shipped predictions; both are unmeasured.
+`notebooks/13_side_validation.ipynb` is the measurement and has not been run.**
+
+The classifier decides the side for 9,968 series (40.9%), and a wrong side
+transposes Medial/Lateral Meniscus and Medial/Lateral OA rather than adding
+noise.
+
+### The documented accuracy is not the artifact's
+
+Docs say 98.97% study accuracy. The log of the run that produced the shipped
+`side_predictions.parquet` says **series 0.9733, study 0.9922** — the vote
+lifts it 2.7 points. 98.97% belongs to some earlier run. Left uncorrected in
+the docs until notebook 13 says what the honest number is.
+
+### Defect 1 — the augmentation is plane-blind
+
+`side_classifier.flip_input` exists to mirror along each series' own
+medial-lateral axis. **Notebook 04 never calls it**, never joins plane
+metadata at all, and hardcodes `x = x[::-1]` with `y = 1 - y`. For coronal and
+axial series — 8,609 + 5,898 = **59.5% of the corpus** — the slice axis is not
+medial-lateral, so the transform leaves the side unchanged while the label
+flips. Confirmed directly: `flip_input` at axis 2 does not equal `x[::-1]`.
+
+Measured effect, agreement with the study vote on model-predicted series:
+sagittal 97.9%, axial 95.9%, **coronal 95.2%**. Real but modest — a reversed
+stack is a distinguishable input the model can fit as a separate mode, and one
+that never occurs at inference.
+
+**Notebook 04's own markdown promised the diagnostic that would have caught
+this** — "if errors concentrate in one acquisition plane" — and the cell under
+it bins by `n_slices_raw` instead.
+
+### Defect 2 — validated on one population, applied to another
+
+Tag presence tracks the scanner almost perfectly:
+
+    manufacturer               tagged   predicted   mean conf   agree
+    Siemens Healthineers        5,304           5       0.843   100.0%
+    SIEMENS                     3,168       1,292       0.873    96.6%
+    Philips Medical Systems     1,715       1,899       0.885    96.9%
+    GE MEDICAL SYSTEMS          1,041       3,873       0.897    96.8%
+    Philips Healthcare              8         487       0.875    94.9%
+    TOSHIBA                         0       1,015       0.886    94.8%
+    CANON_MEC                       0         328       0.967    99.7%
+
+**1,343 series across 226 studies come from manufacturers with zero labelled
+training examples.** The 0.9922 is measured overwhelmingly on Siemens and
+Philips; the work is done on GE, Toshiba and Canon. The model is *confident*
+on the unseen vendors, which is what confidently wrong looks like if it is
+wrong, and is no evidence either way. This is an unvalidated extrapolation,
+not a demonstrated error.
+
+Toshiba and Canon carry no labels and can never be scored directly. Notebook
+13 holds out GE and Philips Medical Systems as proxies — large in the applied
+population, small in the training set, so the holdout does not confound
+"unseen scanner" with "less data".
+
+### What is correct and was checked
+
+The classifier does **not** override known tags: `source="tag"` rows keep
+`laterality_resolved` and only the 9,968 unknowns get model predictions.
+
+### Notebook 04 has diverged from the artifact it produced
+
+Its split shuffled the `ArrowStringArray` that `.unique()` returns, which numpy
+warns "may contain duplicates" — on that line a duplicate leaks a study into
+both train and val and inflates the accuracy silently. Zero duplicates over
+five trials on pandas 3.0.5, so **0.9922 is not thought to be inflated**, but
+the notebook now casts to a numpy object array first and therefore no longer
+reproduces the shipped run byte for byte. Nothing else was changed: the
+plane-blind flip stays until notebook 13 measures whether fixing it is worth
+anything.
+
+### Order of operations
+
+Run **13 before anything else, and 04 possibly never.** 13 writes nothing;
+re-running 04 would produce a new `side_predictions.parquet` on an unmeasured
+configuration, and the 0.906 folds were trained on the incumbent. If a v2 is
+warranted, notebook 13's `WRITE_PREDICTIONS` produces it — trained plane-aware
+on all tagged data — and swapping it in costs five fold retrains.
+
+---
+
 ## 2026-09-02 — step 1 verified end to end: the cache is what the code says
 
 **Outcome: the 29 GB that trained the 0.906 ensemble reproduces byte for byte
