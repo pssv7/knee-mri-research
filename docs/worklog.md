@@ -5,6 +5,112 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-09-02 (c) — step 3: the label matrix reproduces; the lexicon does not reach its own corpus
+
+**Outcome: `train_labels.parquet` rebuilds from source with all 104,376 cells
+identical, and every documented property holds. The exposure found is not a
+divergence but a reach problem -- the lexicon, which sets the sample weight of
+every slot, is 3.2x less informative in Bulgarian than in English at matched
+report length, and the cause is nameable: 15 of the 16 Medial Meniscus anatomy
+stems are multi-word and require adjacency.**
+
+Step 1 verified the image tributary against its artifact. This is the same
+check for the other input to all five folds, and it is cheaper: nothing here
+decodes a pixel, so the reproduction covers 100% of the corpus in ~10 seconds
+rather than the 2% sample the cache check could afford.
+`tools/audit_labels.py` is the script; it exits non-zero on a failure.
+
+### A. The artifact reproduces, unlike notebook 04's
+
+    [PASS] 104,376 cells identical across 4,349 studies and 24 columns
+    [PASS] extreme targets  0.7475   documented 0.75
+    [PASS] mean weight      0.6252   documented 0.625
+    [PASS] at WEIGHT_SILENT 0.3452   documented 0.345
+
+Step 2 found the side classifier's documented 98.97% belonged to a run that no
+longer existed. The label pipeline is the opposite case: every number the docs
+quote is the artifact's own, and the code that produced it still produces it.
+This is now the step-1 guarantee for the label side.
+
+### B. The lexicon's reach is a function of language, and the weights read it
+
+Both signals' informativeness -- did the lexicon say anything, did the LLM say
+anything -- is what sets each slot's weight. The LLM's reach is roughly flat;
+the lexicon's is not:
+
+    lang     n     lexicon %   llm %   median chars
+    en    1786          52.0    69.5           1253
+    es     521          25.6    49.4            308
+    tr     426          27.6    57.9            656
+    hr     357          22.4    63.7           1164
+    el     318          18.9    53.4            853
+    bg     217          16.3    59.7           1001
+
+English/Bulgarian is 3.2x on the lexicon and 1.16x on the LLM, so this is the
+lexicon, not the reports and not the extractor.
+
+**Length is a real confound and does not carry the result.** Spanish reports
+are 308 characters against English's 1253, and a shorter report genuinely
+mentions fewer findings. Inside corpus-wide length deciles the gap survives
+intact -- at decile 5, English 43.3% against Bulgarian 15.4%, Greek 20.4%,
+Croatian 23.1%.
+
+### C. The cause, not just the gap
+
+    bg: 99.1% of reports contain the bare stem "мениск"
+        0.0% match the Medial Meniscus stem list
+    hr: 97.5% contain "menisk"    0.8% match
+
+The list holds `медиальн мениск` -- a Russian adjectival form -- and
+`вътрешния менискус`. Bulgarian writes `медиалния менискус`, with the definite
+article as a suffix. Croatian coordinates: `medijalni i lateralni menisk`,
+which puts three words between the two the stem needs adjacent. 15 of the 16
+Medial Meniscus stems are multi-word, and English is the language where an
+adjective sits uninflected immediately before its noun.
+
+Every finding does carry Greek and Cyrillic stems, so this is not an omission;
+it is a matcher that assumes English word formation. `_norm` and
+`_stem_pattern` are both correct -- the pattern anchors only at the start,
+which is right for inflected languages -- and when the anatomy stem does match,
+the rule calls the finding **100.0%** of the time. The loss is entirely
+upstream of the rule logic.
+
+### D. The two halves of the lexicon's influence, and only one has a knob
+
+    LEXICON_WEIGHT   gold macro   mean weight
+              0.00       0.8891        0.6252
+              0.10       0.8911        0.6252     <- shipped
+              0.30       0.8810        0.6252
+
+The **target** half is worth 0.002 against a macro SE of 0.015-0.025 on the
+gold 58: nothing. It is also where the bias lands -- on slots the LLM calls
+positive at above 0.7, the lexicon backs 85.9% of English and 53.5% of
+non-English, and the shipped target is 0.904 against 0.855 for equally
+confident calls. Setting `LEXICON_WEIGHT = 0` removes that shrinkage for a
+measured cost of nothing.
+
+The **weight** half has no knob at all. Sample weights are byte-identical
+across the entire sweep, because informativeness gates them independently of
+this constant. English is 40.9% of studies and carries 46.0% of total training
+mass (ratio 1.124); Spanish 0.845, Dutch 0.860, Greek 0.872.
+
+### What was not done, and why
+
+Nothing was changed. Both halves are unmeasured hypotheses about label
+quality: the gold 58 cannot test them, because per-language cells are 1 to 8
+studies -- and the gold's own language mix does track the corpus (English
+48.3% against 41.0%), so step 2's population defect does **not** repeat here.
+Rebuilding the label matrix costs five fold retrains, exactly like the side
+parquet, and the same rule applies: measure first.
+
+The cheap half is worth pre-registering. `LEXICON_WEIGHT = 0` is a one-line
+change on a measured plateau that removes a language-correlated target bias,
+and its cost is one rebuild of a parquet plus five retrains to actually use --
+so it should be bundled with any future retrain rather than run for its own
+sake. The stem fix is the larger question and is not costed here.
+
+---
+
 ## 2026-09-02 (b) — step 2 opened: two defects in the side classifier
 
 **Outcome: notebook 04's classifier is validated on a population it is barely

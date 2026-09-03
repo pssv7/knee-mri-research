@@ -18,6 +18,29 @@ concern that opened the session is closed: the geometry ruler and the
 `Anatomical_Plane` string agree on **24,371/24,371** series, so collapsing the
 two implementations is a tidy-up, not a fix. See worklog 2026-09-02.
 
+**Step 3 (labels) is verified, and the label tributary has *not* diverged
+(2026-09-02).** `train_labels.parquet` rebuilds from `fuse.build()` with all
+104,376 cells identical, and the three numbers the docs quote about it -- 74.8%
+extreme targets, mean weight 0.625, 34.5% at `WEIGHT_SILENT` -- are the
+artifact's own. Re-run `tools/audit_labels.py` after any change under
+`src/labels/`; it takes ten seconds and decodes nothing.
+
+**The exposure on the label side is the lexicon's reach, and it is a reach
+problem rather than a defect.** The lexicon is one of the two signals whose
+informativeness sets every sample weight, and it is 3.2x less informative in
+Bulgarian than in English *at matched report length* (decile 5: 43.3% against
+15.4%), while the LLM's own gap is 1.16x. The cause is named: 15 of the 16
+Medial Meniscus anatomy stems are multi-word and require adjacency, so
+Bulgarian's definite-article suffix (`медиалния менискус`) and Croatian's
+coordination (`medijalni i lateralni menisk`) never match -- 99.1% of Bulgarian
+reports contain `мениск` and 0.0% match the stem list. Two consequences, and
+only one has a knob: the **target** half shrinks non-English positives (0.855
+against 0.904 on equally confident calls) and `LEXICON_WEIGHT = 0` removes it
+for a measured 0.002 on gold, i.e. nothing; the **weight** half is identical at
+every `LEXICON_WEIGHT`, and gives English 46.0% of the training mass on 40.9%
+of the studies. Nothing was changed -- the gold 58 cannot test either half, and
+rebuilding the matrix costs five fold retrains. See worklog 2026-09-02 (c).
+
 **The remaining exposure in the image tributary is laterality, not the cache.**
 9,968 series (40.9%) carry no side in the metadata and rest entirely on the
 side classifier's 98.97% study accuracy -- roughly **45 of 4,407 studies
