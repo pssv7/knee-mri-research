@@ -25,6 +25,18 @@ extreme targets, mean weight 0.625, 34.5% at `WEIGHT_SILENT` -- are the
 artifact's own. Re-run `tools/audit_labels.py` after any change under
 `src/labels/`; it takes ten seconds and decodes nothing.
 
+**The labels are precise and incomplete, and that is the ceiling rather than a
+bug (2026-09-03).** Against the radiologist image labels they miss **45.8%** of
+true findings and false-alarm on **7.2%** of true negatives; 25 of the 210
+silent slots are truly positive and are written as zero by construction. The
+sample weights do not predict the error -- the full-weight bucket still misses
+28.8%. Worst findings: Synovitis 74.1% missed (independent corroboration of its
+descoping), Fracture 66.7%, Effusion 60.0%; best: ACL 20.8%. This is why macro
+AUC sits at 0.891 while half the positives are missed -- AUC is a ranking
+statistic. `notebooks/14_verify_labels.ipynb` runs the whole audit on Kaggle
+(CPU, no GPU hours) and **has not been run yet**; its Parts B/D/E/F need the
+four extractor dumps added to `knee-labels`.
+
 **The exposure on the label side is the lexicon's reach, and it is a reach
 problem rather than a defect.** The lexicon is one of the two signals whose
 informativeness sets every sample weight, and it is 3.2x less informative in

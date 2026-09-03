@@ -5,6 +5,87 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-09-03 — the labels are precise and incomplete; notebook 14 and its fixtures
+
+**Outcome: measured against the radiologist image labels, the label matrix
+misses 45.8% of true findings and false-alarms on 7.2% of true negatives. The
+error is almost entirely misses, it is concentrated in the findings reports do
+not narrate, and the pipeline's own sample weights do not predict it.**
+
+Step 3 verified that the matrix reproduces. That is a statement about
+consistency, not correctness -- a pipeline wrong in the same way every time
+reproduces perfectly. This is the correctness half, and it is the last thing
+the gold 58 can be asked.
+
+### Where the labels lose
+
+    weight  meaning                     slots  truly +   missed  false +
+      1.00  both signals agree            279    52.3%    28.8%    16.5%
+      0.70  only one signal spoke         176    33.5%    62.7%     7.7%
+      0.40  the two signals disagree       31    32.3%    60.0%     9.5%
+      0.25  neither signal spoke          210    11.9%   100.0%     0.0%
+            ALL                           696    34.5%    45.8%     7.2%
+
+**The weights do not track error.** They are assigned before anything sees
+truth, so they either predict it or they do not: the full-weight bucket still
+misses 28.8%. The 0.25 bucket's 100% is arithmetic rather than a defect --
+silence writes a zero, so every true positive under it is missed by
+construction. **25 of those 210 slots are truly positive.** That is the price
+of "silence means absent, weighted low", now measured instead of assumed.
+
+Per finding, worst first: Synovitis 74.1% missed, Fracture 66.7%, Effusion
+60.0%, PF OA 52.4%, Baker's 50.0%, Lateral Meniscus 43.5% ... ACL 20.8%.
+Synovitis being the worst is an independent corroboration of its descoping --
+its labels are mostly zeros where the image says otherwise. ACL at the other
+end is the expected shape: reports reliably mention a torn ACL.
+
+**This is the ceiling of report-derived labels, not an extraction bug.** A
+finding the radiologist saw and did not write down is absent from the text and
+no better extractor recovers it. It also explains how macro AUC stays at 0.891
+while nearly half the positives are missed: AUC is a ranking statistic and the
+soft targets still order studies well.
+
+Slot-level agreement lands at 81.5% (English) and 78.3% (non-English), which
+sits on the ~82% report-vs-image agreement the public intel repos report for
+this dataset -- weak independent corroboration that the pipeline is where the
+literature expects it to be.
+
+### Notebook 14, and what its fixtures caught
+
+`notebooks/14_verify_labels.ipynb` runs the whole audit on Kaggle: provenance
+(md5 against the repo copy, plus a check that no gold study is in the training
+matrix), reproduction, properties, the bootstrap interval, language reach, and
+the table above. CPU only, no GPU hours, internet off. **It has not been run
+yet**, and Parts B/D/E/F need the four extractor dumps added to `knee-labels`
+(1.5 MB total); without them A and C still run, which is enough to catch a
+stale upload.
+
+`tests/test_audit_labels.py` is why the audit is worth trusting: on the real
+corpus every check passes, which proves nothing, so each check is exercised
+twice -- once on data that should pass, once on data broken in the way that
+check exists to catch. Fixtures are a six-language synthetic corpus with
+generated extractor dumps. Both historical regressions are replayed as
+fixtures, and the Bulgarian/Croatian stem misses are pinned so a repair fails
+the test rather than silently invalidating the worklog.
+
+Writing them found two defects in the audit itself, both invisible on real
+data: `check_against_gold` raised `KeyError` when no finding had positives,
+and `language_reach` took mined ids and ignored them, reloading the corpus
+from `config.TRAIN_CSV` -- right answer on the real data by coincidence, wrong
+population on anything else. 24 tests, suite at 621.
+
+### Next
+
+**Step 4: the five checkpoints.** Steps 1-3 verified the inputs; step 4 is the
+first step where the artifact is the model. It cannot be answered the way the
+others were -- training is not bit-reproducible and costs five GPU-hours -- so
+the answerable questions are: whether the five `.pt` files carry the labels and
+sides just verified or older copies; whether any fold leaked a study across its
+own train/val boundary; which of the three saved weight sets per fold actually
+ships; and the 995 unreferenced files in `checkpoints/`.
+
+---
+
 ## 2026-09-02 (c) — step 3: the label matrix reproduces; the lexicon does not reach its own corpus
 
 **Outcome: `train_labels.parquet` rebuilds from source with all 104,376 cells
