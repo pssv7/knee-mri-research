@@ -6714,6 +6714,440 @@ else:
 
 
 
+# ---------------------------------------------------------------------------
+# 14 -- verify the label matrix
+# ---------------------------------------------------------------------------
+
+def build_label_audit_notebook():
+    """The step-3 receipt, run where the artifact that trained the folds lives.
+
+    Most of this runs locally in ten seconds -- the extractor dumps and the
+    reports are both in the repo. One thing does not: the `train_labels.parquet`
+    the five folds actually read is the copy inside the `knee-labels` dataset,
+    and a local file that reproduces says nothing about an uploaded file that
+    may not be the same bytes. That check is the reason this notebook exists;
+    the rest is the same audit, re-run in the environment that consumes it.
+
+    CPU only. Spends no GPU hours.
+    """
+    nb = Notebook()
+
+    nb.md("""
+# 14 — Verify the Label Matrix
+
+Step 1 verified the pixels against the shards. Step 2 measured the side
+classifier. This is the third input to every fold in the 0.906 ensemble, and
+the only one whose artifact has never been checked **in the place the training
+runs read it from**.
+
+Two different questions, and this notebook keeps them apart because conflating
+them is how a pipeline gets called "verified" when it is only self-consistent:
+
+1. **Is the shipped file the one this code produces?** Answerable, and
+   answered here at every cell of the matrix.
+2. **Are the labels correct?** Answerable only on the 58 radiologist-labelled
+   studies, against 4,349 mined ones. Part D reports how little that can
+   resolve rather than quoting 0.891 and stopping; Part F reports the shape of
+   the error, which turns out to be almost entirely misses rather than false
+   alarms.
+
+**Attach, in the sidebar:**
+
+| input | what for |
+|---|---|
+| competition `rsna-knee-abnormality-detection` | `train.csv` — the reports and the gold 58 |
+| dataset `pssv27/knee-labels` | `train_labels.parquet`, the shipped artifact |
+| dataset `pssv27/knee-labels` *(if it carries them)* | `llm_labels*.parquet`, `llm_probs*.parquet` — the extractor dumps |
+
+**Accelerator: None.** Nothing here decodes a pixel or loads a model, so it
+costs nothing against the 25 GPU-hour weekly quota. Internet is not needed.
+
+Parts B, D, E and F need the extractor dumps. If `knee-labels` carries only the
+finished matrix, those parts skip with a notice and Parts A and C still run —
+and those two alone are enough to catch a wrong or stale upload, which is the
+failure that would actually cost a submission.
+""")
+
+    nb.code(bootstrap_cell(
+        modules=KAGGLE_MODULES + [
+            "src/labels/__init__.py",
+            "src/labels/lexicon.py",
+            "src/labels/calibrate.py",
+            "src/labels/fuse.py",
+            "src/labels/mode_fusion.py",
+            "tools/audit_labels.py",
+        ],
+        require_raw_dicom=False))
+
+    nb.md("""
+## What is actually attached
+
+Printed before anything runs. The commonest failure in this project is a
+missing or stale input rather than a real defect, and unlike a missing cache
+shard, a stale label file produces no symptom at all — the run trains happily
+on the wrong targets.
+
+`config.META_DIR` is rebound to a staging directory here. The label modules
+resolve their inputs through it at call time, so pointing it at the attached
+copies is what lets `fuse.build()` run unmodified rather than reimplemented —
+the same rule notebook 12 follows for the cache.
+""")
+
+    nb.code("""
+import glob
+import hashlib
+import os
+import shutil
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from src import config
+from src.labels import calibrate, fuse, mode_fusion
+
+
+def find_inputs(pattern):
+    # The competition directory is skipped: ~820,000 DICOM files and never
+    # where these live.
+    found = sorted(glob.glob(f"/kaggle/working/{pattern}"))
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        if os.path.basename(root) == "competitions":
+            continue
+        found += sorted(glob.glob(f"{root}/**/{pattern}", recursive=True))
+    return found
+
+
+def find_competition_file(name):
+    for candidate in (f"data/meta/{name}", f"/kaggle/input/competitions/*/{name}",
+                      f"/kaggle/input/*/{name}"):
+        hits = sorted(glob.glob(candidate))
+        if hits:
+            return hits[0]
+    return None
+
+
+STAGE = Path("/kaggle/working/meta")
+STAGE.mkdir(parents=True, exist_ok=True)
+
+WANTED = ["train_labels.parquet", "llm_labels.parquet", "llm_labels_gold.parquet",
+          "llm_probs.parquet", "llm_probs_gold.parquet"]
+staged = {}
+for name in WANTED:
+    hits = find_inputs(name)
+    if hits:
+        shutil.copy(hits[0], STAGE / name)
+        staged[name] = hits[0]
+
+train_csv = find_competition_file("train.csv")
+if train_csv is None:
+    raise SystemExit("train.csv not found -- attach the competition dataset")
+shutil.copy(train_csv, STAGE / "train.csv")
+
+# Rebind before anything imports a path out of config. The label modules read
+# config.META_DIR at call time, so this is enough for the whole stack.
+config.META_DIR = STAGE
+config.TRAIN_CSV = STAGE / "train.csv"
+
+print("staged into", STAGE)
+for name in WANTED:
+    where = staged.get(name)
+    print(f"   {'[ok]  ' if where else '[none]'} {name:26s} {where or ''}")
+print()
+print("train.csv:", train_csv)
+
+HAVE_DUMPS = all(n in staged for n in
+                 ("llm_labels.parquet", "llm_labels_gold.parquet",
+                  "llm_probs.parquet", "llm_probs_gold.parquet"))
+HAVE_SHIPPED = "train_labels.parquet" in staged
+print("extractor dumps attached:", HAVE_DUMPS)
+if not HAVE_SHIPPED:
+    raise SystemExit("train_labels.parquet not attached -- nothing to verify")
+""")
+
+    nb.md("""
+## A. Provenance — is this the file the 0.906 folds read?
+
+An md5 and a fingerprint, because an upload date proves nothing: a re-upload
+keeps the date and changes the bytes, and a stale copy keeps the bytes and
+changes nothing visible.
+
+The expected digest is the repo's `data/meta/train_labels.parquet` as of
+2026-09-02. **A mismatch is not automatically a failure** — it means the
+uploaded copy and the repo copy are different files, and which one is right
+depends on which was uploaded last. It does mean stopping to find out before
+trusting any number below.
+
+The fingerprint underneath is the one recorded when `knee-labels` was first
+checked: 4,349 rows, **zero gold studies** (the 58 must never appear in the
+training matrix), and the distributional signature of the shipped labels.
+""")
+
+    nb.code("""
+EXPECTED_MD5 = "164dba7c82c9519558f1e326e845f7eb"   # repo copy, 2026-09-02
+
+shipped_path = STAGE / "train_labels.parquet"
+digest = hashlib.md5(shipped_path.read_bytes()).hexdigest()
+shipped = pd.read_parquet(shipped_path)
+print("A. PROVENANCE")
+print(f"   md5 {digest}")
+print(f"       {'matches' if digest == EXPECTED_MD5 else 'DIFFERS FROM'} the repo copy"
+      f" ({EXPECTED_MD5})")
+
+gold = calibrate.load_gold(config.TRAIN_CSV)
+gold_ids = set(gold[config.ID_COL])
+leaked = shipped[config.ID_COL].isin(gold_ids).sum()
+print()
+print(f"   rows                 {len(shipped):,}      expected 4,349")
+print(f"   gold studies present {leaked}          expected 0")
+if leaked:
+    print("   [FAIL] the gold 58 are in the training matrix -- every gold number")
+    print("          in this project would be in-sample")
+else:
+    print("   [PASS] the gold 58 are held out of the training matrix")
+""")
+
+    nb.md("""
+## B. Reproduction — does the code still produce this file?
+
+The step-1 check, applied to the label side. Nothing here decodes a pixel, so
+unlike the cache verification this can afford **100% of the corpus** rather
+than a 2% sample.
+
+This is what "verified" means for a label pipeline, and it is worth being
+precise about what it does *not* mean: a pipeline that is wrong in the same way
+every time reproduces perfectly. Part D is where correctness is addressed, and
+where it runs out of evidence.
+""")
+
+    nb.code("""
+if not HAVE_DUMPS:
+    print("B. REPRODUCTION")
+    print("   [skip] extractor dumps not attached.")
+    print("          Add llm_labels{,_gold}.parquet and llm_probs{,_gold}.parquet")
+    print("          to knee-labels to enable this part.")
+    rebuilt = None
+else:
+    rebuilt, fused_gold, extractor_aucs = fuse.build()
+    from tools import audit_labels
+    reproduced = audit_labels.check_reproduction(shipped, rebuilt,
+                                                header="B. REPRODUCTION")
+""")
+
+    nb.md("""
+## C. Properties — do the documented numbers belong to this artifact?
+
+Step 2 found the side classifier's documented 98.97% belonged to a run that no
+longer existed anywhere. This is the same question asked of the labels, and it
+reads the numbers off the file rather than out of the worklog.
+""")
+
+    nb.code("""
+from tools import audit_labels
+
+properties_ok = audit_labels.check_properties(
+    shipped, header="C. DOCUMENTED PROPERTIES")
+
+print()
+print("   distinct target values per finding (ties are what AUC cannot order)")
+for name in config.LABELS:
+    print(f"      {name:18s} {shipped[name].nunique():5d}")
+""")
+
+    nb.md("""
+## D. Correctness — and how little the gold 58 can settle
+
+The only external truth in this project is 58 radiologist-labelled studies,
+1.3% of the corpus. Everything else — the fusion strategy, the lexicon blend,
+the sharpening — is scored against them or against itself.
+
+This part reports the macro AUC **with its bootstrap interval**, because the
+point estimate on its own has been the source of more than one closed question
+that the interval would have left open. Then it splits the gold by report
+language, which is the specific worry step 3 raised, and finally states the
+sample size that would be needed to resolve what the split cannot.
+""")
+
+    nb.code("""
+print("D. CORRECTNESS, AND ITS RESOLUTION")
+if not HAVE_DUMPS:
+    print("   [skip] needs the extractor dumps to rebuild the gold-side targets")
+else:
+    L = config.LABELS
+    truth = np.column_stack([gold[n].to_numpy().astype(int) for n in L])
+    pred = np.column_stack([fused_gold[n].to_numpy(float) for n in L])
+
+    def macro(t, p):
+        scored = [calibrate._auc(t[:, i], p[:, i]) for i in range(t.shape[1])
+                  if 0 < t[:, i].sum() < len(t)]
+        return (float(np.mean(scored)), len(scored)) if scored else (np.nan, 0)
+
+    def interval(t, p, draws=2000, seed=0):
+        rng = np.random.default_rng(seed)
+        values = []
+        for _ in range(draws):
+            idx = rng.integers(0, len(t), len(t))
+            value, _ = macro(t[idx], p[idx])
+            if not np.isnan(value):
+                values.append(value)
+        return np.array(values)
+
+    point, scoreable = macro(truth, pred)
+    draws = interval(truth, pred)
+    lo, hi = np.percentile(draws, [2.5, 97.5])
+    se = (hi - lo) / 3.92
+    print(f"   gold studies {len(gold)}   slots {truth.size}"
+          f"   positives {truth.sum()} ({100 * truth.mean():.1f}%)")
+    print(f"   fused macro AUC {point:.3f}   95% CI [{lo:.3f}, {hi:.3f}]"
+          f"   ({scoreable}/12 findings scoreable)")
+    print(f"   implied macro SE {se:.3f}")
+
+    # The language split. Detection is heuristic and refuses to guess -- see
+    # tools/audit_labels.py -- so "unknown" is reported rather than folded
+    # into either arm.
+    language = gold["Report"].map(audit_labels.detect_language).to_numpy()
+    english = language == "en"
+    other = ~english & (language != "unknown")
+    print()
+    print(f"   English {english.sum()}   non-English {other.sum()}"
+          f"   unknown {(language == 'unknown').sum()}")
+    arms = {}
+    for label, mask in (("English", english), ("non-English", other)):
+        value, count = macro(truth[mask], pred[mask])
+        arm = interval(truth[mask], pred[mask])
+        arms[label] = arm
+        alo, ahi = np.percentile(arm, [2.5, 97.5])
+        print(f"      {label:12s} n={mask.sum():3d}  macro {value:.3f}"
+              f"   95% CI [{alo:.3f}, {ahi:.3f}]")
+    delta = arms["English"] - arms["non-English"]
+    dlo, dhi = np.percentile(delta, [2.5, 97.5])
+    print(f"      difference   {delta.mean():+.3f}   95% CI [{dlo:+.3f}, {dhi:+.3f}]")
+    print(f"      P(English labels rank better) = {(delta > 0).mean():.2f}")
+
+    # Threshold behaviour, which is where the lexicon's language-correlated
+    # target shrinkage shows up even when the ranking does not move.
+    print()
+    for label, mask in (("English", english), ("non-English", other)):
+        t, p = truth[mask], pred[mask]
+        print(f"      {label:12s} slot agreement at 0.5 {100 * ((p > 0.5) == (t == 1)).mean():.1f}%"
+              f"   positives recovered {100 * (p[t == 1] > 0.5).mean():.1f}%")
+
+    # What this sample can and cannot see. The spread of the difference is
+    # taken from its own bootstrap rather than scaled off the pooled SE --
+    # the two arms are 28 and 23 studies, so the difference is noisier than
+    # the whole, and using the pooled number here would flatter the test.
+    # AUC's SE then falls as 1/sqrt(n), which fixes the rest by arithmetic.
+    # Hanley-McNeil understates SE for correlated ratings, so every figure
+    # below is optimistic: the real requirement is larger, not smaller.
+    print()
+    print("   RESOLUTION -- what would have to exist to answer this")
+    gap_sd = float(delta.std())
+    detectable = 2.8 * gap_sd
+    print(f"      macro SE at n={len(gold)}: {se:.3f}")
+    print(f"      SD of the English/non-English gap: {gap_sd:.3f}")
+    print(f"      smallest gap detectable at 80% power: {detectable:.3f}")
+    print(f"      observed gap: {abs(delta.mean()):.3f} -- inside the noise, so"
+          " this split is underpowered rather than exonerating")
+    for target in (0.010, 0.005):
+        print(f"      gold studies for macro SE {target:.3f}:"
+              f" {len(gold) * (se / target) ** 2:,.0f}")
+    for target in (0.03, 0.02):
+        needed = len(gold) * (gap_sd / (target / 2.8)) ** 2
+        print(f"      gold studies to detect a {target:.2f} language gap:"
+              f" {needed:,.0f}")
+    print("      docs/plan.md P4 item 12 asks for >=300 studies; this is the"
+          " arithmetic behind that number")
+""")
+
+    nb.md("""
+## E. Language reach — the mechanism behind the split above
+
+The lexicon is one of the two signals whose *informativeness* sets every sample
+weight, so its reach decides how much a study is allowed to teach, entirely
+separately from what the study says. Reported length-matched, because
+non-English reports are also shorter and the confound would otherwise carry the
+whole result.
+""")
+
+    nb.code("""
+if not HAVE_DUMPS:
+    print("E. LANGUAGE REACH")
+    print("   [skip] needs the extractor dumps")
+else:
+    reports = pd.read_csv(config.TRAIN_CSV)
+    reports["language"] = reports["Report"].map(audit_labels.detect_language)
+    unlabelled = calibrate.load_unlabelled(config.TRAIN_CSV)
+    table = audit_labels.language_reach(reports, unlabelled,
+                                        header="E. LANGUAGE REACH")
+    audit_labels.stem_reach(reports)
+    table.to_csv("/kaggle/working/label_language_reach.csv", index=False)
+    print()
+    print("wrote label_language_reach.csv")
+""")
+
+    nb.md("""
+## F. Against the gold images — are the labels actually right?
+
+Part D asks how well the targets *order* studies, which is what the competition
+metric rewards. It cannot say whether a label is right, and here the two come
+apart.
+
+These labels are derived from reports, and a report is not an inventory of what
+the image contains. A finding the radiologist saw and did not write down is
+simply absent from the text, and the pipeline can only write a zero for it. So
+misses and false alarms are counted separately — a single error rate hides this
+completely, because most slots are true negatives and calling everything
+negative already looks good.
+
+Broken out by the pipeline's own sample weight, which is the cut worth making:
+the weight is assigned before anything sees the truth, so it either predicts
+where the labels are wrong or it does not.
+""")
+
+    nb.code("""
+if not HAVE_DUMPS:
+    print("F. AGAINST THE GOLD IMAGES")
+    print("   [skip] needs the extractor dumps to rebuild the gold-side targets")
+else:
+    per_finding = audit_labels.check_against_gold(gold, fused_gold)
+    per_finding.to_csv("/kaggle/working/label_error_by_finding.csv", index=False)
+    print()
+    print("wrote label_error_by_finding.csv")
+""")
+
+    nb.md("""
+## Verdict
+
+A and C are the checks that can fail a run. B is the reproduction guarantee. D
+and E measure and do not judge — nothing in this notebook writes a label, and
+changing the label matrix costs five fold retrains, which is a decision to
+pre-register rather than a cell to run.
+""")
+
+    nb.code("""
+print("VERDICT")
+print(f"   A provenance   md5 {'matches repo' if digest == EXPECTED_MD5 else 'DIFFERS'},"
+      f" gold leakage {leaked}")
+if HAVE_DUMPS:
+    print(f"   B reproduction {'PASS' if reproduced else 'FAIL'}")
+else:
+    print("   B reproduction skipped -- dumps not attached")
+print(f"   C properties   {'PASS' if properties_ok else 'FAIL'}")
+print("   D correctness  measured, not judged -- read the interval, not the point")
+print("   F gold images  precision and recall, split apart -- see the table above")
+print()
+if digest != EXPECTED_MD5:
+    print("Resolve the md5 difference before trusting anything downstream:")
+    print("the uploaded matrix and the repo matrix are not the same file.")
+else:
+    print("The matrix that trained the 0.906 folds is the matrix this repo")
+    print("reproduces. Correctness beyond that rests on 58 studies -- see D.")
+""")
+
+    nb.write(NOTEBOOKS / "14_verify_labels.ipynb")
+
+
+
 def main():
     NOTEBOOKS.mkdir(exist_ok=True)
     build_index_notebook()
@@ -6731,6 +7165,7 @@ def main():
     build_error_analysis_notebook()
     build_verify_notebook()
     build_side_validation_notebook()
+    build_label_audit_notebook()
 
 
 if __name__ == "__main__":
