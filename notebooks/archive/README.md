@@ -31,3 +31,38 @@ nothing else.
 
 `tests/test_notebook.py::TestTheArchivedReferenceStaysAtReference` fails if any
 lever in these files is ever switched on.
+
+
+---
+
+## `10_submit_ensemble_0906.ipynb` — the submission that scored 0.906
+
+Notebook 10 exactly as it stood at commit `bbbddc4` (2026-08-26), which is the
+version in the repo at the moment submission 55908661 scored **0.906** on
+2026-08-31 06:05. Archived 2026-09-02 as a fallback, because the live notebook
+has changed since and the reproduction has not yet been confirmed.
+
+    BLEND 1.0    TUNED_SLICES 16    TUNED_MAX_SERIES 5
+    no FAST_DECODE, no AB_CHECK, no GEOMETRY_CROSSCHECK
+
+Those three are what the live copy has gained since:
+
+- **`FAST_DECODE`** (2026-09-01) stops decoding series and slices the
+  submission discards. It reads the same raw files but normalises over a
+  shallower stack, so predictions move slightly. **Never verified on real
+  data** — the A/B harness that measures it landed in the same change.
+- **`AB_CHECK`** scores every study both ways and reports the difference. It
+  roughly doubles the loop and does not affect what is submitted.
+- **`GEOMETRY_CROSSCHECK`** (2026-09-02) compares the side classifier against
+  the DICOM patient frame. Ships as a no-op: `DISAGREE_POLICY = "cnn"` leaves
+  every prediction unchanged and only reports the disagreement rate.
+
+**Use this file if the live notebook fails to reproduce 0.906.** Falling back
+to it isolates the cause to those three changes, and `FAST_DECODE` is the only
+one that can move a prediction.
+
+Geometry constants were verified against the ensemble members before
+archiving: the five checkpoints in `models_train/fold{0..4}` are 16 x 5, and
+this file scores at 16 x 5. (A note in the project memory claiming notebook 10
+shipped `TUNED_SLICES = 24` / `TUNED_MAX_SERIES = 6` from 2026-08-28 does not
+match the repo — every version from 2026-08-26 onward reads 16 and 5.)
