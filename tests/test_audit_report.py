@@ -158,3 +158,32 @@ def test_waived_delay_is_stated_next_to_the_decision(root):
     assert summary["delay_waived"] == 6
     text = ar.markdown(summary)
     assert "without the 7-day delay" in text and "Limitation (D6)" in text
+
+
+def test_one_pass_proposals_count_in_either_direction(root):
+    second_pass(root)
+    p = bp.paths(root, 2, "R1")
+    b = pd.read_parquet(p["stage_b"])
+    b.loc[3, ["disposition", "proposed_target", "rationale", "error_class"]] = ["correct_target", "1.0", "x", "missed_mention"]
+    b.to_parquet(p["stage_b"], index=False)
+    summary, _ = ar.summarise(root, T0 + timedelta(days=8))
+    assert summary["unresolved"]["proposed_once_not_agreed"] == 2   # u2 pass-1 only, u3 pass-2 only
+
+
+def test_extra_controls_are_neither_enriched_nor_selected_changes(root):
+    keys = [{"case_id": "KX0", ID: "u9", "finding": "PF OA", "role": "extra_control", "pass": 1, "batch": "X1"}]
+    write_batch(root, 1, "X1", keys, [a_row("KX0", "present")], [b_row("KX0", "correct_target", 0.2, False)])
+    write_batch(root, 2, "R9", [{"case_id": "RX0", ID: "u9", "finding": "PF OA", "role": "extra_control",
+                                 "pass": 2, "batch": "R9"}],
+                [a_row("RX0", "present")], [b_row("RX0", "correct_target", 0.2, False)])
+    summary, _ = ar.summarise(root, T0 + timedelta(days=8))
+    assert "proposed_changes" not in summary["agreement"]
+    assert summary["agreement"]["extra_controls"]["pairs"] == 1
+    assert any("| extra_control |" in k for k in summary["assertions"])
+    assert not any("| enriched |" in k and "u9" in k for k in summary["assertions"])
+
+
+def test_enriched_table_rows_keep_five_columns(root):
+    text = ar.markdown(ar.summarise(root, T0)[0])
+    rows = [l for l in text.splitlines() if l.startswith("| PF OA ·")]
+    assert rows and all(l.count("|") == 6 for l in rows)

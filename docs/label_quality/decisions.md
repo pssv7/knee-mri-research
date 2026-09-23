@@ -117,3 +117,26 @@ count the D5 go/no-go rule uses. The decision is therefore biased toward "go".
 **What stays:** pass-2 packets still carry new case IDs, a new order, and no first-pass
 answers. Every pass-2 key row records `delay_waived = true`, and `docs/label_audit_v2.md`
 states this limitation next to the decision.
+
+## D7 — Stop at the audit; steps 8–13 not run (2026-09-23)
+
+The audit decided **go** for PF OA (D5; 11 agreed errors among its 50 original controls).
+Step 7 then measured the proposal rule (`src/labels/repair.py`) before any further work:
+
+- **Design data** (reviewed PF OA pairs with target < 0.5; the validation reserve untouched):
+  - it finds 20 of the 36 agreed corrections (56%);
+  - it proposes on 15 of the 85 labels the reviewer kept;
+  - precision is about 57% (missed mentions 7/11, severity cases 13/26).
+- **Corpus scale:** 648 proposals outside the reserve (211 missed mentions, 437 severity
+  cases). Two-pass review would take about 1,300 reads before the 2026-10-13 freeze.
+- **What the comparison could show:** the private leaderboard reports one macro AUC over
+  twelve findings. Moving it by the ~0.01 the paired comparison can resolve would need a
+  PF OA gain of about +0.12 AUC (its OOF AUC is about 0.816). A plausible +0.03 is
+  +0.0025 macro, below both that limit and the source plan's +0.005 gate. No per-finding
+  private score exists. The registered comparison would therefore read "inconclusive"
+  whatever the repair did.
+
+**Decision (participant, option 1):** stop at the audit. No candidate labels are built, no
+training pair runs, and nothing is registered or submitted for label repair. Steps 8–13
+are recorded as not run for this reason. The proposal rule stays in the repository as
+documentation of the PF OA wording gaps; nothing in the pipeline imports it.

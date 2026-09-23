@@ -142,6 +142,8 @@ def control_block(table, planned):
             lambda v: v is None or (isinstance(v, float) and pd.isna(v))).sum()),
         'proposed_changes_pass1': len(proposals), 'awaiting_pass2': len(pending),
         'agreed_target_errors': int(with_b.agreed_target_correction.sum()),
+        'agreed_by_class': {str(k): int(v) for k, v in
+                            with_b[with_b.agreed_target_correction].p1_error_class.value_counts().items()},
         'agreed_weight_changes': int((with_b.agreed_change & (with_b.p1_disposition == 'correct_weight')).sum()),
         'decidable': bool(planned and n >= planned and len(pending) == 0),
     }
@@ -190,10 +192,11 @@ def summarise(root, now=None):
         out['unresolved'] = {
             'unresolved': int((judged.p1_error_class == 'unresolved').sum()),
             'report_image_disagreement': int((judged.p1_error_class == 'report_image_disagreement').sum()),
-            'proposed_once_not_agreed': int(((judged.p1_disposition != 'keep') & judged.p2_disposition.notna()
+            'proposed_once_not_agreed': int((judged.p2_disposition.notna()
+                                             & ((judged.p1_disposition != 'keep') | (judged.p2_disposition != 'keep'))
                                              & ~judged.agreed_change).sum()) if 'p2_disposition' in judged else 0}
     if len(table):
-        group = table.design_role.map(lambda r: 'control' if r == 'control' else 'enriched')
+        group = table.design_role.map(lambda r: r if r in ('control', 'extra_control') else 'enriched')
         out['assertions'] = {f'{f} | {g} | {s}': len(x) for (f, g, s), x in
                              table.assign(group=group).groupby(['finding', 'group', 'p1_report_states'])}
         for column in ('language', 'scanner', 'weight_bucket', 'extractor_call'):
@@ -211,7 +214,13 @@ def summarise(root, now=None):
                 out['agreement']['controls'].update({
                     'disposition_raw': float((ctrl.p1_disposition == ctrl.p2_disposition).mean()),
                     'disposition_kappa': audit_stats.cohen_kappa(ctrl.p1_disposition, ctrl.p2_disposition)})
-        changes = twice[(twice.design_role != 'control') & (twice.p1_disposition != 'keep')] \
+        extra = twice[twice.design_role == 'extra_control']
+        if len(extra):
+            out['agreement']['extra_controls'] = {
+                'pairs': len(extra),
+                'state_raw': float((extra.p1_report_states == extra.p2_report_states).mean()),
+                'state_kappa': audit_stats.cohen_kappa(extra.p1_report_states, extra.p2_report_states)}
+        changes = twice[~twice.design_role.isin(['control', 'extra_control']) & (twice.p1_disposition != 'keep')] \
             if 'p1_disposition' in twice else twice.iloc[0:0]
         if len(changes):
             out['agreement']['proposed_changes'] = {'pairs': len(changes),
@@ -246,6 +255,9 @@ def markdown(s):
              + (' (pass 2 ran without the 7-day delay; see the D6 limitation below)' if s.get('delay_waived') else ''), '',
              f'Go needs {THRESHOLD}+ target errors agreed by both passes among a finding\'s original random '
              'controls. Weight-only changes do not count.', '',
+             'Agreed errors among original controls, by class: ' + ('; '.join(
+                 f"{f}: " + ', '.join(f'{c} {n}' for c, n in sorted(b.get('agreed_by_class', {}).items()))
+                 for f, b in s['controls'].items() if b.get('agreed_by_class')) or 'none') + '.', '',
              '## Random controls (population estimates)', '',
              '| Finding | Reviewed | Label judged incorrect | Missed positive | False positive | '
              'No judgement from text | Agreed target errors | Awaiting pass 2 | Decidable |', '|---|---|---|---|---|---|---|---|---|']
@@ -266,7 +278,7 @@ def markdown(s):
               '| Finding and stratum | Reviewed | Label judged incorrect | Agreed target errors | From label_review_v1 |',
               '|---|---|---|---|---|']
     for k, e in s['enriched'].items():
-        lines.append(f"| {k} | {e['reviewed']} | {e['incorrect']} | {e['agreed_target_errors']} | {e['from_label_review_v1']} |")
+        lines.append(f"| {k.replace(' | ', ' · ')} | {e['reviewed']} | {e['incorrect']} | {e['agreed_target_errors']} | {e['from_label_review_v1']} |")
     lines += ['', '## Error classes, ranked by agreed target errors', '']
     ranked = sorted(s['classes'].items(), key=lambda kv: (-kv[1]['agreed_target_errors'], -kv[1]['pass1']))
     lines += [f"- {k}: {v['agreed_target_errors']} agreed, {v['pass1']} in pass 1" for k, v in ranked] or ['- none yet']
@@ -283,6 +295,10 @@ def markdown(s):
                         if 'disposition_raw' in c else '') + '.')
     else:
         lines.append('- Random controls: no second pass yet.')
+    xc = s['agreement'].get('extra_controls')
+    if xc:
+        lines.append(f"- Extra controls, D4 ({xc['pairs']} pairs): reading {xc['state_raw']:.1%}, "
+                     f"κ {'undefined' if xc['state_kappa'] is None else format(xc['state_kappa'], '.2f')}.")
     pc = s['agreement'].get('proposed_changes')
     lines.append(f"- Selectively re-reviewed proposed changes: {pc['agreed']}/{pc['pairs']} agreed." if pc
                  else '- Proposed changes: no second pass yet.')
