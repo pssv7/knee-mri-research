@@ -103,15 +103,29 @@ class StudyVolumeDataset(Dataset):
     is reproducible. Horizontal flips are deliberately not used: after
     canonicalisation a flip re-mirrors the knee and swaps medial with lateral,
     silently corrupting four of the twelve labels.
+
+    **`resample` is the training-only exception, and it exists because the
+    cache is larger than what training reads.** The cache holds 24 slices of
+    each of 24,371 series -- 584,904 slice-images. A run at 16 slices x 5
+    series reads 341,728 of them, the same ones every epoch: the fixed
+    `keep` discards 8 slices of every series and the deterministic series cap
+    discards 3,013 series outright. The remaining 42% is not new data, but it
+    is unseen pixels of the same 4,349 studies, and reaching it costs no
+    storage, no upload and no extra forward passes. `resample=False`
+    reproduces every measured result exactly; the flag is what makes the two
+    comparable.
     """
 
     def __init__(self, study_index, studies: Sequence[str],
                  cache_paths: Sequence[str], slices_per_series: int,
-                 augment=False):
+                 augment=False, resample: bool = False):
         self.index = study_index
         self.studies = list(studies)
         self.cache_paths = list(cache_paths)
         self.slices_per_series = slices_per_series
+        # Per-epoch resampling of *which* slices and series are read. Training
+        # only -- a validation score has to be reproducible to be a gate.
+        self.resample = resample
         # `augment` is either a bool -- the legacy single intensity scale that
         # every measured result was trained under -- or an AugmentConfig. The
         # bool path is kept byte-for-byte rather than expressed as a config so
@@ -140,14 +154,36 @@ class StudyVolumeDataset(Dataset):
     def __len__(self) -> int:
         return len(self.studies)
 
+    def _resampled_keep(self, available: int, rng) -> np.ndarray:
+        """A fresh even-ish slice subsample: drop one slice per even group.
+
+        Phrased as a drop rather than a pick so the result is exactly
+        `slices_per_series` distinct indices in ascending order. Order matters:
+        `stack_2p5d` hands the backbone each slice with its two neighbours, and
+        a shuffled stack makes those neighbours meaningless -- the same reason
+        `augment.py` implements `slice_reverse` and not slice permutation.
+        Coverage matches `np.linspace` in expectation, so this is a resample of
+        the reference geometry rather than a different one.
+        """
+        n_drop = available - self.slices_per_series
+        groups = np.array_split(np.arange(available), n_drop)
+        drop = {int(rng.choice(group)) for group in groups}
+        return np.array([i for i in range(available) if i not in drop])
+
     def __getitem__(self, i: int):
-        item = knee_dataset.load_study(self.index, self.studies[i], self.shards)
+        rng = np.random.default_rng(np.random.randint(0, 2**31))
+        item = knee_dataset.load_study(
+            self.index, self.studies[i], self.shards,
+            series_rng=rng if self.resample else None)
 
         available = item["volumes"].shape[1]
         if available > self.slices_per_series:
             # A thinned cache is already at the target count; only subsample a
             # full one, or the second cut would drop slices twice.
-            item["volumes"] = item["volumes"][:, self.keep]
+            keep = (self._resampled_keep(available, rng) if self.resample
+                    else np.linspace(0, available - 1,
+                                     self.slices_per_series).round().astype(int))
+            item["volumes"] = item["volumes"][:, keep]
         elif available < self.slices_per_series:
             # The attention pool masks over the slice axis, so a short volume
             # trains happily on fewer slices than configured and says nothing.
@@ -157,12 +193,11 @@ class StudyVolumeDataset(Dataset):
                 "shards, or lower the setting")
 
         if isinstance(self.augment, augment_mod.AugmentConfig):
-            # Seeded from the study index and the epoch-independent worker RNG
-            # so two workers never draw the same stream, and a re-run with the
-            # same seed is reproducible.
-            item = augment_mod.augment_study(
-                item, np.random.default_rng(np.random.randint(0, 2**31)),
-                self.augment)
+            # The same generator that chose the slices and series, so one item
+            # draws from one stream. Its seed comes from the worker's numpy
+            # state, which advances rather than resetting between epochs --
+            # that is what makes the resample per-epoch and not per-study.
+            item = augment_mod.augment_study(item, rng, self.augment)
         elif self.augment:
             # Legacy path: one intensity scale for the whole study. Every
             # result on record was trained through exactly this.
@@ -205,8 +240,14 @@ class KneeLitModule(pl.LightningModule):
                  stratified_caliper: float = 0.15,
                  lambda_coupling: float = 0.0,
                  coupling_target: Optional[float] = None,
-                 residual_beta: Optional[float] = None):
+                 residual_beta: Optional[float] = None,
+                 classwise_pool: bool = False,
+                 slice_transformer: bool = False,
+                 spatial_encoder: bool = False,
+                 plane_adapters: bool = False):
         super().__init__()
+        if classwise_pool and (lambda_report > 0 or aux_mode != "fixed"):
+            raise ValueError("classwise pooling requires fixed mode without report loss")
         if aux_mode not in ("fixed", "cosine"):
             raise ValueError(f"aux_mode must be fixed|cosine, got {aux_mode!r}")
         if aux_gate not in ("binary", "weighted"):
@@ -240,6 +281,10 @@ class KneeLitModule(pl.LightningModule):
         self.model = net.KneeNet(backbone, feature_dim,
                                  input_mean=input_mean, input_std=input_std,
                                  gated_pool=gated_pool,
+                                 classwise_pool=classwise_pool,
+                                 slice_transformer=slice_transformer,
+                                 spatial_encoder=spatial_encoder,
+                                 plane_adapters=plane_adapters,
                                  residual_pairs=residual_pairs,
                                  residual_beta=residual_beta)
         self.backbone_lr_scale = backbone_lr_scale
@@ -675,8 +720,10 @@ def optimiser_steps(n_studies: int, batch_size: int, devices: int,
     early and trains the tail at a near-zero learning rate, or never reaches
     its peak. Neither raises.
     """
-    per_rank_batches = int(np.ceil(n_studies / (batch_size * max(devices, 1))))
-    return epochs * (per_rank_batches // accumulate + 1)
+    if min(n_studies, batch_size, devices, accumulate, epochs) < 1:
+        raise ValueError("study, batch, device, accumulation and epoch counts must be positive")
+    per_rank_batches = int(np.ceil(n_studies / (batch_size * devices)))
+    return epochs * int(np.ceil(per_rank_batches / accumulate))
 
 
 class WeightAverage(pl.Callback):
@@ -694,8 +741,8 @@ class WeightAverage(pl.Callback):
     unchanged model into the EMA `accumulate` times per step would make the
     effective decay `decay ** accumulate` -- a shorter memory than asked for,
     varying with a knob that is supposed to be numerically neutral.
-    `on_before_optimizer_step` fires exactly when the weights are about to
-    change, so counting there tracks the schedule's own step count.
+    `on_train_batch_end` samples only when `global_step` advances, after the
+    optimizer has changed the weights, including the final update.
 
     **Rank zero only.** DDP keeps every rank's weights identical after each
     step, so every rank would compute the same average; doing it once saves
@@ -722,6 +769,7 @@ class WeightAverage(pl.Callback):
         self.total_steps = total_steps
         self.average: Optional[averaging.WeightAverage] = None
         self.written: Dict[str, str] = {}
+        self._last_step = 0
 
     @property
     def ema_path(self) -> str:
@@ -748,10 +796,13 @@ class WeightAverage(pl.Callback):
             return
         self.average = averaging.WeightAverage(
             module.model, decay=self.decay, swa_from=self._swa_from(trainer))
+        self._last_step = trainer.global_step
 
-    def on_before_optimizer_step(self, trainer, module, optimizer):
-        if self.average is not None:
+    def on_train_batch_end(self, trainer, module, outputs, batch, batch_idx):
+        # Sample after the update, including the final trained weights.
+        if self.average is not None and trainer.global_step > self._last_step:
             self.average.update(module.model)
+            self._last_step = trainer.global_step
 
     def on_train_end(self, trainer, module):
         # Wrapped, on the same rule the notebook's export cell follows: by the

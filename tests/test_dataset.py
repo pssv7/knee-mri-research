@@ -128,6 +128,32 @@ class TestStudyIndex:
         assert first == second
         assert len(first) <= 4
 
+    def test_cap_resamples_when_given_a_generator(self):
+        # The deterministic cap discards 3,013 of 24,371 series on every epoch
+        # of every fold. A generator is how training reaches them.
+        index = ds.StudyIndex(make_manifest(10), make_series_meta(10),
+                              make_labels(), max_series=4)
+        picks = {tuple(index.series_for(
+            "study1", rng=np.random.default_rng(seed))[
+                "SeriesInstanceUID"].tolist()) for seed in range(20)}
+        assert len(picks) > 1
+        assert all(len(pick) == 4 for pick in picks)
+        # Every series becomes reachable, which is the whole point.
+        reached = {uid for pick in picks for uid in pick}
+        deterministic = set(index.series_for("study1")[
+            "SeriesInstanceUID"].tolist())
+        assert reached - deterministic
+
+    def test_resampled_series_keep_manifest_order(self):
+        # Series-axis metadata is built from these rows in order; a shuffled
+        # frame would pair a series with another series' conditioning.
+        index = ds.StudyIndex(make_manifest(10), make_series_meta(10),
+                              make_labels(), max_series=4)
+        rows = index.series_for("study1", rng=np.random.default_rng(3))
+        order = [int(uid.lstrip("s")) if uid.lstrip("s").isdigit() else i
+                 for i, uid in enumerate(rows["SeriesInstanceUID"])]
+        assert order == sorted(order)
+
     def test_cap_does_nothing_below_the_limit(self):
         index = ds.StudyIndex(make_manifest(3), make_series_meta(3),
                               make_labels(), max_series=8)

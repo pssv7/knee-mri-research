@@ -60,11 +60,11 @@ META_COLUMNS = ["Fluid_Sensitive", "Fat_Suppression", "is_sagittal",
 def mirror_volume(volume: np.ndarray, side: Optional[str],
                   plane: Optional[str]) -> np.ndarray:
     """Reflect a left knee onto the canonical side, along the correct axis."""
-    if side is None or (isinstance(side, float) and np.isnan(side)):
+    if not isinstance(side, str) or side.strip().upper() not in ("L", "R"):
         # Unknown side: leave as acquired. Guessing swaps medial with lateral
         # on four of the twelve findings.
         return volume
-    if str(side).upper() == config.CANONICAL_SIDE:
+    if side.strip().upper() == config.CANONICAL_SIDE:
         return volume
 
     axis = PLANE_MIRROR_AXIS.get(str(plane), DEFAULT_MIRROR_AXIS)
@@ -80,16 +80,69 @@ def series_metadata(row: pd.Series) -> np.ndarray:
     """
     plane = str(row.get("Anatomical_Plane", ""))
     side = row.get("side_predicted")
-    known = isinstance(side, str) and side.upper() in ("L", "R")
+    side = side.strip().upper() if isinstance(side, str) else None
+    known = side in ("L", "R")
     return np.array([
-        float(row.get("Fluid_Sensitive", 0) or 0),
-        float(row.get("Fat_Suppression", 0) or 0),
+        sequence_flag(row.get("Fluid_Sensitive")),
+        sequence_flag(row.get("Fat_Suppression")),
         float(plane == "Sagittal"),
         float(plane == "Coronal"),
         float(plane == "Axial"),
-        float(known and side.upper() == "R"),
+        float(known and side == "R"),
         float(known),
     ], dtype=np.float32)
+
+
+def sequence_flag(value) -> float:
+    """Parse CSV flags without treating NaN or the string 'False' as true."""
+    if value is None or pd.isna(value):
+        return 0.0
+    if isinstance(value, str):
+        value = value.strip().lower()
+        if value in ("true", "yes", "1", "1.0"):
+            return 1.0
+        if value in ("false", "no", "0", "0.0", ""):
+            return 0.0
+        raise ValueError(f"invalid sequence flag: {value!r}")
+    if value not in (0, 1):
+        raise ValueError(f"invalid sequence flag: {value!r}")
+    return float(value)
+
+
+def select_series(rows: pd.DataFrame, maximum=None, strategy="uniform", rng=None):
+    """Positions to retain, preserving order and optionally protocol coverage.
+
+    Protocol selection first covers acquisition planes, then distinct
+    (plane, fluid sensitivity, fat suppression) tuples, then repeats. It
+    uses only metadata available at inference, never labels or reports.
+    """
+    if strategy not in ("uniform", "protocol"):
+        raise ValueError(f"unknown series selection: {strategy}")
+    if maximum is not None and maximum < 1:
+        raise ValueError("max_series must be positive or None")
+    count = len(rows)
+    if maximum is None or count <= maximum:
+        return np.arange(count)
+    if strategy == "uniform":
+        chosen = (np.linspace(0, count - 1, maximum).round().astype(int)
+                  if rng is None else rng.choice(count, maximum, replace=False))
+        return np.sort(chosen)
+    protocols = [(str(row.get("Anatomical_Plane", "")),
+                  sequence_flag(row.get("Fluid_Sensitive")),
+                  sequence_flag(row.get("Fat_Suppression")))
+                 for _, row in rows.iterrows()]
+    planes, covered, chosen = set(), set(), []
+    priority = (np.arange(count) if rng is None else rng.permutation(count))
+    while len(chosen) < maximum:
+        remaining = [int(i) for i in priority if i not in chosen]
+        best = max(remaining, key=lambda i: (
+            protocols[i][0] in PLANE_MIRROR_AXIS and protocols[i][0] not in planes,
+            protocols[i] not in covered,
+            min((abs(i - j) for j in chosen), default=0)))
+        chosen.append(best)
+        planes.add(protocols[best][0])
+        covered.add(protocols[best])
+    return np.array(sorted(chosen))
 
 
 class StudyIndex:
@@ -103,16 +156,17 @@ class StudyIndex:
                  labels: Optional[pd.DataFrame] = None,
                  sides: Optional[pd.DataFrame] = None,
                  max_series: Optional[int] = None,
-                 reports: Optional[pd.DataFrame] = None):
+                 reports: Optional[pd.DataFrame] = None,
+                 series_selection: str = "uniform"):
         frame = manifest.merge(
             series_meta[["SeriesInstanceUID", "Fluid_Sensitive",
                          "Fat_Suppression", "Anatomical_Plane"]],
-            on="SeriesInstanceUID", how="left")
+            on="SeriesInstanceUID", how="left", validate="one_to_one")
 
         if sides is not None:
             frame = frame.merge(
                 sides[["SeriesInstanceUID", "side_predicted"]],
-                on="SeriesInstanceUID", how="left")
+                on="SeriesInstanceUID", how="left", validate="one_to_one")
         else:
             frame["side_predicted"] = frame.get("laterality_resolved")
 
@@ -121,8 +175,12 @@ class StudyIndex:
         if "error" in frame.columns:
             frame = frame[frame["error"].isna()].reset_index(drop=True)
 
+        if series_selection == "protocol":
+            frame = frame.sort_values("SeriesInstanceUID", kind="stable").reset_index(drop=True)
         self.series = frame
         self.max_series = max_series
+        self.series_selection = series_selection
+        select_series(frame.iloc[:0], max_series, series_selection)
         self.labels = labels
 
         self.studies: List[str] = sorted(frame[config.ID_COL].unique())
@@ -132,6 +190,8 @@ class StudyIndex:
         }
 
         if labels is not None:
+            if labels[config.ID_COL].duplicated().any():
+                raise ValueError("duplicate study IDs in labels")
             keyed = labels.set_index(config.ID_COL)
             self.studies = [s for s in self.studies if s in keyed.index]
             self._labels = keyed
@@ -156,19 +216,26 @@ class StudyIndex:
     def __len__(self) -> int:
         return len(self.studies)
 
-    def series_for(self, study: str) -> pd.DataFrame:
+    def series_for(self, study: str, rng=None) -> pd.DataFrame:
         """Series of a study, capped deterministically when a cap is set.
 
         The cap exists for the efficiency track: inference cost scales with
         series count, and a study with a dozen series contributes far more
         runtime than one with three. Selection is by position rather than at
         random so a prediction is reproducible.
+
+        `rng` is the training-only exception. The deterministic cap discards
+        the same 3,013 of 24,371 series (12.4%) on every epoch of every fold --
+        1,432 studies carry more series than `max_series` and always show the
+        model the same subset. Passing a generator resamples the cap per epoch,
+        which reaches those series without adding a byte to the cache. Order is
+        preserved, so the series-axis metadata still lines up. Never pass one
+        for validation or inference: a prediction that changes between two
+        identical runs cannot be compared against anything.
         """
         rows = self._by_study[study]
-        if self.max_series is not None and len(rows) > self.max_series:
-            keep = np.linspace(0, len(rows) - 1, self.max_series).round().astype(int)
-            rows = rows.iloc[np.unique(keep)].reset_index(drop=True)
-        return rows
+        keep = select_series(rows, self.max_series, self.series_selection, rng)
+        return rows.iloc[keep].reset_index(drop=True)
 
     def targets_for(self, study: str):
         """(targets, weights) for a study, or (None, None) when unlabelled."""
@@ -189,9 +256,13 @@ class StudyIndex:
         return self._report_matrix[self._report_rows[study]]
 
 
-def load_study(index: StudyIndex, study: str, shards: Dict[str, np.ndarray]) -> Dict:
-    """Assemble one study: mirrored volumes, conditioning, targets, weights."""
-    rows = index.series_for(study)
+def load_study(index: StudyIndex, study: str, shards: Dict[str, np.ndarray],
+               series_rng=None) -> Dict:
+    """Assemble one study: mirrored volumes, conditioning, targets, weights.
+
+    `series_rng` is forwarded to `series_for` and is training-only; see there.
+    """
+    rows = index.series_for(study, rng=series_rng)
 
     volumes, meta = [], []
     for _, row in rows.iterrows():

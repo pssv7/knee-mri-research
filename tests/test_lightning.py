@@ -118,6 +118,58 @@ class TestSliceGuard:
         assert list(dataset.keep) == sorted(dataset.keep)
 
 
+class TestResampling:
+    """Per-epoch resampling of which slices and series a study shows.
+
+    The cache holds more than a run reads -- 8 of every series' 24 slices and
+    3,013 of 24,371 series are discarded identically on every epoch. These
+    tests pin two things: that turning the flag off reproduces the reference
+    geometry exactly, and that turning it on still hands the backbone an
+    ascending, correctly-sized stack, since `stack_2p5d` reads neighbours.
+    """
+
+    def _dataset(self, resample):
+        return knee_lightning.StudyVolumeDataset(
+            study_index=None, studies=[], cache_paths=[],
+            slices_per_series=16, resample=resample)
+
+    def test_default_is_off(self):
+        assert self._dataset(False).resample is False
+        assert knee_lightning.StudyVolumeDataset(
+            study_index=None, studies=[], cache_paths=[],
+            slices_per_series=16).resample is False
+
+    def test_resampled_keep_is_the_right_size_and_ascending(self):
+        dataset = self._dataset(True)
+        rng = np.random.default_rng(0)
+        for _ in range(50):
+            keep = dataset._resampled_keep(config.CACHE_SLICES, rng)
+            assert len(keep) == 16
+            assert len(set(keep.tolist())) == 16
+            assert list(keep) == sorted(keep)
+            assert keep[0] >= 0 and keep[-1] < config.CACHE_SLICES
+
+    def test_resampling_actually_varies(self):
+        # A flag that silently produced the same subsample every time would
+        # measure as a null and look like evidence against the idea.
+        dataset = self._dataset(True)
+        rng = np.random.default_rng(0)
+        seen = {tuple(dataset._resampled_keep(config.CACHE_SLICES, rng))
+                for _ in range(20)}
+        assert len(seen) > 1
+
+    def test_it_reaches_slices_linspace_never_reads(self):
+        dataset = self._dataset(True)
+        rng = np.random.default_rng(0)
+        reference = set(dataset.keep.tolist())
+        reached = set()
+        for _ in range(200):
+            reached |= set(dataset._resampled_keep(
+                config.CACHE_SLICES, rng).tolist())
+        assert reached - reference, "resampling read nothing new"
+        assert reached == set(range(config.CACHE_SLICES))
+
+
 class TestOptimiserSteps:
     def test_effective_batch_is_device_count_invariant(self):
         # 2 studies x 1 device x 4 accum and 2 x 2 x 2 are the same eight

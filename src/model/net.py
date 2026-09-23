@@ -179,8 +179,46 @@ class AttentionPool(nn.Module):
         weights = self.scores(x)
         if mask is not None:
             weights = weights.masked_fill(~mask, float("-inf"))
+            weights = torch.where(mask.any(dim=1, keepdim=True), weights,
+                                  torch.zeros_like(weights))
         weights = torch.softmax(weights, dim=1).unsqueeze(-1)
+        if mask is not None:
+            weights = weights * mask.unsqueeze(-1)
         return (x * weights).sum(dim=1)
+
+
+class ClassAttentionPool(nn.Module):
+    """Separate gated series attention for each finding, sharing the features."""
+
+    def __init__(self, dim: int, n_labels: int, hidden: int = 128):
+        super().__init__()
+        self.attend = nn.Linear(dim, hidden)
+        self.gate = nn.Linear(dim, hidden)
+        self.weigh = nn.Linear(hidden, n_labels)
+
+    def forward(self, x, mask=None):
+        scores = self.weigh(torch.tanh(self.attend(x)) * torch.sigmoid(self.gate(x)))
+        if mask is not None:
+            scores = scores.masked_fill(~mask.unsqueeze(-1), float("-inf"))
+            scores = torch.where(mask.any(dim=1)[:, None, None], scores,
+                                 torch.zeros_like(scores))
+        weights = scores.softmax(dim=1)
+        if mask is not None:
+            weights = weights * mask.unsqueeze(-1)
+        return torch.einsum("bsl,bsf->blf", weights, x)
+
+
+def aggregation_defaults(state: dict) -> dict:
+    """Recover the pooling variant from weights at every scoring site."""
+    return {
+        "slice_transformer": "slice_encoder.project.weight" in state,
+        "spatial_encoder": "spatial_encoder.project.weight" in state,
+        "plane_adapters": any(key.startswith("study_pool.adapters.")
+                              for key in state),
+        "gated_pool": "slice_pool.gate.weight" in state,
+        "classwise_pool": ("study_pool.weigh.weight" in state and
+                           state["study_pool.weigh.weight"].shape[0] > 1),
+    }
 
 
 class FiLM(nn.Module):
@@ -196,6 +234,172 @@ class FiLM(nn.Module):
         scale, shift = self.to_scale_shift(meta).chunk(2, dim=-1)
         # Centre the scale on 1 so an untrained FiLM is close to the identity.
         return x * (1.0 + scale) + shift
+
+
+class SliceSequenceEncoder(nn.Module):
+    """Contextualize sampled slices before pooling; positions are relative, not mm.
+
+    A narrow residual branch preserves the existing feature interface. Its
+    output starts at zero, so the new model initially reproduces the control.
+    """
+
+    def __init__(self, feature_dim, width=256, layers=2, dropout=0.2):
+        super().__init__()
+        self.norm = nn.LayerNorm(feature_dim)
+        self.project = nn.Linear(feature_dim, width)
+        self.position = nn.Linear(1, width)
+        # Construct layers independently (TransformerEncoder otherwise clones
+        # one layer with identical initial values).
+        self.layers = nn.ModuleList([
+            nn.TransformerEncoderLayer(width, 8, width * 2, dropout,
+                                       batch_first=True, norm_first=True)
+            for _ in range(layers)])
+        self.output = nn.Linear(width, feature_dim)
+        nn.init.zeros_(self.output.weight)
+        nn.init.zeros_(self.output.bias)
+
+    def forward(self, features):
+        positions = torch.linspace(-1, 1, features.shape[1],
+                                   device=features.device, dtype=features.dtype)
+        x = self.project(self.norm(features)) + self.position(positions[:, None])[None]
+        for layer in self.layers:
+            x = layer(x)
+        return features + self.output(x)
+
+
+class SpatialVolumeEncoder(nn.Module):
+    """Residual 3D convolution over one series' feature maps, before pooling.
+
+    The slice transformer already mixes information across slices, but it does
+    so on *pooled* slice embeddings: by the time it runs, the backbone has
+    already averaged each slice's 7x7 feature map into one vector, and where in
+    the knee a signal came from is gone. This runs before that pooling, on
+    (depth, height, width) together, which is the only place a tear that spans
+    three adjacent slices at the same location can be represented as such.
+
+    Shape in and out is (N, D, C, H, W), one entry per series. The residual
+    branch's output convolution is zero-initialised, so a freshly built model
+    reproduces its 2D control exactly -- which is what makes the screening
+    comparison a test of the 3D blocks rather than of a different
+    initialisation.
+
+    **Slice spacing is not physical.** `slices` samples a fixed number of
+    positions across whatever depth the series has, so a kernel of three along
+    the depth axis spans three *sampled* slices, and how many millimetres that
+    is varies by series and by study. The convolution therefore assumes
+    ordering, which the cache guarantees, and not uniform spacing, which it
+    does not. `tools/audit_geometry.py` measures how far off uniformity the
+    corpus actually is; resampling to physical spacing is a separate
+    experiment and is not what this is.
+    """
+
+    def __init__(self, channels: int, width: int = 128, blocks: int = 2,
+                 dropout: float = 0.0, groups: int = 8):
+        super().__init__()
+        if width % groups:
+            raise ValueError(f"width {width} must be divisible by {groups}")
+        self.channels = channels
+        self.project = nn.Conv3d(channels, width, kernel_size=1)
+        self.blocks = nn.ModuleList([
+            nn.Sequential(
+                nn.GroupNorm(groups, width),
+                nn.Conv3d(width, width, kernel_size=3, padding=1),
+                nn.GELU(),
+                nn.Dropout3d(dropout) if dropout else nn.Identity(),
+                nn.Conv3d(width, width, kernel_size=3, padding=1))
+            for _ in range(blocks)])
+        self.output = nn.Conv3d(width, channels, kernel_size=1)
+        nn.init.zeros_(self.output.weight)
+        nn.init.zeros_(self.output.bias)
+
+    def forward(self, maps: torch.Tensor) -> torch.Tensor:
+        if maps.ndim != 5 or maps.shape[2] != self.channels:
+            raise ValueError(
+                f"expected (N, D, {self.channels}, H, W) feature maps, got "
+                f"{tuple(maps.shape)}")
+        volume = maps.permute(0, 2, 1, 3, 4)          # (N, C, D, H, W)
+        hidden = self.project(volume)
+        for block in self.blocks:
+            hidden = hidden + block(hidden)
+        return (volume + self.output(hidden)).permute(0, 2, 1, 3, 4)
+
+
+# Acquisition planes get their own adapter, plus a fallback group for series
+# whose plane is missing or not one of the three. `series_metadata` writes the
+# three flags as a one-hot, so a series joins exactly one group; a row with no
+# flag set is unknown rather than silently sagittal.
+PLANE_FLAGS = ("is_sagittal", "is_coronal", "is_axial")
+PLANE_GROUPS = ("sagittal", "coronal", "axial", "unknown")
+
+
+def plane_adapter(dim: int, hidden: int, dropout: float) -> nn.Sequential:
+    """The branch of a residual adapter, zero at its output.
+
+    Applied as `x + adapter(x)`, so an untrained adapter is the identity and a
+    plane-adapted model starts from the same series embeddings the study pool
+    it replaces would have seen.
+    """
+    block = nn.Sequential(
+        nn.LayerNorm(dim), nn.Linear(dim, hidden), nn.GELU(),
+        nn.Dropout(dropout), nn.Linear(hidden, dim))
+    nn.init.zeros_(block[-1].weight)
+    nn.init.zeros_(block[-1].bias)
+    return block
+
+
+class PlaneAdapterPool(nn.Module):
+    """Pool each acquisition plane separately, then fuse the plane vectors.
+
+    A drop-in replacement for the study-level `AttentionPool`, and the reason
+    it replaces rather than wraps it: one pool over every series of a study
+    asks a single set of attention weights to compare a sagittal PD-FS against
+    a coronal T1, when what each plane shows is different. Here each plane has
+    its own adapter and its own pool, and the fusion sees three (four, with
+    the fallback) vectors of known provenance.
+
+    **Missing planes are masked, not zero-filled.** Studies routinely lack an
+    axial series. A zero vector in its slot is a value the fusion would learn
+    to read as "axial says nothing is there"; excluding the slot from the
+    fusion's attention says only that it was not acquired. The learned plane
+    embeddings are what tell the fusion which vector is which, since the
+    attention itself is permutation invariant.
+    """
+
+    def __init__(self, dim: int, hidden: Optional[int] = None,
+                 gated: bool = False, dropout: float = 0.2):
+        super().__init__()
+        hidden = hidden or dim // 2
+        self.groups = PLANE_GROUPS
+        self.adapters = nn.ModuleDict(
+            {name: plane_adapter(dim, hidden, dropout) for name in self.groups})
+        self.pools = nn.ModuleDict(
+            {name: AttentionPool(dim, gated=gated) for name in self.groups})
+        self.plane_embedding = nn.Parameter(torch.zeros(len(self.groups), dim))
+        self.fuse = AttentionPool(dim, gated=gated)
+
+    @staticmethod
+    def plane_masks(meta: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """(B, S, M) metadata -> (B, S, 4) membership, padding excluded."""
+        index = [META_COLUMNS.index(name) for name in PLANE_FLAGS]
+        flags = meta[..., index] > 0.5
+        unknown = ~flags.any(dim=-1, keepdim=True)
+        return torch.cat([flags, unknown], dim=-1) & mask.unsqueeze(-1)
+
+    def forward(self, series: torch.Tensor, meta: torch.Tensor,
+                mask: torch.Tensor) -> torch.Tensor:
+        groups = self.plane_masks(meta, mask)
+        vectors, present = [], []
+        for i, name in enumerate(self.groups):
+            member = groups[..., i]
+            adapted = series + self.adapters[name](series)
+            pooled = self.pools[name](adapted, mask=member)
+            vectors.append(pooled + self.plane_embedding[i])
+            present.append(member.any(dim=1))
+        # A study with no series at all reaches this with nothing present; the
+        # pool returns zeros for that row exactly as the study pool it replaces
+        # does, rather than dividing by an empty attention.
+        return self.fuse(torch.stack(vectors, dim=1),
+                         mask=torch.stack(present, dim=1))
 
 
 class KneeNet(nn.Module):
@@ -214,12 +418,36 @@ class KneeNet(nn.Module):
                  input_dim: Optional[int] = None,
                  input_mean=None, input_std=None,
                  gated_pool: bool = False,
-                 residual_pairs=None, residual_beta=None):
+                 residual_pairs=None, residual_beta=None,
+                 classwise_pool: bool = False,
+                 slice_transformer: bool = False,
+                 spatial_encoder: bool = False,
+                 spatial_channels: Optional[int] = None,
+                 spatial_width: int = 128, spatial_blocks: int = 2,
+                 plane_adapters: bool = False):
         super().__init__()
         # None is valid on the frozen path, where the trunk ran offline.
         self.backbone = backbone if backbone is not None else nn.Identity()
         self.feature_dim = feature_dim
+        self.classwise_pool = classwise_pool
+        self.plane_adapters = plane_adapters
         n_labels = n_labels or len(config.LABELS)
+
+        if plane_adapters and classwise_pool:
+            raise ValueError(
+                "plane adapters and class-wise pooling both replace the study "
+                "pool; run them as separate experiments")
+        if spatial_encoder and not all(
+                hasattr(self.backbone, name)
+                for name in ("forward_features", "forward_head")):
+            # The spatial blocks run between the trunk's feature maps and its
+            # head. A trunk that cannot expose the two halves separately -- the
+            # frozen path's precomputed embeddings among them -- has no place
+            # to put them, and a silent fallback to the 2D path would make the
+            # screening comparison meaningless.
+            raise ValueError(
+                "spatial_encoder needs a backbone exposing forward_features "
+                "and forward_head; the frozen-embedding path cannot use it")
 
         if freeze_backbone:
             for parameter in self.backbone.parameters():
@@ -258,7 +486,8 @@ class KneeNet(nn.Module):
             dim_feedforward=feature_dim * 2, dropout=dropout,
             batch_first=True, norm_first=True)
         self.series_encoder = nn.TransformerEncoder(layer, num_layers=series_layers)
-        self.study_pool = AttentionPool(feature_dim, gated=gated_pool)
+        self.study_pool = (ClassAttentionPool(feature_dim, n_labels)
+                           if classwise_pool else AttentionPool(feature_dim, gated=gated_pool))
 
         self.head = nn.Sequential(
             nn.LayerNorm(feature_dim),
@@ -308,6 +537,23 @@ class KneeNet(nn.Module):
             self.register_buffer("residual_pairs", None)
             self.register_buffer("residual_beta", None)
 
+        # Add after all existing modules and restore CPU RNG so unchanged
+        # modules (including the Lightning wrapper) initialize identically.
+        # The study pool above is built either way and then replaced here for
+        # the same reason: a matched pair records a shared initial-weight hash,
+        # and consuming a different amount of RNG would break it for every
+        # module the two arms do share.
+        with torch.random.fork_rng(devices=[]):
+            self.slice_encoder = (SliceSequenceEncoder(feature_dim, dropout=dropout)
+                                  if slice_transformer else nn.Identity())
+            self.spatial_encoder = (
+                SpatialVolumeEncoder(spatial_channels or feature_dim,
+                                     width=spatial_width, blocks=spatial_blocks)
+                if spatial_encoder else nn.Identity())
+            if plane_adapters:
+                self.study_pool = PlaneAdapterPool(feature_dim, gated=gated_pool,
+                                                   dropout=dropout)
+
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
                               missing_keys, unexpected_keys, error_msgs):
         """Reconcile the normalisation buffers with checkpoints either side.
@@ -352,9 +598,31 @@ class KneeNet(nn.Module):
         slices = stack_2p5d(volumes)
         if self.input_mean is not None:
             slices = (slices - self.input_mean) / self.input_std
-        features = self.backbone(slices)
+        features = self.encode_slices(slices, count, depth)
         features = features.reshape(count, depth, self.feature_dim)
-        return self.slice_pool(features)
+        return self.slice_pool(self.slice_encoder(features))
+
+    def encode_slices(self, slices: torch.Tensor, count: int,
+                      depth: int) -> torch.Tensor:
+        """(N*D, 3, H, W) -> (N*D, F), optionally through the spatial blocks.
+
+        Without them this is the trunk's own forward. With them the trunk is
+        split at its pooling: the feature maps are regrouped into (N, D, C, H,
+        W) volumes, the 3D blocks run, and the trunk's own head finishes the
+        job -- so at the zero-initialised residual the two paths return the
+        same tensor, and the 2D control is the same computation rather than a
+        similar one.
+        """
+        if isinstance(self.spatial_encoder, nn.Identity):
+            return self.backbone(slices)
+        maps = self.backbone.forward_features(slices)
+        if maps.ndim != 4:
+            raise ValueError(
+                f"spatial_encoder needs (N, C, H, W) feature maps, got "
+                f"{tuple(maps.shape)}")
+        maps = self.spatial_encoder(maps.reshape(count, depth, *maps.shape[1:]))
+        return self.backbone.forward_head(
+            maps.reshape(count * depth, *maps.shape[2:]), pre_logits=True)
 
     def pool_study(self, series: torch.Tensor, meta: torch.Tensor,
                    mask: torch.Tensor) -> torch.Tensor:
@@ -374,6 +642,8 @@ class KneeNet(nn.Module):
         # pooling so one short study cannot poison the batch.
         encoded = torch.nan_to_num(encoded)
 
+        if self.plane_adapters:
+            return self.study_pool(encoded, meta, mask)
         return self.study_pool(encoded, mask=mask)
 
     def couple(self, logits: torch.Tensor) -> torch.Tensor:
@@ -403,7 +673,13 @@ class KneeNet(nn.Module):
         Everything above the backbone. Shared by the end-to-end path and the
         frozen path so the two cannot drift into different architectures.
         """
-        return self.couple(self.head(self.pool_study(series, meta, mask)))
+        return self.classify(self.pool_study(series, meta, mask))
+
+    def classify(self, pooled):
+        logits = self.head(pooled)
+        if self.classwise_pool:
+            logits = logits.diagonal(dim1=1, dim2=2)
+        return self.couple(logits)
 
     def forward_features(self, features: torch.Tensor, meta: torch.Tensor,
                          mask: torch.Tensor) -> torch.Tensor:
@@ -429,7 +705,7 @@ class KneeNet(nn.Module):
         flat = volumes.reshape(batch * series, *volumes.shape[2:])
         embeddings = self.encode_series(flat).reshape(batch, series, self.feature_dim)
         pooled = self.pool_study(embeddings, meta, mask)
-        return self.couple(self.head(pooled)), pooled
+        return self.classify(pooled), pooled
 
     def forward(self, volumes: torch.Tensor, meta: torch.Tensor,
                 mask: torch.Tensor) -> torch.Tensor:

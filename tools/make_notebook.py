@@ -40,6 +40,8 @@ MODEL_MODULES = KAGGLE_MODULES + [
     "src/model/embed.py",
     "src/model/dataset.py",
     "src/model/net.py",
+    "src/model/experiments.py",
+    "src/model/artifacts.py",
     # Torch-free, so it costs nothing to carry: the conditional-AUC metric is
     # needed by the training loop's validation hook (notebook 08) and by the
     # error-analysis notebook, and a second copy of it would be a second
@@ -64,6 +66,7 @@ INSPECT_MODULES = MODEL_MODULES + ["src/model/inspect.py"]
 # imports `calibrate` and `lexicon` at module scope, so they come too -- 1,000
 # lines of pure Python with no dependency beyond numpy and pandas.
 FINETUNE_MODULES = MODEL_MODULES + [
+    "src/data/resolution.py",
     "src/labels/calibrate.py",
     "src/labels/lexicon.py",
     "src/labels/fuse.py",
@@ -149,6 +152,7 @@ if pathlib.Path("src/model/side_classifier.py").exists():
 if pathlib.Path("src/model/net.py").exists():
     from src.model import (augment as knee_augment, averaging, conditional,
                            embed, dataset as knee_dataset, net, splits)
+    from src.model import artifacts, experiments
 # Only the fine-tuning notebook materialises these; lightning imports its
 # framework at module scope and fuse pulls in the two extractors.
 if pathlib.Path("src/model/inspect.py").exists():
@@ -2860,13 +2864,34 @@ print("lightning:", pl.__version__)
 
     nb.md("## 2. Repo modules")
     nb.code(bootstrap_cell(FINETUNE_MODULES, require_raw_dicom=False))
+    nb.md("""
+## Experiment
+
+Set `EXPERIMENT` before running the remaining cells. `baseline` reproduces the
+incumbent input policy; `resample` retains the existing working-tree experiment.
+`protocol`, `classwise`, and `convnextv2` each change one factor from baseline.
+These candidates have no measured leaderboard improvement yet. See
+`docs/target_0954_plan.md` in the repository for the evaluation gates.
+""")
+    nb.code('''
+EXPERIMENT = os.environ.get("KNEE_EXPERIMENT", "resample")
+RUN = experiments.get_experiment(EXPERIMENT)
+print("experiment:", RUN.to_dict())
+''')
 
     nb.md("""
 ## 3. Assemble
 
-One shard only. ~1,460 studies is enough to measure throughput and train a
-first fold, and loading all three would cost memory without changing what this
-run establishes.
+**Attach all three shards.** They are a partition of one corpus, not three
+alternatives -- `md5(study_uid) % 3` splits 4,407 studies across
+`cache_train_series_{00,01,02}.npy` with no study spanning two, so a one-shard
+run trains on a third of the data and looks perfectly healthy while doing it.
+The line to read is `studies in this shard: 4349`, with three `shard:` lines
+above it; the epoch time will not tell you.
+
+The text here used to say one shard was enough for a first fold. It was, for
+the throughput measurement it was written for, and every run that produced a
+leaderboard score since has staged all three.
 """)
 
     nb.code("""
@@ -3012,8 +3037,7 @@ if GROUPED_FOLDS:
         print(f"grouped folds: {groups.nunique()} scanner groups over "
               f"{len(groups)} studies")
     else:
-        print("GROUPED_FOLDS is on but no index parquet was found -- attach "
-              "notebook 01's output. Falling back to the ungrouped split.")
+        raise ValueError("GROUPED_FOLDS requires notebook 01's index parquet")
 
 folded = splits.make_folds(labels, groups=groups)
 splits.assert_no_gold_leakage(folded["StudyInstanceUID"], set(gold["StudyInstanceUID"]))
@@ -3052,14 +3076,20 @@ if groups is not None:
 #
 # Notebook 10's TUNED_MAX_SERIES tracks this constant; a test asserts it.
 MAX_SERIES = 5
+MAX_SERIES = RUN.max_series
 
 index = knee_dataset.StudyIndex(manifest, series_meta, folded, sides,
-                                max_series=MAX_SERIES, reports=reports)
+                                max_series=MAX_SERIES, reports=reports,
+                                series_selection=RUN.series_selection)
 gold_labels = gold[["StudyInstanceUID"] + config.LABELS].copy()
 for name in config.LABELS:
     gold_labels[f"{name}_weight"] = 1.0
 gold_index = knee_dataset.StudyIndex(manifest, series_meta, gold_labels, sides,
-                                     max_series=MAX_SERIES)
+                                     max_series=MAX_SERIES,
+                                     series_selection=RUN.series_selection)
+if ALL_SHARDS and (set(index.studies) != set(labels[config.ID_COL])
+                   or set(gold_index.studies) != set(gold[config.ID_COL])):
+    raise ValueError("incomplete cache coverage: attach every training and gold study")
 print(f"studies in this shard: {len(index)}  gold present: {len(gold_index)}")
 """)
 
@@ -3108,6 +3138,33 @@ from torch.utils.data import DataLoader
 # Notebook 10's TUNED_SLICES tracks this constant and a test asserts the two
 # agree, because a mismatch scores worse without erring.
 SLICES_PER_SERIES = 16
+SLICES_PER_SERIES = RUN.slices
+
+# RESAMPLE -- per-epoch resampling of *which* slices and series are read.
+#
+# Not more data: the same 4,349 studies. More of the data already cached. The
+# shards hold 24 slices of each of 24,371 series = 584,904 slice-images; a run
+# at 16 x 5 reads 341,728 of them and reads the same ones every epoch, because
+# `keep` is a fixed linspace and the series cap is deterministic. The other
+# 42% -- 8 slices of every series, plus 3,013 series in the 1,432 studies that
+# carry more than five -- has never been shown to any model this project has
+# trained. Reaching it costs no storage, no upload, and no extra forwards.
+#
+# Aimed at a measured weakness: at 24 slices val AND gold fell together
+# (0.865 -> 0.842), which is capacity against too few distinct examples. This
+# adds examples without adding capacity.
+#
+# Training only. The val and gold loaders stay deterministic -- a gate whose
+# score moves between two identical runs is not a gate.
+#
+# UNMEASURED as of 2026-09-04. False reproduces the reference geometry exactly.
+#
+# ON for this run. It is the only change from the fold-1 reference (val 0.872 /
+# gold 0.861 / LB 0.889): same fold, same 16 x 5 geometry, same 12 epochs, same
+# labels, same augmentation. Set it back to False before any run that is not
+# this experiment.
+RESAMPLE = True
+RESAMPLE = RUN.resample
 
 # One study per rank, held over from the five-series rung (1 x 5 x 16 = 80
 # images per step). If it OOMs the fallback is MAX_SERIES 5 -> 4, not a
@@ -3126,10 +3183,12 @@ print(f"{BATCH_STUDIES} studies x {DEVICES} devices x {ACCUM_STEPS} accum "
 CACHE_PATHS = list(shards)
 
 
-def make_loader(study_index, studies, shuffle=False, augment=False):
+def make_loader(study_index, studies, shuffle=False, augment=False,
+                resample=False):
     return DataLoader(
         knee_lightning.StudyVolumeDataset(
-            study_index, studies, CACHE_PATHS, SLICES_PER_SERIES, augment),
+            study_index, studies, CACHE_PATHS, SLICES_PER_SERIES, augment,
+            resample=resample),
         batch_size=BATCH_STUDIES, shuffle=shuffle, num_workers=2,
         collate_fn=knee_dataset.collate_studies, pin_memory=True,
         persistent_workers=True)
@@ -3169,6 +3228,7 @@ import timm
 # as a second trunk for a rank ensemble. Both keep BACKBONE_DEFAULTS' convnet
 # path, so each is a one-variable change.
 BACKBONE = "convnext_tiny.fb_in22k_ft_in1k"
+BACKBONE = RUN.backbone
 
 # Built once here before the trainer spawns its workers. Each rank constructs
 # its own backbone, and two processes racing to download the same weights into
@@ -3501,7 +3561,9 @@ keyed = folded.set_index("StudyInstanceUID")
 train_studies = [s for s in index.studies if keyed.loc[s, "fold"] != FOLD]
 val_studies = [s for s in index.studies if keyed.loc[s, "fold"] == FOLD]
 
-train_loader = make_loader(index, train_studies, shuffle=True, augment=True)
+train_loader = make_loader(index, train_studies, shuffle=True, augment=True,
+                           resample=RESAMPLE)
+print(f"resampling slices/series per epoch: {'on' if RESAMPLE else 'off'}")
 # Dataloader 0 is the validation fold, carrying mined soft targets -- the only
 # thing allowed to select. Dataloader 1 is gold, carrying real 0/1 labels,
 # logged for convergence and never monitored.
@@ -3530,6 +3592,10 @@ module = knee_lightning.KneeLitModule(
     lambda_coupling=LAMBDA_COUPLING,
     coupling_target=COUPLING_TARGET if LAMBDA_COUPLING > 0 else None,
     residual_beta=RESIDUAL_BETA, pos_weight=POS_WEIGHT,
+    classwise_pool=RUN.classwise_pool,
+    slice_transformer=RUN.slice_transformer,
+    spatial_encoder=RUN.spatial_encoder,
+    plane_adapters=RUN.plane_adapters,
     **BACKBONE_DEFAULTS)
 print(f"trunk lr: {LR * BACKBONE_DEFAULTS['backbone_lr_scale']:.1e}  "
       f"head lr: {LR:.1e}  "
@@ -3584,6 +3650,12 @@ _expected = {"SLICES_PER_SERIES": (SLICES_PER_SERIES, 16),
              "RESIDUAL_BETA": (RESIDUAL_BETA, None),
              "LAMBDA_COUPLING": (LAMBDA_COUPLING, 0.0),
              "POS_WEIGHT_CAP": (POS_WEIGHT_CAP, None),
+             "RESAMPLE": (RESAMPLE, False),
+             "SERIES_SELECTION": (RUN.series_selection, "uniform"),
+             "CLASSWISE_POOL": (RUN.classwise_pool, False),
+             "SLICE_TRANSFORMER": (RUN.slice_transformer, False),
+             "SPATIAL_ENCODER": (RUN.spatial_encoder, False),
+             "PLANE_ADAPTERS": (RUN.plane_adapters, False),
              "SILENCE_REWEIGHT": (SILENCE_REWEIGHT, False),
              "BACKBONE": (BACKBONE, "convnext_tiny.fb_in22k_ft_in1k")}
 _wrong = {k: v for k, (v, want) in _expected.items() if v != want}
@@ -3734,6 +3806,13 @@ AVERAGES = {kind: f"{AVERAGE_PREFIX}_{kind}.pt"
             if os.path.exists(f"{AVERAGE_PREFIX}_{kind}.pt")}
 for kind, path in AVERAGES.items():
     print(f"wrote {path} ({kind.upper()} weights, selection-free)")
+_actual_spec = RUN.to_dict()
+_actual_spec.update(backbone=BACKBONE, slices=SLICES_PER_SERIES,
+                    max_series=MAX_SERIES, resample=RESAMPLE)
+for _path in [CHECKPOINT] + list(AVERAGES.values()):
+    artifacts.write_metadata(_path, _actual_spec, FOLD, train_studies, val_studies)
+folded[[config.ID_COL, "fold"]].to_parquet(
+    "/kaggle/working/folds.parquet", index=False)
 if not AVERAGES:
     print("NOTE: no averaged weights on disk -- the WeightAverage callback "
           "did not run to on_train_end. The monitored checkpoint is fine; "
@@ -3836,11 +3915,13 @@ if not os.path.exists(scoring_path):
 # 0.823 for weights that logged 0.864 during training. Passed here anyway:
 # the model should be right before it is loaded, not because it was loaded.
 def load_for_scoring(path):
+    state = net.load_knee_state(path, map_location=device)
     model = net.KneeNet(
         net.build_backbone(BACKBONE, pretrained=False), FEATURE_DIM,
         input_mean=BACKBONE_DEFAULTS["input_mean"],
-        input_std=BACKBONE_DEFAULTS["input_std"]).to(device)
-    model.load_state_dict(net.load_knee_state(path, map_location=device))
+        input_std=BACKBONE_DEFAULTS["input_std"],
+        **net.aggregation_defaults(state)).to(device)
+    model.load_state_dict(state)
     return model.eval()
 
 
@@ -4438,6 +4519,11 @@ def digest(path, limit=64 << 20):
 
 
 candidates = CHECKPOINTS if CHECKPOINTS is not None else find_checkpoints()
+if ENSEMBLE_JSON:
+    import json
+    _manifest_root = pathlib.Path(ENSEMBLE_JSON).parent
+    candidates = [str(_manifest_root / e["checkpoint"])
+                  for e in json.loads(pathlib.Path(ENSEMBLE_JSON).read_text())["members"]]
 if not candidates:
     raise SystemExit(
         f"no checkpoint matched {PATTERNS} under {SEARCH}. Upload the .pt or "
@@ -4516,6 +4602,12 @@ def score_study(study):
     linspace rule too, so this measurement and the submission read the same
     images.
     """
+    if explicit_members:
+        rows = gold_index._by_study[study]
+        volumes = [np.asarray(shard_arrays[row["cache_path"]][int(row["position"])])
+                   for _, row in rows.iterrows()]
+        predictions = artifacts.predict_members(explicit_members, volumes, rows, device)
+        return np.average(predictions, axis=0, weights=member_weights)
     item = knee_dataset.load_study(gold_index, study, shard_arrays)
     volumes = item["volumes"]
     if volumes.shape[1] > TUNED_SLICES:
@@ -4742,6 +4834,7 @@ START = time.time()
 # The tuned path averages probabilities across every convnext_fold*.pt it
 # finds, so a five-fold upload becomes a five-model ensemble with no edit here.
 BLEND = 1.0
+ENSEMBLE_JSON = os.environ.get("KNEE_ENSEMBLE_JSON")
 USE_FROZEN = BLEND < 1.0
 USE_TUNED = BLEND > 0.0
 
@@ -4930,6 +5023,8 @@ print("input normalisation:", "on" if TUNED_DEFAULTS["input_mean"] else "off")
 # glob that catches two of them averages a fold with itself and quietly gives
 # it double weight in the ensemble. The guard below refuses that.
 TUNED_PATTERNS = ("convnext_fold*.pt", "lit_fold*.ckpt")
+if ENSEMBLE_JSON:
+    TUNED_PATTERNS = ()
 
 tuned_paths = []
 for pattern in TUNED_PATTERNS:
@@ -5015,6 +5110,12 @@ tuned_states = [net.load_knee_state(path, map_location="cpu")
                 for path in tuned_paths]
 for path in tuned_paths:
     print("  tuned:", os.path.basename(path))
+    if os.path.exists(str(path) + ".json"):
+        _spec = artifacts.load_metadata(path)["experiment"]
+        if (_spec["backbone"] != TUNED_BACKBONE or _spec["slices"] != TUNED_SLICES
+                or _spec["max_series"] != TUNED_MAX_SERIES
+                or _spec["series_selection"] != "uniform"):
+            raise ValueError("checkpoint input policy differs: use KNEE_ENSEMBLE_JSON")
 
 if SOUP and len(tuned_states) > 1:
     tuned_states = [averaging.average_states(tuned_states)]
@@ -5025,10 +5126,19 @@ for state in tuned_states:
     backbone = net.build_backbone(TUNED_BACKBONE, pretrained=False)
     model = net.KneeNet(backbone, backbone.num_features,
                         input_mean=TUNED_DEFAULTS["input_mean"],
-                        input_std=TUNED_DEFAULTS["input_std"]).to(device)
+                        input_std=TUNED_DEFAULTS["input_std"],
+                        **net.aggregation_defaults(state)).to(device)
     model.load_state_dict(state)
     model.eval()
     tuned_models.append(model)
+
+explicit_members = artifacts.load_ensemble(ENSEMBLE_JSON, device) if ENSEMBLE_JSON else []
+if explicit_members:
+    if BLEND != 1.0 or SOUP or MEMBER_RANK_AVERAGE or FLIP_TTA:
+        raise ValueError("explicit ensembles use tuned probability averaging without soup or flip TTA")
+    tuned_models = [member["model"] for member in explicit_members]
+member_weights = ([member["weight"] for member in explicit_members]
+                  if explicit_members else [1.0] * len(tuned_models))
 
 side_model = side_classifier.SideNet().to(device)
 side_model.load_state_dict(torch.load(find_one("side_model.pt"), map_location=device))
@@ -5092,13 +5202,15 @@ except SystemExit:
         # a different set than the one whose hashes were just printed -- the
         # exact ambiguity that cell exists to remove.
         old_glob = """TUNED_PATTERNS = ("convnext_fold*.pt", "lit_fold*.ckpt")
+if ENSEMBLE_JSON:
+    TUNED_PATTERNS = ()
 
 tuned_paths = []
 for pattern in TUNED_PATTERNS:
     tuned_paths += find_inputs(pattern)"""
         assert old_glob in models_source
         models_source = models_source.replace(old_glob, """TUNED_PATTERNS = PATTERNS
-tuned_paths = list(candidates)""")
+tuned_paths = [] if ENSEMBLE_JSON else list(candidates)""")
     nb.code(models_source)
 
     if colab:
@@ -5167,14 +5279,20 @@ KEEP = np.linspace(0, config.CACHE_SLICES - 1, TUNED_SLICES).round().astype(int)
 # and that is a behaviour change to laterality -- which silently transposes
 # four of the twelve findings when it is wrong -- so it is its own experiment,
 # not a rider on this one.
-FAST_DECODE = True
+FAST_DECODE = False
 AB_CHECK = True     # score both paths and report the difference
+if explicit_members and FAST_DECODE:
+    raise ValueError("explicit ensembles require full series before member-specific selection")
+
+# Read all series for a stable study-level side vote, then cap only the
+# abnormality classifier's input. Truncation can change the side decision.
+test_tag_sides = {}
 
 
 def build_volumes(study_uid, fast=False):
     directory = test_root / study_uid
     if not directory.exists():
-        return [], []
+        return [], [], []
     series_dirs = sorted(p for p in directory.iterdir() if p.is_dir())
 
     # Choose the series BEFORE reading anything. `pick_series` needs only the
@@ -5191,7 +5309,9 @@ def build_volumes(study_uid, fast=False):
         if not paths:
             continue
         headers = [dicom_io.read_header(p) for p in paths]
-        volumes.append(cache.build_series_volume(headers)["volume"])
+        result = cache.build_series_volume(headers)
+        test_tag_sides[series_dir.name] = result["laterality"]
+        volumes.append(result["volume"])
         uids.append(series_dir.name)
 
         # Patient-frame x, free: these headers are already in memory. Averaged
@@ -5212,7 +5332,10 @@ def geometry_side(positions):
     return "L" if float(np.mean(xs)) > GEOMETRY_THRESHOLD else "R"
 
 
-def predict_side(volumes, positions=None, study=None):
+def predict_side(volumes, positions=None, study=None, uids=None):
+    known = {test_tag_sides.get(uid) for uid in (uids or [])} & {"L", "R"}
+    if len(known) == 1:
+        return next(iter(known))
     batch = np.stack([side_classifier.prepare_batch(v)[0] for v in volumes])
     with torch.no_grad():
         probs = torch.sigmoid(side_model(torch.from_numpy(batch).to(device)))
@@ -5250,7 +5373,7 @@ def meta_tensor(uids, side):
     rows = []
     for uid in uids:
         row = series_meta.loc[uid].to_dict() if uid in series_meta.index else {}
-        row["side_predicted"] = side
+        row["side_predicted"] = test_tag_sides.get(uid) or side
         rows.append(knee_dataset.series_metadata(pd.Series(row)))
     return torch.from_numpy(np.stack(rows)).unsqueeze(0).to(device)
 
@@ -5290,6 +5413,14 @@ def pick_series(count):
 
 
 def tuned_predict(volumes, uids, side, fast=False):
+    if explicit_members:
+        rows = []
+        for uid in uids:
+            row = series_meta.loc[uid].to_dict() if uid in series_meta.index else {}
+            row.update(SeriesInstanceUID=uid,
+                       side_predicted=test_tag_sides.get(uid) or side)
+            rows.append(row)
+        return artifacts.predict_members(explicit_members, volumes, pd.DataFrame(rows), device)
     # Mirrored and subsampled exactly as during training.
     #
     # Under FAST_DECODE the series were already chosen in build_volumes, so
@@ -5303,7 +5434,8 @@ def tuned_predict(volumes, uids, side, fast=False):
     for volume, uid in zip(picked, picked_uids):
         plane = series_meta.loc[uid]["Anatomical_Plane"] if uid in series_meta.index else None
         planes.append(plane)
-        mirrored.append(knee_dataset.mirror_volume(volume, side, plane)[KEEP])
+        mirrored.append(knee_dataset.mirror_volume(
+            volume, test_tag_sides.get(uid) or side, plane)[KEEP])
 
     meta = meta_tensor(picked_uids, side)
     mask = torch.ones(1, len(mirrored), dtype=torch.bool, device=device)
@@ -5356,7 +5488,7 @@ for study in tqdm(studies, desc="studies", unit="study"):
         volumes, uids, positions = build_volumes(study, fast=FAST_DECODE)
         if not volumes:
             raise ValueError("no readable series")
-        side = predict_side(volumes, positions, study)
+        side = predict_side(volumes, positions, study, uids=uids)
         decode_seconds += time.time() - _t
 
         meta = meta_tensor(uids, side)
@@ -5378,7 +5510,7 @@ for study in tqdm(studies, desc="studies", unit="study"):
             slow_volumes, slow_uids, slow_positions = build_volumes(
                 study, fast=False)
             slow = tuned_predict(slow_volumes, slow_uids,
-                                 predict_side(slow_volumes, slow_positions),
+                                 predict_side(slow_volumes, slow_positions, uids=slow_uids),
                                  fast=False)
             ab_deltas.append(np.abs(row - slow).max())
     except Exception as exc:  # noqa: BLE001
@@ -5477,7 +5609,7 @@ if have_tuned:
         tuned_matrix = averaging.rank_average(list(per_member))
         print(f"combining {per_member.shape[0]} members by RANK average")
     else:
-        tuned_matrix = per_member.mean(axis=0)
+        tuned_matrix = np.average(per_member, axis=0, weights=member_weights)
         print(f"combining {per_member.shape[0]} member(s) by probability mean")
 
 print(f"blending: frozen={have_frozen} tuned={have_tuned} weight={BLEND}")
@@ -5591,7 +5723,7 @@ print("device:", device)
 ## 3. Which checkpoint, and at what geometry
 
 **The geometry must match what the checkpoint was trained at.** Nothing
-enforces it: the aggregation masks the slice axis and pads the series axis, so
+enforces it for legacy checkpoints without sidecars: the aggregation masks the slice axis and pads the series axis, so
 a mismatch runs clean and simply scores worse — and this notebook would then
 report failures that are artefacts of the mismatch rather than of the model.
 """)
@@ -5642,6 +5774,11 @@ if CHECKPOINT is None:
     if not candidates:
         raise SystemExit("no checkpoint found; set CHECKPOINT explicitly")
     CHECKPOINT = max(candidates, key=os.path.getmtime)
+SERIES_SELECTION = "uniform"
+if os.path.isfile(str(CHECKPOINT) + ".json"):
+    _spec = artifacts.load_metadata(CHECKPOINT)["experiment"]
+    SLICES, MAX_SERIES = _spec["slices"], _spec["max_series"]
+    BACKBONE, SERIES_SELECTION = _spec["backbone"], _spec["series_selection"]
 print("examining:", CHECKPOINT)
 print(f"geometry : {SLICES} slices x {MAX_SERIES} series   backbone {BACKBONE}")
 """)
@@ -5673,7 +5810,7 @@ gold_labels = gold[[config.ID_COL] + config.LABELS].copy()
 for name in config.LABELS:
     gold_labels[f"{name}_weight"] = 1.0
 gold_index = knee_dataset.StudyIndex(manifest, series_meta, gold_labels, sides,
-                                     max_series=MAX_SERIES)
+                                     max_series=MAX_SERIES, series_selection=SERIES_SELECTION)
 print(f"gold studies with cached series: {len(gold_index)} of {len(gold)}")
 if len(gold_index) < len(gold):
     print("  NOTE: a study whose shard is missing is dropped, and a macro over")
@@ -5686,10 +5823,12 @@ KEEP = np.linspace(0, config.CACHE_SLICES - 1, SLICES).round().astype(int)
 DEFAULTS = net.backbone_defaults(BACKBONE)
 
 backbone = net.build_backbone(BACKBONE, pretrained=False)
+state = net.load_knee_state(CHECKPOINT, map_location=device)
 model = net.KneeNet(backbone, backbone.num_features,
                     input_mean=DEFAULTS["input_mean"],
-                    input_std=DEFAULTS["input_std"]).to(device)
-model.load_state_dict(net.load_knee_state(CHECKPOINT, map_location=device))
+                    input_std=DEFAULTS["input_std"],
+                    **net.aggregation_defaults(state)).to(device)
+model.load_state_dict(state)
 model.eval()
 print("input normalisation:", "on" if DEFAULTS["input_mean"] else "off")
 

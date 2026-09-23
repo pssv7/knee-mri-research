@@ -47,9 +47,20 @@ def as_python(source):
     can appear anywhere in it -- not only on the first line, which is what an
     earlier version of this check assumed.
     """
-    kept = [line for line in source.splitlines()
-            if not line.lstrip().startswith(("!", "%"))]
+    kept = [line for line in source.splitlines() if not is_magic(line)]
     return "\n".join(kept)
+
+
+def is_magic(line):
+    """A shell escape or line magic, and not a wrapped `!=` comparison.
+
+    Dropping a continuation line that happens to start with `!=` leaves an
+    unclosed parenthesis, which reads as a broken notebook cell -- the check
+    then fails on source that Jupyter runs perfectly well.
+    """
+    stripped = line.lstrip()
+    return stripped.startswith("%") or (stripped.startswith("!")
+                                        and not stripped.startswith("!="))
 
 
 class TestStructure:
@@ -403,7 +414,7 @@ class TestGeneratorHasNoDocstringsInCells:
                     continue
                 body = "\n".join(
                     line for line in "".join(cell["source"]).splitlines()
-                    if not line.lstrip().startswith(("!", "%")))
+                    if not is_magic(line))
                 try:
                     ast.parse(body)
                 except SyntaxError as exc:
@@ -648,6 +659,10 @@ class TestTrainingAndSubmissionAgree:
                 for line in source.splitlines():
                     stripped = line.strip()
                     if stripped.startswith(("BACKBONE =", "TUNED_BACKBONE =")):
+                        if stripped == "BACKBONE = RUN.backbone":
+                            from src.model.experiments import PRESETS
+                            assert all("convnext" in p.backbone for p in PRESETS.values())
+                            continue
                         assert "convnext" in stripped, stripped
 
     def test_the_training_run_accumulates_selection_free_weights(self):
