@@ -1,0 +1,243 @@
+{
+  "code": {
+    "files": {
+      "src/config.py": {
+        "sha256": "8947636c544435fca88218bccced44d1f481201089384d133dae3370dafc9ea8",
+        "uncommitted_changes": false
+      },
+      "src/labels/fuse.py": {
+        "sha256": "e3580d418a39b115251e08f5c8a0e7fa6cdda9c99be3c41a287a60dc41c5a851",
+        "uncommitted_changes": false
+      },
+      "src/labels/lexicon.py": {
+        "sha256": "ee531adb2d66801897d78d3e7c03850f545f9f81f651c41a2cc9eb7118676730",
+        "uncommitted_changes": false
+      },
+      "src/labels/llm_extract.py": {
+        "sha256": "109297a746f9f8c296d3a5d5412aed4ebf182dfbf9554416a02c907b3d43ab07",
+        "uncommitted_changes": false
+      },
+      "src/labels/mode_fusion.py": {
+        "sha256": "f0c2d908c17017b30b6a70168a851572389d4938d96d555653dc2e5c3702520f",
+        "uncommitted_changes": false
+      },
+      "src/labels/reviewed.py": {
+        "sha256": "a4aa26162ea4ad9b61fec69fa43548e903fbeb88b5f8f40c80de81513aaad723",
+        "uncommitted_changes": true
+      },
+      "src/model/splits.py": {
+        "sha256": "374e552df54fe5238bb7202c7ff73c9944266d897fbc80c6a6cd64b57d856606",
+        "uncommitted_changes": false
+      },
+      "tools/audit_labels.py": {
+        "sha256": "608ff80f4723bffbc25a6e10425e8968ddd1b7a2aadf372e5b3311695070427c",
+        "uncommitted_changes": false
+      },
+      "tools/build_label_review.py": {
+        "sha256": "33ce560c51aac65f252ca5f5e0faaada677b7a9d8d4e05bcb3dba96165da44c5",
+        "uncommitted_changes": true
+      },
+      "tools/compare_oof.py": {
+        "sha256": "a599572ec98eb4262365a1c842dfb0cef041d65fcb7d75428bd4214f7f53ac1c",
+        "uncommitted_changes": true
+      },
+      "tools/freeze_label_baseline.py": {
+        "sha256": "953c3d48904c13511ae93c758da05f0222b1c376bf909b00896e4b8045e64a6d",
+        "uncommitted_changes": true
+      },
+      "tools/prepare_kaggle_training_pair.py": {
+        "sha256": "0fb0b5571139db56e62fc5943595b932d433c2c224bb67e7b51463df995bd27c",
+        "uncommitted_changes": true
+      },
+      "tools/prepare_reviewed_labels.py": {
+        "sha256": "b4638dd4692028a8af4e3538bbb1828419632f84947542d846a80c993c36571d",
+        "uncommitted_changes": true
+      }
+    },
+    "git_head": "c8632aeee4d732acbb275ef361df0b7b2c5f751f"
+  },
+  "cross_check": {
+    "matches": {
+      "data/meta/compare_protocol_incumbent_all_folds/incumbent_oof.parquet": true,
+      "data/meta/compare_protocol_incumbent_all_folds/summary.json": true,
+      "data/meta/train.csv": true,
+      "data/meta/train_labels.parquet": true
+    },
+    "receipt": "outputs/label_review_v1/summary.json"
+  },
+  "inputs": {
+    "extractor_dumps": {
+      "data/meta/llm_labels.parquet": {
+        "columns": 49,
+        "path": "data/meta/llm_labels.parquet",
+        "rows": 4349,
+        "sha256": "b7bb2bcae6a1aacbcf1be8cc1f1b5c146f765ca973bba0020e43a8cce5286cb5"
+      },
+      "data/meta/llm_labels_gold.parquet": {
+        "columns": 49,
+        "path": "data/meta/llm_labels_gold.parquet",
+        "rows": 58,
+        "sha256": "3c8bc2ca12b7f380d7a4a14e9d146337df649e2f4eb57b24a58dd2b72af3f8eb"
+      },
+      "data/meta/llm_probs.parquet": {
+        "columns": 25,
+        "path": "data/meta/llm_probs.parquet",
+        "rows": 4349,
+        "sha256": "d0c050ee354b09837f5c80bc52b7cf348ce818fd8470304f6838d70330ad90af"
+      },
+      "data/meta/llm_probs_gold.parquet": {
+        "columns": 25,
+        "path": "data/meta/llm_probs_gold.parquet",
+        "rows": 58,
+        "sha256": "e0bb7a65d2e11c7ab06343a449a638c7566137333b31d260b4825d487602bd4d"
+      }
+    },
+    "folds": {
+      "columns": [
+        "StudyInstanceUID",
+        "fold"
+      ],
+      "path": "outputs/ensemble_16_24/reconstructed_folds.parquet",
+      "per_fold": {
+        "0": 871,
+        "1": 871,
+        "2": 870,
+        "3": 869,
+        "4": 868
+      },
+      "rows": 4349,
+      "sha256": "b29b3f4a82bf96c47708a18604d4ede7933eb71312081f6bda44a2655daa8d33"
+    },
+    "gold": {
+      "in_training_labels": 0,
+      "reference": {
+        "columns": [
+          "StudyInstanceUID",
+          "ACL",
+          "MCL",
+          "Medial Meniscus",
+          "Lateral Meniscus",
+          "Medial OA",
+          "Lateral OA",
+          "PF OA",
+          "Effusion",
+          "Synovitis",
+          "Baker's",
+          "Contusion",
+          "Fracture"
+        ],
+        "path": "data/meta/gold_truth_58.parquet",
+        "rows": 58,
+        "sha256": "34efa772437de6824aa4d7c31d555be738cfdc95373b1a4bcc61e6eb99fb0d28"
+      },
+      "studies": 58,
+      "uids_sha256": "3918e0c230d6c8d16e073b3c2537d173011b705c71b494493591e6afa5f510ea"
+    },
+    "labels": {
+      "columns": [
+        "StudyInstanceUID",
+        "ACL",
+        "ACL_weight",
+        "MCL",
+        "MCL_weight",
+        "Medial Meniscus",
+        "Medial Meniscus_weight",
+        "Lateral Meniscus",
+        "Lateral Meniscus_weight",
+        "Medial OA",
+        "Medial OA_weight",
+        "Lateral OA",
+        "Lateral OA_weight",
+        "PF OA",
+        "PF OA_weight",
+        "Effusion",
+        "Effusion_weight",
+        "Synovitis",
+        "Synovitis_weight",
+        "Baker's",
+        "Baker's_weight",
+        "Contusion",
+        "Contusion_weight",
+        "Fracture",
+        "Fracture_weight"
+      ],
+      "label_order_ok": true,
+      "path": "data/meta/train_labels.parquet",
+      "rows": 4349,
+      "sha256": "e54e46531aec6cd16131d70aa283c990542dfa17daa890ac54da663cf74569b0"
+    },
+    "reference_predictions": {
+      "incumbent_oof": {
+        "path": "data/meta/compare_protocol_incumbent_all_folds/incumbent_oof.parquet",
+        "sha256": "28c2fd5039a3eef1abf5f4f8c8547c9c199f3a13adf5219ca93a29dcb922f97e"
+      },
+      "protocol_checkpoints": {
+        "0": "cb78bb2ea06ef4a897f6cecf460d6464a9a5b8811990aafbca0848f1865c3d6b",
+        "1": "64b0d2515b3d214bf8175de3d083dd388794ff1013fb01a93d0a7c819022664c",
+        "2": "43b9f4feeface172c1abb7abd0493735a8fce35a4ba8bd7f845ade68c2c0fe5b",
+        "3": "347bb18b82d5259d65e3e80574ad4e07af5b9de9a126f46a135deb6b9ddf185f",
+        "4": "6bf8ef9a6188140946e06478ef33181b6dd2e0ff9bdc3304eb4f52779be9ae43"
+      },
+      "protocol_oof": [
+        {
+          "path": "outputs/kaggle_protocol_fold0_comparison_download/protocol_fold0/oof_fold0.parquet",
+          "sha256": "5a86b46d395658558f1b99e5e30c15737c7a2be3d59ba566522181b19215acb1"
+        },
+        {
+          "path": "outputs/slice_overlay_staging/fold1/baseline_fold1/oof_fold1.parquet",
+          "sha256": "15f347ef7f48ada16cbca6076cab8d50b9c77c4880dec48016856e64a35771bc"
+        },
+        {
+          "path": "outputs/kaggle_protocol_fold2_comparison_download/protocol_fold2/oof_fold2.parquet",
+          "sha256": "f66dfae99b539fdd0c4ab41e83a3c1c587b342e594c1f703f35c68c872f9c4a6"
+        },
+        {
+          "path": "outputs/slice_overlay_staging/fold3/baseline_fold3/oof_fold3.parquet",
+          "sha256": "89fff505866e46955e15dd4983515fd8ea7033d882bfad73c828a19f6f8e41a0"
+        },
+        {
+          "path": "outputs/kaggle_protocol_fold4_comparison_download/protocol_fold4/oof_fold4.parquet",
+          "sha256": "7791ec96c8a43dfffc87ca9333bd434b9e596301b13b947a3e9be9cb105c29ac"
+        }
+      ],
+      "protocol_receipts": {
+        "path": "data/meta/compare_protocol_incumbent_all_folds/summary.json",
+        "sha256": "3c3099af34f497a41da894c7465af428a09cfd3fbc1e92ce7f8f1a5407005e97"
+      },
+      "resolution384_checkpoints": {
+        "0": "a804dcf1a38aba57a853f1f8a550b2a9f43c4ab4f764c9587ebee15fc83320be",
+        "1": "3513b1ccdcf206a1b2c4ce895438a50ff1b2d42ab957e929254e7280b35c8b4c",
+        "2": "8402dd3f30df230100eb901c4aa10748f75a33fb9bb548b48fbdb786741918d7",
+        "3": "0d719624b232d79695d324b17eadd2f18dfe8f13d7209094ddf7e167c43f3c33",
+        "4": "e7d39e727e79416bb4ed072841f924d178ffbe5b9be88bbff8fd244e7260277a"
+      },
+      "resolution384_oof": {
+        "note": "first recorded here; no earlier receipt holds its hash",
+        "path": "outputs/resolution384_downloads/oof_all_folds.parquet",
+        "sha256": "d6f71f7bc7845f833bc6c85398f5fec1f81cb5e7529c56de8eed7163c086a5ef"
+      }
+    },
+    "reports": {
+      "path": "data/meta/train.csv",
+      "report_hashes_file": {
+        "path": "outputs/label_quality/report_hashes_v1.parquet",
+        "rows": 4407
+      },
+      "report_hashes_sha256": "146620f60cf264953854a55d8211e5f7eeb2d240f3f5d9475314bd15d284f11e",
+      "rows": 4407,
+      "sha256": "8ca2203c0e9d61c080c7a314c7cdb51c1b03a1d9eb4770819f7f34af53ef4e33"
+    },
+    "source_documents": {
+      ".cross-plan/label-quality-solo/PLAN.final.md": {
+        "git_blob": null,
+        "sha256": "3e7ad337789076dd215b10614508c1fe6c72f528d9e0611555af3a901bcdaf68"
+      },
+      "docs/label_quality_plan.md": {
+        "git_blob": "38e9023f6b1b6c13fd40bb722b36d2781073e0ab",
+        "sha256": "6dbc11bcf4633a42c015c38ae9ef1b1f4c10caf2cfc52ecb364d5e14610f16ff"
+      }
+    }
+  },
+  "schema_version": 1,
+  "scope": "Reproduction record: a passing --verify proves the inputs are the frozen ones, not that any label is correct."
+}
