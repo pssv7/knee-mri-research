@@ -224,6 +224,9 @@ def summarise(root, now=None):
         {f: {'decidable': b.get('decidable', False), 'agreed_target_errors': b.get('agreed_target_errors', 0)}
          for f, b in out['controls'].items()}, THRESHOLD, deadline_passed=now.date() > DEADLINE)
     out['secondary_queue_pending'] = int(manifest.get('secondary_queue_pairs', 0))
+    keys = bp.all_keys(root)
+    out['delay_waived'] = int(keys[(keys['pass'] == 2)].get('delay_waived', pd.Series(dtype=bool)).fillna(False).astype(bool).sum()) \
+        if len(keys) else 0
     return out, table
 
 
@@ -239,7 +242,8 @@ def markdown(s):
              f"Generated {s['generated'][:16]} UTC by `tools/audit_report.py`. Counts, rates and intervals only; "
              'no report text. One reviewer throughout: agreement is consistency, not independence.', '',
              '## Decision (D5)', '',
-             f"**{d['decision'].upper()}**" + (f" — {', '.join(d['findings'])}" if d['findings'] else ''), '',
+             f"**{d['decision'].upper()}**" + (f" — {', '.join(d['findings'])}" if d['findings'] else '')
+             + (' (pass 2 ran without the 7-day delay; see the D6 limitation below)' if s.get('delay_waived') else ''), '',
              f'Go needs {THRESHOLD}+ target errors agreed by both passes among a finding\'s original random '
              'controls. Weight-only changes do not count.', '',
              '## Random controls (population estimates)', '',
@@ -299,6 +303,10 @@ def markdown(s):
     for f, e in s['extra_draws'].items():
         lines.append(f"- {f}: {e['pairs']} extra controls drawn, {e['already_reviewed_as_enriched']} "
                      'reusing an enriched review. The go/no-go stays on the original controls.')
+    if s.get('delay_waived'):
+        lines += ['', f"**Limitation (D6):** the 7-day delay before pass 2 was waived for {s['delay_waived']} "
+                  're-reviewed pairs. Their agreement partly reflects recall of the first reading, which '
+                  'inflates agreed corrections and biases the decision toward go.']
     lines += ['', 'Limits: the enriched strata are selected by model disagreement and describe mechanisms, '
               'not prevalence. Prior exposure is known only from label_review_v1 and the gold 58. '
               f"Secondary workstream: {s['secondary_queue_pending']} pending v1 checks, reported separately "

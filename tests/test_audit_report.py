@@ -148,3 +148,13 @@ def test_kappa_and_go_no_go_edges():
     pending = {"A": {"decidable": True, "agreed_target_errors": 4}, "B": {"decidable": False, "agreed_target_errors": 0}}
     assert audit_stats.go_no_go(pending)["decision"] == "undecided"
     assert audit_stats.go_no_go(pending, deadline_passed=True)["decision"] == "audit-only"
+
+
+def test_waived_delay_is_stated_next_to_the_decision(root):
+    second_pass(root)
+    p = bp.paths(root, 2, "R1")
+    pd.read_parquet(p["keys"]).assign(delay_waived=True).to_parquet(p["keys"], index=False)
+    summary, _ = ar.summarise(root, T0 + timedelta(days=1))
+    assert summary["delay_waived"] == 6
+    text = ar.markdown(summary)
+    assert "without the 7-day delay" in text and "Limitation (D6)" in text

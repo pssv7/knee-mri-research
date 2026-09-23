@@ -102,3 +102,18 @@ original 50 controls. Fixed here, before any case has been read:
 - **No-go:** every finding is decidable and none reaches five.
 - **Deadline:** if the decision still can't be made on 2026-10-10, the audit is delivered
   alone (audit-only). A candidate is not built from an incomplete audit.
+
+## D6 — Seven-day re-review delay waived (2026-09-23)
+
+The participant, who wrote the plan, chose to start pass 2 on 2026-09-23, the same day as
+the first readings (ingested 14:00, 16:11 and 20:57 UTC), instead of waiting the seven days
+the approved plan requires. The reason given was to finish the audit as soon as possible.
+
+**What changes:** the second pass is no longer separated from the first by time, so
+agreement between the passes partly reflects recall of the first readings. That inflates
+agreement, and it inflates the count of corrections both passes agree on, which is the
+count the D5 go/no-go rule uses. The decision is therefore biased toward "go".
+
+**What stays:** pass-2 packets still carry new case IDs, a new order, and no first-pass
+answers. Every pass-2 key row records `delay_waived = true`, and `docs/label_audit_v2.md`
+states this limitation next to the decision.

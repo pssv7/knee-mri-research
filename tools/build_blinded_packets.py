@@ -129,8 +129,12 @@ def pending_extra_controls(root):
     return pending
 
 
-def prepare_pass2(root, batch, now):
-    """Controls and every proposed change whose first reading is at least 7 days old."""
+def prepare_pass2(root, batch, now, waive_delay=False):
+    """Controls and every proposed change whose first reading is at least 7 days old.
+
+    `waive_delay` skips the 7-day wait (decision D6). The waiver is written
+    into every key row, and the audit report states it next to the decision.
+    """
     keys = all_keys(root)
     first = keys[keys['pass'] == 1]
     rows = []
@@ -141,7 +145,7 @@ def prepare_pass2(root, batch, now):
         a, bb = pd.read_parquet(p['stage_a']), pd.read_parquet(p['stage_b'])
         merged = group.merge(a[['case_id', 'ingested_at']], on='case_id').merge(
             bb[['case_id', 'disposition']], on='case_id')
-        due = [ledger.rereview_due(datetime.fromisoformat(t), now) for t in merged.ingested_at]
+        due = [waive_delay or ledger.rereview_due(datetime.fromisoformat(t), now) for t in merged.ingested_at]
         wanted = merged.role.isin(CONTROL_ROLES) | (merged.disposition != 'keep')
         rows.append(merged[pd.Series(due, index=merged.index) & wanted])
     eligible = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=[ID, 'finding'])
@@ -149,7 +153,10 @@ def prepare_pass2(root, batch, now):
     eligible = eligible[[(u, f) not in done for u, f in zip(eligible[ID], eligible.finding)]]
     if eligible.empty:
         raise ValueError('nothing is due for re-review yet (first readings must be 7 days old)')
-    return write_keys(root, 2, batch, eligible, now)
+    keys, n = write_keys(root, 2, batch, eligible, now)
+    keys['delay_waived'] = bool(waive_delay)
+    keys.to_parquet(paths(root, 2, batch)['keys'], index=False)
+    return keys, n
 
 
 def load_cache(path):
@@ -270,11 +277,16 @@ def main(argv=None):
     parser.add_argument('--batch', required=True)
     parser.add_argument('--translations', help='notebook-22 results to merge before rendering')
     parser.add_argument('--allow-missing-translation', action='store_true')
+    parser.add_argument('--waive-delay', action='store_true',
+                        help='pass 2 only: skip the 7-day wait (decision D6); recorded in the keys')
     args = parser.parse_args(argv)
     now = datetime.now(timezone.utc)
     p = paths(ROOT, args.pass_no, args.batch)
     if args.action == 'prepare':
-        keys, n = (prepare_pass1 if args.pass_no == 1 else prepare_pass2)(ROOT, args.batch, now)
+        if args.pass_no == 1:
+            keys, n = prepare_pass1(ROOT, args.batch, now)
+        else:
+            keys, n = prepare_pass2(ROOT, args.batch, now, waive_delay=args.waive_delay)
         print(f'prepared {len(keys)} cases; {n} reports need translation -> {p["requests"].relative_to(ROOT)}')
     elif args.action == 'render':
         if args.translations:

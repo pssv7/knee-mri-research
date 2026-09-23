@@ -211,3 +211,16 @@ def test_report_hashes_bind_translations_to_their_report(root):
     keys, _ = bp.prepare_pass1(root, "A", T0)
     text = bp.reports(root)
     assert all(h == translate.report_hash(text[u]) for u, h in zip(keys[ID], keys.report_sha256))
+
+
+def test_waived_delay_is_explicit_and_recorded(root):
+    bp.prepare_pass1(root, "A", T0)
+    bp.render(root, 1, "A", allow_missing=True)
+    ingest_ledger.ingest(root, 1, "A", "a", fill_stage_a(root, "A"), now=T0)
+    bp.reveal(root, 1, "A")
+    ingest_ledger.ingest(root, 1, "A", "b", fill_stage_b(root, "A"), now=T0)
+    with pytest.raises(ValueError, match="nothing is due"):
+        bp.prepare_pass2(root, "R1", T0 + timedelta(hours=1))
+    keys, _ = bp.prepare_pass2(root, "R1", T0 + timedelta(hours=1), waive_delay=True)
+    stored = pd.read_parquet(bp.paths(root, 2, "R1")["keys"])
+    assert stored.delay_waived.all() and len(stored) == len(keys)
