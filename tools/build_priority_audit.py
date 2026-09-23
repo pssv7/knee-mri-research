@@ -58,6 +58,19 @@ def exposure(root, gold_uids):
     return pd.DataFrame(rows), prior_pairs, scopes
 
 
+def load_pairs(root):
+    """Per priority finding, every study's target, weight, fold, protocol OOF and language."""
+    labels = pd.read_parquet(root / baseline.LABELS_PATH)
+    folds = pd.read_parquet(root / baseline.FOLDS_PATH)
+    reports = pd.read_csv(root / baseline.REPORTS_PATH)
+    gold_uids = splits.load_gold_uids(root / baseline.REPORTS_PATH)
+    languages = pd.Series([detect_language(t) for t in reports['Report']], index=reports[ID])
+    paths, _, _, _ = verified_protocol_oof(root)
+    oof = read_predictions(paths, folds)
+    pairs = {f: sampling.finding_pairs(labels, folds, oof, languages, f) for f in sampling.PRIORITY}
+    return pairs, gold_uids
+
+
 def build(root=ROOT, settings=sampling.Settings()):
     manifest_path, out = root / MANIFEST, root / OUT
     if manifest_path.exists():
@@ -66,19 +79,12 @@ def build(root=ROOT, settings=sampling.Settings()):
     if changed:
         raise ValueError(f'inputs differ from the frozen baseline: {changed}')
 
-    labels = pd.read_parquet(root / baseline.LABELS_PATH)
-    folds = pd.read_parquet(root / baseline.FOLDS_PATH)
-    reports = pd.read_csv(root / baseline.REPORTS_PATH)
-    gold_uids = splits.load_gold_uids(root / baseline.REPORTS_PATH)
-    languages = pd.Series([detect_language(t) for t in reports['Report']], index=reports[ID])
-    paths, _, _, _ = verified_protocol_oof(root)
-    oof = read_predictions(paths, folds)
+    pairs, gold_uids = load_pairs(root)
     calls = pd.read_parquet(root / 'data/meta/llm_labels.parquet').set_index(ID)
     scanners = splits.scanner_key(pd.read_parquet(root / INDEX, columns=[
         ID, 'Manufacturer', 'ManufacturerModelName', 'MagneticFieldStrength']))
 
     exposed, prior_pairs, scopes = exposure(root, gold_uids)
-    pairs = {f: sampling.finding_pairs(labels, folds, oof, languages, f) for f in sampling.PRIORITY}
     reserve, reserve_short = sampling.draw_reserve(pairs, set(exposed[ID]), settings)
     reserved = set(reserve[ID])
     sample, sample_short, population = sampling.draw_audit(pairs, reserved, prior_pairs, settings)

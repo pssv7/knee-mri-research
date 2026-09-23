@@ -68,3 +68,37 @@ Confirmed by the participant ("confirm all") before any sample was drawn:
 - **Stop rule:** go only if at least one priority finding has five or more fixable errors,
   agreed by both review passes, among its **original** 50 controls. Extra controls never
   change that denominator.
+
+## D4 — Definition of the control-interval trigger (2026-09-23, before any review)
+
+D3 allows one extra batch of 50 controls when "a control interval is wider than 0.20".
+Fixed here, before any case has been read:
+
+- **Interval:** the 95% Wilson score interval for the share of a finding's original 50
+  controls whose final target the first pass judges incorrect (`final_target_correct` is
+  false after pass-1 stage B). Controls are a uniform draw, so the unweighted interval is
+  the right one.
+- **When:** assessed once per finding, as soon as all 50 of its original controls have a
+  pass-1 stage B. The first assessment is stored and never recomputed, so the trigger
+  can't be re-read until it fires.
+- **Extra draw:** 50 pairs, uniformly, from the same finding's discovery population minus
+  its original 50 controls. They are not drawn from outside the enriched strata: that keeps
+  the 100 a uniform sample. A drawn pair that was already reviewed as an enriched case
+  reuses that review, since reviews are blind to role.
+- **Scope:** the extra controls improve the estimate only. The go/no-go stop rule stays on
+  the original 50 (D3).
+
+## D5 — What counts toward the stop rule, and when it is decided (2026-09-23, before any review)
+
+D3's stop rule counts "fixable errors agreed by both review passes" among each finding's
+original 50 controls. Fixed here, before any case has been read:
+
+- **Counted:** a control where both passes independently propose a target correction on the
+  same side of 0.5 (`ledger.agreed_change`). Only those count, because only they mean the
+  final label is wrong. A weight-only change is recorded and reported, but it does not count.
+- **Decidable:** for a finding, once all 50 original controls have a pass-1 stage B and every
+  control with a pass-1 proposed change also has a pass-2 stage B. A finding that reaches five
+  counted errors decides **go** as soon as that is established.
+- **No-go:** every finding is decidable and none reaches five.
+- **Deadline:** if the decision still can't be made on 2026-10-10, the audit is delivered
+  alone (audit-only). A candidate is not built from an incomplete audit.

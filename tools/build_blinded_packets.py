@@ -36,6 +36,8 @@ ID = config.ID_COL
 REVIEW = 'outputs/label_quality/review'
 SAMPLE = 'outputs/label_quality/audit_v1/sample.parquet'
 BATCH_A_ENRICHED = 75
+EXTRA = 'outputs/label_quality/audit_v1/extra_controls.parquet'
+CONTROL_ROLES = ('control', 'extra_control')
 PACKET_FIELDS = ('case_id', 'finding', 'language', 'report', 'translation')
 
 
@@ -105,9 +107,26 @@ def prepare_pass1(root, batch, now):
         pairs = pd.concat([sample[sample.role == 'control'], chosen])
     elif batch == 'B':
         pairs = enriched.drop(index=chosen.index)
+    elif batch.startswith('X'):
+        pairs = pending_extra_controls(root)
     else:
-        raise ValueError('pass 1 has batches A and B')
+        raise ValueError('pass 1 has batches A and B, and X<n> for extra controls')
     return write_keys(root, 1, batch, pairs, now)
+
+
+def pending_extra_controls(root):
+    """Extra controls (decision D4) not already reviewed and not yet in any batch."""
+    path = root / EXTRA
+    if not path.exists():
+        raise ValueError('no extra controls have been drawn (tools/audit_progress.py draw-extra)')
+    extra = pd.read_parquet(path)
+    keys = all_keys(root)
+    queued = set(zip(keys[ID], keys.finding)) if len(keys) else set()
+    pending = extra[~extra.already_reviewed
+                    & pd.Series([(u, f) not in queued for u, f in zip(extra[ID], extra.finding)], index=extra.index)]
+    if pending.empty:
+        raise ValueError('every extra control is already reviewed or queued')
+    return pending
 
 
 def prepare_pass2(root, batch, now):
@@ -123,7 +142,7 @@ def prepare_pass2(root, batch, now):
         merged = group.merge(a[['case_id', 'ingested_at']], on='case_id').merge(
             bb[['case_id', 'disposition']], on='case_id')
         due = [ledger.rereview_due(datetime.fromisoformat(t), now) for t in merged.ingested_at]
-        wanted = (merged.role == 'control') | (merged.disposition != 'keep')
+        wanted = merged.role.isin(CONTROL_ROLES) | (merged.disposition != 'keep')
         rows.append(merged[pd.Series(due, index=merged.index) & wanted])
     eligible = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=[ID, 'finding'])
     done = set(zip(keys[keys['pass'] == 2][ID], keys[keys['pass'] == 2].finding)) if len(keys) else set()
