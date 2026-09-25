@@ -5,6 +5,38 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+## 2026-09-25 — Perturbation probe of the Tiny control
+
+- User asked for controlled input variants to find what the model is sensitive
+  to, without treating variants as truth. Agreed a declared grid before any run:
+  identity, shift ±5/10/20, noise σ 2/5/10, three slice removals, left/right
+  mirror with medial/lateral output swap, and `is_right` toggle. Model: the
+  historical Tiny control on the 691 outer0 studies.
+- Colab notebook 23 prepared; the user then chose a Kaggle run launched from here
+  (a recorded departure from the Colab plan). The first push was rejected:
+  Kaggle caps kernel source at **1 MB**, and the bundled kernel was 2.6 MB. The
+  kernel now embeds only the three new files (52 KB) and takes the other 34
+  frozen files from the attached control output by SHA-256. A test assembles
+  the bundle from the real downloaded output byte-for-byte.
+- Ran on T4, torch 2.10: 24.0 minutes for 10,365 passes. The unmodified pass
+  reproduced the saved predictions with max |Δp| **0.0**. The locally
+  recomputed summary matches in every flag, and numerically to 2×10⁻¹⁷.
+- Results: brightness and the side covariate are inert; noise shifts scores
+  directionally while keeping the ranking; slice density matters and edge
+  slices do not. Under the flip-with-swap convention, Lateral Meniscus Spearman
+  is 0.285. A prediction-only check shows why: the flipped raw Medial Meniscus
+  output tracks the original medial meniscus (0.862), not the lateral one
+  (0.285). The model reads anatomy, so swapping labels on a mirror is wrong for
+  it. `FLIP_TTA` and `laterality_flip` are off everywhere; no code changed.
+- Also found this session: Colab now runs Python 3.13. Lightning was missing on
+  the Small run's VM, and `subprocess.run` output does not show in Colab cells.
+  Notebook 23's setup now checks imports in a child process and captures output.
+- Full suite: 1,341 passed; 3 pre-existing failures come from the uncommitted
+  `require_complete_decode` edit to `src/data/cache.py`, which no longer matches
+  the source embedded in notebooks 17/18.
+- Details: `docs/perturbation_probe.md`; artifacts:
+  `outputs/perturbation_probe_tiny_outer0_v1_results/`.
+
 ## 2026-09-03 — the labels are precise and incomplete; notebook 14 and its fixtures
 
 **Outcome: measured against the radiologist image labels, the label matrix

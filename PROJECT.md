@@ -4,6 +4,23 @@ Read this first when picking the work back up cold. It covers what exists, what
 the numbers are, what has been tried and failed, and which traps have already
 been paid for.
 
+## Completed 2026-09-25 — perturbation probe of the Tiny control
+
+Inference-only sensitivity probe on the 691 outer0 studies: 14 declared input
+variants versus the unmodified pass; no labels read, nothing trained or
+submitted. Private Kaggle T4 kernel `pssv27/knee-perturbation-probe-v1`; the
+unmodified pass reproduced the saved predictions with max |Δp| 0.0. Intensity
+shifts up to ±20 levels and the `is_right` covariate barely matter (Spearman
+≥0.982). Noise σ 5–10 shifts every finding directionally (Fracture −0.31 logit
+at σ 10) but keeps the ranking (≥0.944). Slice density matters: 8 alternate
+slices give Spearman 0.79–0.95, while dropping two edge slices at each end changes
+almost nothing. **Mirror result:** the model locates the medial meniscus by
+anatomy, not image position. Its flipped raw "Medial Meniscus" output tracks
+the original medial meniscus (Spearman 0.862, versus 0.285 with the lateral).
+The repo's flip-with-label-swap convention (`lateral_swap_order`, `FLIP_TTA`,
+`laterality_flip`) is contradicted for this model. All three are off; keep them
+off. See [the probe](docs/perturbation_probe.md).
+
 Last updated: 2026-09-02. **Synovitis is descoped, the leaderboard is 0.906,
 not 0.891, and step 1 is now verified against the shipped cache rather than
 assumed.**
