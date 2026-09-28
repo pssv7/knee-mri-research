@@ -1,4 +1,4 @@
-# Report-review rubric (solo text review), v1
+claude# Report-review rubric (solo text review), v1
 
 **What this is.** These are the rules one reviewer applies when reading a knee MRI *report* to
 decide what the report states about a finding, and whether the training label represents it

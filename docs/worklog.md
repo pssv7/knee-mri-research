@@ -5,6 +5,73 @@ what happened, with numbers. Newest entry first.
 
 ---
 
+
+## 2026-09-27 — Silence-masking screen failed
+
+- Kaggle pair 3.05 h; control reproduced exactly again. Primary explicit-label
+  mean over the masked six: -0.0001 [-0.0160, +0.0166]; fail. Standard macro
+  -0.0068 [-0.0169, +0.0033]. PF OA explicit +0.036 [+0.000, +0.074]; Contusion
+  -0.037 [-0.074, -0.007]; Medial OA -0.015. Guard held.
+- Undeclared: ACL +0.022, Lateral Meniscus +0.021 on full labels (intervals span
+  0); possibly per-study loss renormalisation shifting weight to unmasked
+  findings. Hypothesis only. See `docs/silence_screen.md`.
+
+## 2026-09-26 — Mirror screen failed; silence-masking screen launched
+
+- Mirror screen (user-authorised training): candidate wraps the frozen training
+  loader in `src/model/mirror_augment.py` (p 0.5, labels and `is_right` kept).
+  Concurrent T4 pair, 3.08 h. Macro −0.0008 [−0.0084, +0.0072]; MCL −0.022; fail.
+- The fresh control reproduced the historical control bit for bit (checkpoint
+  and predictions). Recorded as determinism, not seed variance.
+- Receipt bug: `training_launched: false` came from the probe template; the
+  artifact is left as produced and the generator is fixed.
+- The user chose silence masking for OA/Contusion (partly revisiting D7). Declared
+  in `src/model/silence_mask.py`: silent cells (weight 0.25) of Medial OA,
+  Lateral OA, PF OA, Synovitis, Baker's and Contusion weighted 0 in training
+  rows only (958-1,824 cells per finding; Synovitis loses 83% of its training
+  cells). Primary endpoint: explicit-label AUC (weight >= 0.7) over those six,
+  +0.005 with a positive lower bound for eligibility; guard: unmasked findings no
+  worse than -0.020 on full labels. Standard macro reported, not gated. Kernel
+  `pssv27/knee-silence-screen-v1` launched; 11 new tests pass, including CPU
+  training of the candidate through the frozen evaluator.
+
+## 2026-09-25 — Series-selection check (inference only)
+
+- Five policies declared before the run (`src/model/selection_policies.py`;
+  frozen `dataset.py` untouched). Acquisition order is not in any metadata, so
+  the tie-break uses DICOM header quality instead. First `sagfluid5` draft also
+  reshuffled 44 unaffected studies; redefined to change only the 26 that lose the
+  series. Fixed a crash in `quality_scores` when header columns are absent.
+- Kaggle T4 `pssv27/knee-selection-probe-v1`, 4.2 min, reference max |Δp| 0.0.
+  Paired component bootstrap on outer0 mined labels: sagfluid5 +0.0004 (null),
+  quality5 +0.0035 [−0.0001, +0.0077], protocol7 +0.0021 (spans 0), all +0.0033
+  [+0.0002, +0.0066]. Below the +0.005 gate; four arms on a reused set.
+- Reading: selection is a small lever; the OOF deficit of protocol-dropping
+  studies was mostly confounding. Confirmation, if wanted: the five protocol224
+  fold checkpoints on their OOF folds, inference only.
+- 46 new tests pass (policies, runner reproduction on a CPU surrogate, kernel).
+
+## 2026-09-25 — Where accuracy is lost: OOF loss budget, inputs, labelled variants
+
+- OOF protocol224 (4,349 studies, mined labels): PF OA, Lateral Meniscus, Lateral OA
+  and Contusion carry 46% of the lost macro. For OA, Synovitis, Baker's and
+  Contusion, 40-75% of lost pairs involve a silent negative (label-driven); for
+  ACL, MCL and the menisci only 10-16% (model-driven).
+- Subgroups: TOSHIBA -0.053 [-0.088, -0.024], "Philips" vendor string -0.042. The
+  8+ series deficit belongs to the Philips cluster. Outside it, studies whose
+  protocol selection drops a distinct protocol lose -0.035 [-0.059, -0.009]
+  (555 studies); 115 lose their only sagittal fluid series (suggestive only).
+- CPU Kaggle kernel `pssv27/knee-image-stats-v1` (24,371 series, 9 min):
+  TOSHIBA noise 4.34 vs 2.84 and SNR half; the Philips cluster is cleaner than
+  the rest but has 46% silent label cells vs 33% (label-driven). Outside the
+  clusters, the lowest-SNR tertile scores -0.018 [-0.035, -0.002].
+- Variant labels written (`src/model/perturb_labels.py`,
+  `tools/score_perturbation_labels.py`) and every variant scored: mirror
+  keep-labels beats swap by +0.028 [+0.020, +0.037]; correct mirrors still cost
+  ACL/meniscus/MCL; 8 slices -0.018; noise σ 5 only -0.002, so noise cannot explain
+  TOSHIBA. 39 probe tests pass. Scratch analyses for the OOF, series and
+  image-statistics checks are not yet in `tools/`.
+
 ## 2026-09-25 — Perturbation probe of the Tiny control
 
 - User asked for controlled input variants to find what the model is sensitive
@@ -36,6 +103,506 @@ what happened, with numbers. Newest entry first.
   the source embedded in notebooks 17/18.
 - Details: `docs/perturbation_probe.md`; artifacts:
   `outputs/perturbation_probe_tiny_outer0_v1_results/`.
+
+## 2026-09-25 — Small/224 result retrieved; screen failed
+
+- User completed Colab run. Retrieved seven small artifacts from Downloads;
+  identified matching metrics by receipt hash (`metrics_09:25.csv`). All supplied
+  receipt-listed artifacts match; bundle/spec/source/declared input identities
+  verified. All 691 predictions have the correct frozen outer membership.
+- Exactly reproduced macro/per-finding metrics and 2,000-draw bootstrap.
+  Tiny 0.878838 versus Small 0.877015, delta -0.001823, CI [-0.011790,+0.007877].
+  Contusion -0.058151 and lateral meniscus -0.026041 breach the point floor.
+- Twelve epochs / 3,312 optimizer steps, 56.69 minutes on A100. Inner validation
+  peaked at epoch 10 and declined afterward. Stop this Small configuration.
+- Historical control hardware/runtime differs; no independent image labels.
+  Selected weights not downloaded, so their declared hash is cross-checked only.
+  No further GPU job, blend or submission. Preserved artifacts and reproducible
+  verification in `outputs/colab_small_224_outer0_results/`.
+
+## 2026-09-25 — Small/224 outer0 Colab notebook prepared
+
+- User requested one ConvNeXt-Small fold at 224 using old Drive shards.
+  Generated notebook 22 from source; no GPU run launched.
+- Reused `/content/drive/MyDrive/kagglehub` from old Colab notebooks. Pinned
+  all original input hashes and included frozen nested roles/labels and verified
+  Tiny reference predictions. Only Small is trained; sampling remains legacy.
+- Added GPU smoke/reload gate, Drive checkpoints/logs, strict cache staging,
+  completion checks and explicit stop on partial runs rather than silent retries.
+- Historical-control comparison discloses hardware/runtime differences and
+  reused screening observations; it does not promote models or launch follow-ups.
+- 32 targeted tests passed, including CPU surrogate smoke/reload and real-file
+  preflight. Actual CUDA/Small execution is deferred to the notebook's smoke.
+- Details: `docs/convnext_small_fold0_colab.md`.
+
+## 2026-09-25 — Matched sampler pair completed; screen failed
+
+Both arms completed 12 epochs in 2.91 h wall time. Outer report-proxy macro
+AUC: control **0.878838**, candidate **0.879690**, delta **+0.000853**, paired
+95% interval **[-0.007144, +0.008840]**. Fracture delta **-0.026898** also
+breaches the -0.020 floor. The frozen screen failed: stop the sampler branch,
+keep the default disabled, and do not launch confirmation, blending or submission.
+This is report-proxy evidence, not independent image-accuracy evidence.
+
+Source, input configuration, matched initialization/recipes, checkpoint and
+prediction hashes, and all 12 epochs were verified. All 28 package hashes
+match returned and local files; the downloaded launcher matches frozen staging.
+Local evaluation exactly reproduces the full returned report using the
+predeclared 2,000 bootstrap draws. Artifacts are preserved under
+`outputs/kaggle_distinct_training_pair_v1_results/`; verification and reproduced
+evaluation are in `outputs/kaggle_distinct_training_pair_v1_completion_receipt/`.
+
+---
+
+## 2026-09-16 - Spatial fold-1 screen failed; lever closed
+
+- Colab A100 attempt `attempt_676986918b1b`, notebook 19. Both smokes and both
+  12-epoch arms completed. Mined OOF macro: control 0.880463, spatial
+  0.877601, delta -0.002862 (CI [-0.010086, +0.004138]) against +0.005.
+  MCL -0.0532 breaches the -0.020 floor; Contusion -0.0183. Menisci and ACL
+  gained +0.010 to +0.015. `screening_gate.passed = false`.
+- Blend 0.887933 (+0.007470) is against its own control; not evidence.
+  Gold diagnostic only: 0.877 control vs 0.870 spatial at selected epochs.
+- Decision: spatial lever closed. No fold 3, seed repeat or plane adapters.
+- Measured: ~6.5-6.7 min/epoch on A100 (about 80 min per arm) at 24 × 5.
+  24-slice protocol control 0.8805 vs 16-slice protocol 0.8811 on fold 1.
+- Earlier attempt failed at the probe: `No module named 'src'`. Probe sources
+  written under a Drive cwd; Drive does not bump directory mtime, so Python's
+  cached finder missed `src/`. Added `importlib.invalidate_caches()` to the
+  probe prefix and a frozen-mtime regression test (fails without the fix).
+- Next: 384 matched pair, notebook 20 (regenerated unchanged; 48 tests pass).
+
+## 2026-09-13 - Colab smoke dependency correction
+
+- Fold-2 attempt `attempt_5e29897538a7` reached its A100 smoke subprocess,
+  then failed importing `pydicom`, before training. Added `pydicom>=3.0` and
+  explicit core data dependencies to Colab setup. Setup now exercises imports
+  before staging; the runner also checks imports before creating an attempt.
+- Regenerated notebook and repair module. Eight Colab tests passed. Existing
+  runtime requires only installing pydicom and rerunning the training cell;
+  shard copies, input mounts and labels can be reused. No training completed
+  in the failed attempt, and no remote retry was launched here.
+
+## 2026-09-13 - Colab input mount uses writable /content
+
+- User's Colab runtime rejected creating a symlink under read-only
+  `/kaggle/input`. Updated Colab mount root to `/content/knee_slice_mounts`,
+  relocating input constants in the outer runner and both embedded arms/smoke.
+  Existing staged files and receipts are reused with a mount-only repair.
+- Regenerated the standalone repair module and notebook. Eight Colab tests
+  passed, including actual training-finder discovery on the relocated mounts.
+  Kaggle source and running jobs remain unchanged.
+
+## 2026-09-13 - Repair duplicate Colab metadata discovery
+
+- User's fold-2 staging copied three full shards, then stopped on multiple
+  Drive `train.csv` files. Metadata selection now groups by content hash,
+  chooses pinned labels, and falls back to official small Kaggle metadata if
+  different copies coexist. No arbitrary version choice.
+- Existing local copies are verified and reused without copying them again;
+  disk checks no longer require space for all three existing shards. Seven
+  Colab tests passed, including identical duplicates, conflicting versions,
+  pinned labels, reused copies and same-size corrupt-copy replacement.
+- Regenerated the notebook and a self-contained `colab_slice_staging_fix.py`
+  for the current Colab runtime. No new GPU job or training retry launched.
+
+## 2026-09-13 - Slice transformer implemented and both screening folds launched
+
+- Both Kaggle version-1 jobs subsequently verified RUNNING, exact uploaded
+  source/privacy/GPU/image/input metadata matches. Kernel IDs 134267899/134267910.
+- User requested one additional Colab fold using existing Drive shards. Built
+  standalone fold-2 notebook with verified local cache copies and Drive-backed
+  training outputs. No cache rebuild or extra Kaggle launch. Colab is prepared
+  but not started: browser control is unavailable in this session. Adapter,
+  staging and protocol regression suite passed 44 tests; all five final
+  Colab-specific checks passed, including separate metadata/cache discovery.
+
+- User authorized implementation, folds 1/3 and removal of the parent timeout.
+  Added residual slice transformer (256-wide, two layers, 8 heads, relative
+  sampled-position projection) before slice pooling. Original ConvNeXt-V1
+  backbone and protocol selection in both fresh matched arms; 12 epochs each.
+  Zero output initialization preserves starting predictions; common modules
+  and RNG state are preserved. Checkpoint export/reload detects the new branch.
+- 213 relevant tests passed; staged embedded sources and protocol policies
+  verified for all six scripts. Both smoke/full subprocess timeouts are None.
+  Pushed both private T4 kernels version 1 with the nine-hour platform cap:
+  `pssv27/knee-slice-transformer-fold1-pair` and
+  `pssv27/knee-slice-transformer-fold3-pair`. Quota before launch: 19.97 h.
+  Smoke/full results pending. See `docs/slice_transformer.md` for hashes.
+- Corrected preceding discussion: V2 fold 1 timed out during epoch 12 at the
+  per-arm 18000-second cap; V2 fold 3 completed and failed the standalone gate.
+  The user-pasted retired-reference 0.866/0.856 tables were baseline gold,
+  not V2 validation. No V2 retry or leaderboard submission was made.
+
+## 2026-09-13 - Matched ConvNeXt-V2 fold-3 pair launched
+
+- Restaged the independent fold-3 baseline/ConvNeXt-V2 comparison using the
+  corrected adapter. The generated baseline, V2 and smoke sources passed AST
+  and configuration checks; the focused suite passed 33 tests.
+- Launched `pssv27/knee-convnextv2-fold3-pair` version 1 on a private T4 with a
+  nine-hour cap. Source SHA-256 is
+  `c21148a3c9841456276581daed12780df94f1cb14bfeae606a51ce99ca663f0e`.
+  Results are pending; this is not a leaderboard submission.
+
+## 2026-09-13 - Matched ConvNeXt-V2 fold-1 pair launched
+
+- User requested building and running the planned independent V2 comparison.
+  Restaged the existing matched-pair generator with current runtime fixes;
+  all three generated scripts have corrected input discovery, matching
+  backbone controls and no background stack-dump timer. Notebook/labels
+  hashes unchanged from prior staging. Thirty-three focused tests passed.
+- Quota checked: 34.83 GPU hours available. Launched only
+  `pssv27/knee-convnextv2-fold1-pair` version 1, private T4 with a nine-hour cap.
+  Kernel ID 134222298; status RUNNING. Pulled source and all input/privacy/image
+  settings match staging, including all three cache shards.
+- Source SHA-256 `a91124550b1d5cd17ee09681babce7982354e8845666a581a3ac2d4aa2184557`.
+  Receipt: `outputs/kaggle_convnextv2_fold1_receipt/`. Smoke/full results pending.
+  Fresh baseline/V2 arms have identical aggregation initialization, uniform
+  selection, 16 slices, five series, 12 epochs and effective batch 8. Gold is
+  diagnostic; the scored 0.914 ensemble is preserved. No competition submission.
+
+## 2026-09-13 - Protocol ensemble submitted and scored 0.914
+
+- User explicitly requested leaderboard submission. Ran the prepared private
+  offline T4 notebook `pssv27/knee-16-24-protocol-fixed-blend` version 1;
+  verified pulled cell sources and all input/image/privacy metadata.
+- Visible test passed three rows, exact columns and IDs, finite probabilities,
+  all 15 benchmark model hashes/weights and zero fallbacks. Runtime 74.804 s.
+  CSV SHA-256 `8fbea01856373182cfe575234c15036ff53c7cee510de07f88b8ce62d9ece73f`.
+- Submitted exactly one entry at 01:31:11.647 UTC, ID 56196386. It initially
+  reported Pending; the user later reported 0.914, and the authenticated API
+  confirmed COMPLETE/0.914 around 15:07 UTC. No hidden runtime returned.
+- New incumbent is the fixed 15-model equal-family ensemble, +0.003 over
+  0.911; remaining target gap 0.040. Exact source/package preserved and receipt
+  saved in `docs/submission_protocol.md` and the submission output directory.
+- Next planned independent axis is the matched ConvNeXt-V2 fold-1 pair;
+  restage with the corrected adapter before launching. No new training or
+  submission started while recording the score.
+
+## 2026-09-12 evening / September 13 UTC - Fixed protocol ensemble benchmark passed
+
+- User authorized packaging and benchmarking. Packaged exactly 15 selected
+  models, five per 16/24/protocol family at weight 1/15; hashes bound to the
+  full OOF comparison. Preserved the scored 0.911 package. Added guarded staging
+  and benchmark orchestration; 15 focused tests and local notebook smoke passed.
+- Created dataset `pssv27/knee-ensemble-protocol-private` version 1 (ID 12000725),
+  confirmed READY/private. Launched `pssv27/knee-protocol-ensemble-benchmark`
+  version 1, offline pinned T4 with 3600-second cap. Pulled source and exact
+  input/privacy/image settings verified. GPU quota before launch: 35.03 h left.
+- Benchmark COMPLETE: all 15 cached reference checks passed (eight held-out
+  studies each). Legacy maximum difference 0.000454187; all protocol checks
+  exactly reproduced. Same 100 raw study IDs as incumbent, all completed with
+  zero errors; unique finite bounded predictions independently checked.
+- Mean runtime 5.283313 s/study versus incumbent 4.496462; p95 8.121399,
+  max 13.991049. Peak allocation 3.223422 GiB, reserved 4.261719 GiB.
+  Setup 62.864907 s; total 630.163529 s. Projection for 1300 studies 1.925325 h,
+  passing the 6.3-hour gate. Report: `docs/benchmark_protocol_results.md`.
+- Prepared local `outputs/kaggle_protocol_submission/` using the exact
+  benchmarked manifest/checkpoints and inference source. Eleven guard tests
+  passed. No submission notebook run or leaderboard entry launched; ready for
+  a submission decision. Current public score remains 0.911.
+
+## 2026-09-12 - All protocol folds complete; full incumbent comparison
+
+- User reported all runs finished. Kaggle confirmed fold 4 COMPLETE; its
+  version-3 receipt records smoke, full 12-epoch training and final export
+  completion in 9258.7 seconds. Fold 2 version 2 also completed, as verified
+  during the preceding four-fold check. No new training job or submission.
+- Downloaded fold 4 predictions/provenance and selected weights for folds
+  0/2/4. Verified all five selected protocol model hashes and finite tensors,
+  exact split membership/training exclusion, matching screened contracts and
+  complete OOF coverage. Fold 4 logs contain no periodic stack-dump timeout.
+- Extended the comparison tool to all completed folds, requiring successful
+  completion receipts and matching training contracts. Eleven focused tests
+  passed. Retained screening defaults and wrote a separate all-fold report.
+- Fixed equal 16/24/protocol families versus the exact incumbent's same-fold
+  16/24 blend: 4349-study pooled macro 0.876676 -> 0.885228, delta +0.008552,
+  1000-draw within-fold bootstrap CI [0.006843, 0.010095]. All five folds and
+  all twelve pooled findings improve. Fold 4: 0.877970 -> 0.883375.
+- Report: `data/meta/compare_protocol_incumbent_all_folds/`; readout:
+  `docs/protocol_incumbent.md`. These are mined-label OOF results, not a new
+  public score. Next is fixed 15-model packaging/runtime verification before
+  any submission decision. Incumbent 0.911 and independent V2 staging retained.
+
+## 2026-09-12 - Fold 4 crash during diagnostic dump; version 3 launched
+
+- Downloaded latest failed source and logs, distinct from the stale version-1
+  input-scan failure. Version 2 passed smoke at 121.948 seconds, completed eight
+  epochs and crashed during epoch 9. Rank-zero periodic dumps began at 1328.442
+  seconds and repeated every 1200 seconds; the fifth dump at 6128.454 stopped
+  mid-frame, followed by SIGSEGV at 6128.879. Fold 2's saved failure has the same
+  pattern at 1338.790/1338.858. This strongly implicates the diagnostic timer;
+  no native core dump was captured, so the precise native defect is unproven.
+- Corrects the previous NCCL-timeout diagnosis: `Timeout (0:20:00)!` is printed
+  by `faulthandler.dump_traceback_later`, not the subprocess or NCCL watchdog.
+  TCPStore errors are subsequent to rank zero dying. Python documents this
+  timer at https://docs.python.org/3.12/library/faulthandler.html; a similar
+  mid-frame threaded stack-dump crash is recorded at
+  https://github.com/python/cpython/issues/116008 (not proof of the same bug).
+- Removed recurring stack-dump setup and cleanup in the shared staging adapter.
+  Kept fatal-signal diagnostics, 900-second smoke timeout, 18000-second full
+  timeout and all screened settings. Added a regression check executing the
+  generated diagnostics and evaluating both parent time limits.
+- 39 tests passed across completion, training-pair and Colab staging. Generated
+  smoke/full ASTs match the failed upload except the two removed diagnostic
+  calls; embedded model code and training notebook remain unchanged.
+- Pushed only fold 4 version 3 with a 21600-second private T4 cap. Kaggle status
+  RUNNING; pulled source and all image/input/privacy metadata match staging.
+  SHA-256 `4a67152da65bb50c55eb6ce8afc97c4adaf8108d75f03590bf9c52a28d0ac635`.
+  Receipt: `outputs/kaggle_protocol_fold4_completion_v3_receipt/`; failure
+  evidence: `outputs/kaggle_protocol_fold4_failure_latest/`.
+- Fresh epoch-zero run is required for exact EMA/SWA accumulation. GPU smoke
+  and full-run validation pending. No new submission; incumbent 0.911 preserved.
+
+## 2026-09-11 evening / September 12 UTC - GPU reset; protocol completion resumed
+
+- User asked to continue after quota reset. Authenticated Kaggle quota showed
+  21 hours allowed, zero used/reserved, next refresh September 19 00:00 UTC.
+- Restaged protocol folds 0/2/4 with unchanged screened notebook, labels and
+  recipe. All 38 focused completion, incumbent and training-pair tests passed.
+- Launched folds 0 and 2 as version 1, private T4 jobs with six-hour limits;
+  source and image/input metadata matched exactly. Fold 0 completed. Fold 2's
+  smoke passed, but its full subprocess hit the 20-minute internal timeout and
+  SIGSEGV during epoch 2; no valid export is available yet.
+- Fold 4's first push hit the two-concurrent-batch-GPU limit. Once fold 0 freed
+  a slot, version 1 launched successfully and reports RUNNING. Its smoke and
+  training results are pending.
+- Next: verify fold 0 exports, monitor fold 4, then make a targeted fold-2
+  rerun after diagnosing the DDP timeout. No scheduler installed; incumbent
+  0.911 and V2 staging unchanged.
+- At the user's request, relaunched `pssv27/knee-protocol-fold2-completion`
+  version 2 with the unchanged script and six-hour T4 limit while fold 4 was
+  still RUNNING. Kaggle reports the retry RUNNING; startup/smoke output is
+  pending. This consumes the open second GPU slot.
+- Fold-4 diagnosis: version 1 never reached training. Its competition data was
+  mounted directly at `/kaggle/input/rsna-knee-abnormality-detection`, bypassing
+  the finder’s `competitions` skip; recursive globbing walked raw DICOM files
+  until the 15-minute smoke timeout. Patched the staging adapter to skip roots
+  containing `train.csv` or `train_series.csv`, restaged, and pushed fold 4
+  version 2. Kaggle reports it RUNNING; startup/smoke output is pending.
+- Fold-2 diagnosis: smoke completed (`DDP_SMOKE_PASSED`) with finite selected,
+  EMA and SWA exports. The full run reached epoch 1 and entered epoch 2; the
+  20-minute NCCL watchdog timeout was followed by rank-0 SIGSEGV and rank-1
+  TCPStore broken-pipe messages. No data exception, NaN, OOM or contract error
+  appeared. Record as transient distributed-runtime failure; first retry keeps
+  the screened recipe unchanged.
+  No submission made; scored incumbent remains 0.911.
+
+## 2026-09-11 - Incumbent comparison, completion staging and V2 smoke passed
+
+- Added reproducible fixed-family OOF comparison against the actual 16/24-slice
+  incumbent package's held-out fold members. Fold 1: 0.884078 to 0.891892;
+  fold 3: 0.883052 to 0.889416. Pooled 1,740-study delta +0.011499, CI
+  [0.008596, 0.014766]. No weight search; this is not a leaderboard measurement.
+- Staged protocol folds 0/2/4 as isolated single training jobs. Guard successful
+  screening, unchanged notebook/labels/preset, matching initial state and
+  settings, split exclusion and finite OOF exports. No full job launched.
+- Extended matched-pair staging to V2. Construct the backbone then reseed the
+  aggregation in both arms; compare all non-backbone initial weights and input
+  defaults. Added tests with actual V1/V2 trunks. Core notebook modules unchanged.
+- 38 focused tests passed. A later broader run was interrupted without a
+  captured result, so its status is not claimed.
+- Launched only `pssv27/knee-convnextv2-fold1-smoke` version 1 (20-minute cap).
+  Confirmed COMPLETE; logs show two-GPU AMP training returned and selected,
+  EMA and SWA exports succeeded. Three checkpoint hashes and finite tensors
+  verified locally. This smoke run has no meaningful AUC result.
+- Full protocol jobs and V2 pair remain staged, not launched. Quota is 1.27
+  hours, refreshing September 12 at 00:00 UTC. User asked to increase quota or
+  supply another GPU environment. No automatic future start scheduled; 0.911
+  incumbent unchanged. Reports: `protocol_incumbent.md`, `convnextv2_fold1.md`.
+
+## 2026-09-11 - Classwise fold 3 complete; stop expansion
+
+- Confirmed `pssv27/knee-classwise-fold3-pair` version 1 COMPLETE around 13:30
+  UTC; paired run took 5.04 hours. Downloaded outputs and verified six hashes,
+  contracts, exact split exclusion and local AUC reproduction on 869 studies.
+  Baseline weights and OOF equal the prior protocol fold-3 baseline.
+- Baseline/classwise/fixed-blend mined macro: 0.871415 / 0.866763 / 0.882532.
+  Standalone gate FAILED; ACL drops 0.055831. The blend improves eleven of
+  twelve findings, with ACL still down 0.009991.
+- Registered equal-thirds ensemble reaches 0.889489 versus baseline/protocol
+  0.886863. Incremental +0.002626 fails +0.003; CI [-0.000155, 0.006130]. Do
+  not change the threshold or substitute the tool's secondary half-blend.
+- Gold macro 0.887565 / 0.864273 / 0.891789. PF OA and effusion-conditioned
+  synovitis gains did not repeat; no established diagnostic improvement.
+- Archive classwise without remaining-fold expansion. Protocol remains the
+  stronger replicated candidate; full incumbent comparison and the planned
+  independent V2 test are next priorities. No new job or submission during
+  this check, public score 0.911 unchanged. Full report: `docs/classwise_fold3.md`.
+
+## 2026-09-11 - Classwise completed; ensemble-focused replication launched
+
+- Verified classwise fold-1 version 1 COMPLETE (4.97 hours), downloaded all
+  outputs, checked six model hashes and contracts, exact split exclusion and
+  reproduced the 871-study comparison locally. The baseline selected weights
+  and OOF are identical to the recovered protocol fold-1 baseline.
+- Mined macro baseline/classwise/fixed blend: 0.871575 / 0.874049 / 0.883031.
+  Standalone screen FAILED (+0.002474 < +0.003). Fixed blend improves all twelve
+  findings, delta CI [0.006676, 0.016151]. This is complementary prediction
+  evidence, not a reason to relabel the standalone gate.
+- Gold macro 0.856530 / 0.866667 / 0.883020. PF OA increases on gold, decreases
+  on mined labels; conditioned synovitis rises 0.606 to 0.652 with delta CI
+  [-0.055, 0.149]. Diagnostic improvement remains uncertain.
+- Exploratory equal-thirds baseline/protocol/classwise gives 0.890261 versus
+  0.885457 for baseline/protocol, delta CI [0.001123, 0.008469]. No weight sweep.
+- Recorded fixed fold-3 replication criteria in `docs/classwise_fold1.md`,
+  reran 13 staging tests, pushed `pssv27/knee-classwise-fold3-pair` version 1,
+  verified RUNNING around 02:59 UTC and pulled byte-identical private GPU/input
+  receipt. Six-hour job limit; both completed pairs took approximately five.
+- No new competition entry or incumbent replacement. The scored 0.911 ensemble
+  still needs a full matched comparison and runtime check before promotion.
+
+## 2026-09-10 - Fold 3 complete; screening replicated, gold remains mixed
+
+- Confirmed `pssv27/knee-protocol-fold3-pair` version 1 COMPLETE around 21:48
+  UTC. Both native-DDP runs and exports finished; total pair time 4.91 hours.
+- Downloaded outputs, verified six checkpoint hashes, matched contracts and
+  exact held-out/train split exclusion. Recomputed the 869-study comparison
+  locally with identical results. Also evaluated the 1,740 combined OOF studies.
+- Fold-3 mined macro baseline/protocol/fixed blend:
+  0.871415 / 0.877224 / 0.886863. Gate PASS. Protocol delta CI includes zero;
+  blend delta CI [0.009178, 0.022626]. Blend improves all twelve findings on
+  both screening folds. Mined PF OA improves again, synovitis also improves here.
+- Gold-58 macro: 0.887565 / 0.870440 / 0.889122. Gold PF OA falls 0.817246 to
+  0.773488; synovitis conditioned AUC falls 0.660 to 0.593 (delta CI includes
+  zero). No demonstrated improvement for these image-labelled diagnoses.
+- Treat protocol as an ensemble candidate, not a replacement. These blends
+  have not been compared to the actual ten-model incumbent. Classwise remains
+  RUNNING. No new training job or competition submission during this check;
+  incumbent 0.911 preserved. Full report: `docs/protocol_fold3.md`.
+
+## 2026-09-10 - Continued development; classwise fold 1 launched
+
+- The user requested continuation while protocol fold 3 was nearing completion.
+  Live logs show its baseline finished and exported; protocol has completed
+  epoch 10 of 12. Final exported-prediction comparison is still pending.
+- Extended the isolated pair adapter to the already planned classwise-pooling
+  experiment. Inputs remain uniform and all other training settings unchanged.
+  Both arms train under native DDP; no recovery or old-launcher baseline is used.
+- Added actual shared-state initialization tests and contract guards. All 13
+  staging tests passed, along with 210 focused existing regression tests.
+- Pushed `pssv27/knee-classwise-fold1-pair` version 1 and verified RUNNING around
+  21:30 UTC. Pulled code is byte-identical and private GPU/input metadata matches.
+  Receipt and readout rules: `docs/classwise_fold1.md`. No new submission.
+
+## 2026-09-10 - Protocol fold 1 passed; fold-3 replication launched
+
+- Recovery kernel version 2 completed. Downloaded full outputs into
+  `outputs/kaggle_protocol_fold1_results/`; verified all four model sidecars and
+  exact 871-study OOF alignment, then independently recomputed comparison.
+- Mined macro baseline/protocol/fixed blend: 0.871575 / 0.881118 / 0.885457.
+  Candidate delta +0.009543, paired 95% CI [0.002531, 0.017191]. Gate PASS;
+  no finding down >0.02. Fixed blend improves all twelve pooled finding AUCs.
+- PF OA improves 0.787674 to 0.816353. Gold-58 PF OA also increases, but with
+  wide uncertainty. Synovitis has no demonstrated gain: gold conditioned AUC
+  0.606 to 0.562, paired delta CI [-0.161, 0.076]. Gold remains diagnostic.
+- Generalized the isolated script staging tool to reviewed folds 1 and 3,
+  including fold-specific paths, exact validation counts and split-ID guards.
+  Recovery is still allowed only for fold 1. Seven staging tests pass.
+- Pushed `pssv27/knee-protocol-fold3-pair` version 1, verified RUNNING around
+  16:51 UTC. Both arms use native DDP, removing the fork/native launcher
+  difference in fold 1. Source and private GPU/input configuration match the
+  pulled receipt in `outputs/kaggle_protocol_fold3_receipt/`.
+- Full numbers, hashes and caveats are in `docs/protocol_fold1.md`. No new
+  submission; the exact 0.911 incumbent is preserved.
+
+## 2026-09-10 - 0.911 confirmed; matched training pair authorized
+
+**Failure/recovery update:** the baseline finished all twelve epochs, selected
+epoch 8 at mined validation 0.871666, then stalled after `Trainer.fit` logged
+completion. The subprocess timed out at three hours. The intact selected
+checkpoint and full metrics were downloaded. Protocol never started. Recovery
+uses script-native DDP, an end-of-fit smoke test, and a private checkpoint
+dataset because Kaggle rejects the failed kernel as an input source. See
+`docs/protocol_fold1.md`; no new performance claim or leaderboard entry.
+
+**Recovery version 2 running, 14:25 UTC:** native script DDP passed the GPU
+end-of-fit test, writing selected/EMA/SWA weights. Baseline predictions passed
+the saved-AUC reproduction gate. Protocol training started on two T4s after
+matching the baseline's exact initial state and training contract. Private
+dataset attachment and byte-identical uploaded code were verified after pull.
+All five current staging/recovery tests pass. Protocol validation is pending.
+
+- User reported 0.911; authenticated Kaggle listing confirms submission
+  56135074 COMPLETE, public score 0.911. Preserve that exact ensemble.
+- User approved the next experiments and stated GPU hours should not limit
+  development. Quota check returned 21.87 remaining of 45.00 hours, refreshing
+  September 12. The old 25-hour constraint is stale.
+- Prepared a private sequential baseline/protocol fold-1 job derived from the
+  generated notebook 08, keeping the repo modules unchanged. Both use seed 0,
+  12 epochs, 16 slices, five series, all three cache shards, and the exact label
+  file (SHA-256 pinned). Separate subprocesses and output directories prevent
+  CUDA state and checkpoints carrying over between experiments.
+- The job records initial-weight hashes and training contracts, checks exact
+  matched split membership, exports selected checkpoint sidecars and all 871
+  OOF rows per run, then compares the candidate and fixed 50/50 blend.
+- Screening: candidate macro delta >= 0.003 and no finding down > 0.02.
+  The regression guard conservatively applies to all twelve findings. Gold is
+  diagnostic only. No new competition entry is created.
+
+## 2026-09-09 / 09-10 UTC - 0.954 plan, verified ensemble, one entry
+
+**Handoff: wait for the user to report submission 56135074's result. No more
+automatic polling, GPU jobs or submissions. Last checked status: Pending at
+2026-09-10 02:07 UTC. No new leaderboard score is known.**
+
+### Evidence and changes
+
+- User confirmed separate 16-slice and 24-slice runs both scored **0.906**;
+  target remains **0.954**, not achieved or guaranteed.
+- Audited competition metadata through the authenticated Kaggle API, local
+  labels, input coverage, saved checkpoints and OOF predictions. Label matrix
+  reproduced exactly; no labels were overwritten.
+- Added finite sequence-flag parsing, unknown-side safeguards, per-series
+  DICOM laterality handling, optional protocol-aware series selection, and
+  deterministic ordering. At the same five-series cap, the protocol selector
+  eliminates available-plane omissions on the training inventory (228 to 0);
+  its AUC effect is still untested.
+- Added optional finding-specific series pooling and controlled experiment
+  presets: baseline, resample, protocol, classwise and ConvNeXt-V2. Preserved
+  the user's pending resampling edits/default; choose baseline explicitly for
+  a control. No new abnormality-model training was performed.
+- Corrected optimizer-step counting and EMA/SWA update timing. Added explicit
+  checkpoint metadata, hashes and heterogeneous-ensemble inference. Regenerated
+  notebooks from `tools/make_notebook.py`; retained pre-existing worktree changes.
+
+### Recovered OOF and GPU verification
+
+- Packaged ten selected checkpoints, five per family, fixed 0.1 probability
+  weights. Local manifest: `outputs/ensemble_16_24/ensemble.json`.
+- `experiment /oof_fold1.parquet` is valid fold-1 data but does not match the
+  selected 24-slice model (mean probability difference 0.09207). Preserved it.
+  Recovered all 871 predictions into
+  `experiment /slice_24/fold1/oof_fold1.parquet` plus provenance sidecar.
+- Full 4,349-study OOF macro: **16 slices 0.865320; 24 slices 0.865688;
+  fixed blend 0.876676**. Blend improves every fold and all twelve pooled
+  finding AUCs. Paired delta 95% CI [+0.009224, +0.013609], 1,000 within-fold
+  bootstrap resamples. Mined-label proxy, not a leaderboard estimate; legacy
+  split exclusion is not independently proven by reconstructed fold IDs.
+- One approved private T4 benchmark, offline: all 100 raw-DICOM studies passed,
+  zero errors, mean 4.50 s/study, peak allocation 2.50 GiB, projected 1.70 h
+  for 1,300 studies. Benchmark script completed in 16.23 minutes, including
+  OOF recovery. Gold-58 and stratified diagnostics were not rerun.
+- Latest full local suite: **655 passed**; diff whitespace checks passed.
+
+### Submitted and next decision
+
+- After separate approval, created private/offline notebook
+  `pssv27/knee-16-24-fixed-blend`, **version 1**, using the unchanged benchmarked
+  checkpoints. Visible-test check: three valid rows, zero fallbacks, all ten
+  hashes and equal weights verified. No training-cache shards attached.
+- Exactly one competition entry: **56135074**, submitted 2026-09-10 02:06:11
+  UTC. Receipt: `docs/submission_16_24.md`; raw receipt and outputs under
+  `outputs/kaggle_submission*`. Models/notebooks remain private.
+- If it beats 0.906, retain the exact blend as provisional best; if it ties or
+  loses, keep the cheaper 16-slice control. Do not tune per-finding weights on
+  gold or sweep the leaderboard. Diagnose any execution failure before asking
+  to retry. No further compute or entry is pre-authorized.
+- Next proposed experiment after discussing compute: baseline versus protocol
+  selection on fold 1; repeat on fold 3 if the pre-registered gate passes.
+  Classwise pooling and ConvNeXt-V2 follow as separate controlled tests.
+- Active plan: `docs/target_0954_plan.md`; measured results:
+  `docs/benchmark_16_24_results.md`. `docs/plan.md` is historical. No commit made.
 
 ## 2026-09-03 — the labels are precise and incomplete; notebook 14 and its fixtures
 

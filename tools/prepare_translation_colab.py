@@ -21,7 +21,9 @@ NOTEBOOK = ROOT / 'notebooks/22_translate_packets_colab.ipynb'
 MODULE = ROOT / 'src/labels/translate.py'
 
 
-def make():
+def make(platform='colab'):
+    if platform == 'kaggle':
+        return make_kaggle()
     nb = Notebook(gpu=True)
     nb.md("""
 # Translate review-packet reports (local model)
@@ -122,6 +124,80 @@ with OUTPUT.open("w", encoding="utf-8") as handle:
 print(f"wrote {len(results)} translations to {OUTPUT.name}; input sha256 "
       f"{hashlib.sha256(REQUESTS.read_bytes()).hexdigest()[:16]}")
 """)
+    return nb
+
+
+def module_cell():
+    source = MODULE.read_text(encoding='utf-8')
+    return f"""
+# Generated from src/labels/translate.py -- edit the module and regenerate, never here.
+import importlib, pathlib, sys
+TRANSLATE_SOURCE = {source!r}
+pathlib.Path("translate.py").write_text(TRANSLATE_SOURCE, encoding="utf-8")
+sys.path.insert(0, ".")
+importlib.invalidate_caches()
+import translate
+"""
+
+
+def make_kaggle():
+    """The same translation on a private Kaggle kernel (2x T4, internet on).
+
+    Kaggle runs a pushed notebook top to bottom with no restart, so vLLM is
+    installed before anything imports torch. The requests file arrives as a
+    private dataset; the translations are written to /kaggle/working.
+    """
+    nb = Notebook(gpu=True)
+    nb.md("""
+# Translate review-packet reports (local model, private Kaggle kernel)
+
+Kaggle variant of notebook 22. An open-weight model runs on this kernel's GPUs; no report text
+is sent to a hosted service. The requests file comes from a private dataset attached to this
+kernel. The self-check must pass before any report is translated.
+""")
+    nb.code("""
+import subprocess, sys
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "vllm"], check=True)
+subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchaudio"], check=False)
+gpus = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True).stdout.strip().splitlines()
+print("\\n".join(gpus))
+if not gpus:
+    raise SystemExit("No GPU attached to this kernel.")
+""")
+    nb.code(module_cell())
+    nb.code("""
+import hashlib, json, pathlib
+found = sorted(pathlib.Path("/kaggle/input").rglob("*_requests.jsonl"))
+if len(found) != 1:
+    raise SystemExit(f"expected exactly one *_requests.jsonl under /kaggle/input, found {[p.name for p in found]}")
+REQUESTS = found[0]
+OUTPUT = pathlib.Path("/kaggle/working") / REQUESTS.name.replace("_requests.jsonl", "_translations.jsonl")
+requests = [json.loads(line) for line in REQUESTS.read_text(encoding="utf-8").splitlines() if line]
+print(f"{len(requests)} reports to translate from {REQUESTS.name}")
+""")
+    nb.code("""
+from vllm import LLM, SamplingParams
+from transformers import AutoTokenizer
+
+MODEL = "Qwen/Qwen2.5-14B-Instruct-AWQ"
+MAX_TOKENS = 2048
+tokenizer = AutoTokenizer.from_pretrained(MODEL)
+llm = LLM(model=MODEL, dtype="half", tensor_parallel_size=len(gpus), gpu_memory_utilization=0.90,
+          max_model_len=8192, trust_remote_code=True)
+SAMPLING = SamplingParams(temperature=0.0, max_tokens=MAX_TOKENS)
+
+
+def generate(items):
+    prompts = [tokenizer.apply_chat_template(translate.messages(text, language), tokenize=False,
+                                             add_generation_prompt=True) for text, language in items]
+    return [out.outputs[0] for out in llm.generate(prompts, SAMPLING)]
+
+
+def translate_batch(items):
+    return [o.text for o in generate(items)]
+""")
+    for cell in make().cells[-2:]:
+        nb.cells.append(cell)
     return nb
 
 

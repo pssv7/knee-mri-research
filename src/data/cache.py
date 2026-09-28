@@ -149,7 +149,9 @@ def submission_indices(count: int, slices: int) -> List[int]:
 
 
 def build_series_volume(headers: Sequence[dict],
-                        slices: Optional[int] = None) -> Dict:
+                        slices: Optional[int] = None,
+                        size: Optional[int] = None,
+                        require_complete_decode: bool = False) -> Dict:
     """Full pipeline for one series: sort, decode, normalise, resize.
 
     Mirroring is applied only when config.MIRROR_IN_CACHE is set, which it is
@@ -171,6 +173,8 @@ def build_series_volume(headers: Sequence[dict],
     """
     if not headers:
         raise ValueError("no headers supplied")
+    if size is not None and (not isinstance(size, int) or isinstance(size, bool) or size < 1):
+        raise ValueError("size must be a positive integer")
 
     depth = config.CACHE_SLICES if slices is None else slices
     ordered = dicom_io.sort_slices(headers)
@@ -187,9 +191,11 @@ def build_series_volume(headers: Sequence[dict],
     # depth, and the cache is a fixed-shape array. Re-select across whatever
     # decoded so the depth is exact regardless of how many files were dropped.
     if raw.shape[0] != depth:
+        if require_complete_decode:
+            raise ValueError('Incomplete decode; cannot establish sampling provenance')
         raw = raw[select_slices(raw.shape[0], depth)]
 
-    resized = resize_volume(raw.astype(np.float32))
+    resized = resize_volume(raw.astype(np.float32), size=size)
     normalized = normalize_intensity(resized)
 
     # Left as acquired by default; the loader mirrors using the recorded side.
@@ -211,6 +217,25 @@ def build_series_volume(headers: Sequence[dict],
         "rows": int(first.get("Rows") or 0),
         "cols": int(first.get("Columns") or 0),
     }
+
+
+def build_model_series_volume(headers, side, plane, *, duplicate_free=False, size=None):
+    """Opt-in parity path: full cache normalization, mirroring, then 16 slices.
+
+    Both arms use this path when testing the sampler. Unlike the historical
+    shallow-decode shortcut, it normalizes the same full 24 slices as training.
+    Existing submission callers and defaults remain unchanged.
+    """
+    from src.model.dataset import mirror_volume
+    from src.data.sampling import sample_cached_volume
+    if config.MIRROR_IN_CACHE:
+        raise ValueError('Parity path requires unmirrored source caches')
+    result = build_series_volume(headers, size=size, require_complete_decode=True)
+    volume = mirror_volume(result['volume'], side, plane)
+    reverse = str(side).strip().upper() == 'L' and plane == 'Sagittal'
+    result['volume'] = sample_cached_volume(volume, result['n_slices_raw'],
+        duplicate_free=duplicate_free, depth_reversed=reverse)
+    return result
 
 
 def build_series_record(item):

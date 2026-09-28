@@ -122,3 +122,61 @@ a mirrored input is out of distribution either way.
 These are measurements of one model's behaviour on predictions only. Whether
 flip-with-swap or flip-without-swap would score better was not measured, and no
 experiment is proposed automatically.
+
+## Labelled follow-up: where the variants cost accuracy (2026-09-25)
+
+At the user's request, each variant was then given labels and scored.
+`src/model/perturb_labels.py` writes them from the study's frozen outer0
+report-mined labels (≥ 0.5): intensity, noise, slice and side-covariate variants
+inherit the study's label unchanged, since the anatomy is unchanged. The mirror is
+written both ways, with medial/lateral swapped (repo convention) and kept (anatomy).
+These are the original report labels carried through a known transform, not new
+image readings; the usual limits of mined labels apply. `perturb.py` is unchanged,
+so the Kaggle run contract's code hash still holds.
+`tools/score_perturbation_labels.py` writes
+`outputs/perturbation_probe_tiny_outer0_v1_results/labelled/{variant_labels.parquet,label_scores.json}`.
+Bootstrap: 2,000 draws over the 680 outer0 link components, paired with the
+unmodified pass. The unmodified arm scores 0.8788, matching the saved screen
+(0.878838).
+
+| Variant | Macro | Δ vs unmodified [95% CI] |
+| --- | ---: | ---: |
+| Intensity shift ±5 to ±20 | 0.8779–0.8788 | −0.0010 to 0.0000, all CIs span 0 |
+| Side covariate toggled | 0.8783 | −0.0005 [−0.0021, +0.0011] |
+| Noise σ 2 | 0.8777 | −0.0012 [−0.0023, −0.0000] |
+| Noise σ 5 | 0.8768 | −0.0020 [−0.0044, +0.0004] |
+| Noise σ 10 | 0.8727 | −0.0061 [−0.0104, −0.0017] |
+| Slices: central 12 | 0.8783 | −0.0006 [−0.0018, +0.0006] |
+| Slices: 12 evenly spaced | 0.8704 | −0.0084 [−0.0130, −0.0039] |
+| Slices: every other (8) | 0.8611 | −0.0178 [−0.0262, −0.0096] |
+| Mirror, labels swapped | 0.8226 | −0.0562 [−0.0676, −0.0447] |
+| Mirror, labels kept | 0.8506 | −0.0283 [−0.0377, −0.0193] |
+
+**The labels support the anatomical reading.** Paired on the same resamples,
+keeping the labels beats swapping them by **+0.028 macro [+0.020, +0.037]**:
+Medial Meniscus +0.191 [+0.121, +0.266], Medial OA +0.070 [+0.016, +0.126],
+Lateral Meniscus +0.054 [−0.018, +0.125], Lateral OA +0.020 [−0.032, +0.070].
+Flip TTA or flip augmentation with the swap would be wrong for this model.
+
+**Orientation is where the ligament and meniscus findings are fragile.** Even
+correctly labelled, a mirrored knee loses ACL −0.087, Lateral Meniscus −0.080,
+MCL −0.058, Medial Meniscus −0.048 and Contusion −0.031 (all CIs exclude 0).
+OA, effusion, synovitis, Baker's and fracture barely move. The findings the OOF
+loss analysis identified as model-driven rather than label-driven are the ones
+that depend on the canonical orientation. A side-classifier error presents the
+model with exactly this mirrored input. With the recorded side accuracy of
+95–98% per plane, the expected cost is small (of order 0.001–0.003 per finding),
+but it is concentrated on these findings.
+
+**Slice density costs the thin structures most.** At 8 slices: Lateral Meniscus
+−0.062, Fracture −0.040, ACL −0.032, Contusion −0.027. Dropping edge slices costs
+nothing. This matches the recorded plateau (16→24 slices gave +0.002 on the
+leaderboard): below 16 hurts, above it saturates.
+
+**Noise does not explain the TOSHIBA gap.** TOSHIBA's median cache noise (4.34)
+corresponds to roughly σ 3.3 of added noise over the rest (2.84). Synthetic σ 5
+costs only −0.002 macro and σ 10 costs −0.006, against TOSHIBA's −0.053 deficit
+on the OOF set. Noise level can account for at most a small fraction; contrast,
+protocol, case mix or labels must carry the rest. Synthetic Gaussian noise added
+in cache space is not identical to native acquisition noise, but both were
+measured in the same cache space.

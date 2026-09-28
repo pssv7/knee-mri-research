@@ -118,7 +118,10 @@ class StudyVolumeDataset(Dataset):
 
     def __init__(self, study_index, studies: Sequence[str],
                  cache_paths: Sequence[str], slices_per_series: int,
-                 augment=False, resample: bool = False):
+                 augment=False, resample: bool = False, duplicate_free: bool = False):
+        if duplicate_free and (slices_per_series != 16 or resample):
+            raise ValueError('Duplicate-free policy requires fixed 16-slice sampling')
+        self.duplicate_free = duplicate_free
         self.index = study_index
         self.studies = list(studies)
         self.cache_paths = list(cache_paths)
@@ -174,7 +177,8 @@ class StudyVolumeDataset(Dataset):
         rng = np.random.default_rng(np.random.randint(0, 2**31))
         item = knee_dataset.load_study(
             self.index, self.studies[i], self.shards,
-            series_rng=rng if self.resample else None)
+            series_rng=rng if self.resample else None,
+            duplicate_free=self.duplicate_free)
 
         available = item["volumes"].shape[1]
         if available > self.slices_per_series:

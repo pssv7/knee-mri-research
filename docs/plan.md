@@ -1,8 +1,19 @@
 # Plan — model selection and training constraints
 
+**Superseded 2026-09-24:** the active plan is
+[validation credibility and a standalone model](validation_reset_20260924.md).
+The earlier queue below is preserved as history. Do not launch it, promote by
+blending, or use the reused gold 58 as fresh confirmation. The user reports
+**0.917** for 20-model submission **56505208** (+0.003 over 0.914). Preserve it
+as an ensemble reference; the validation and standalone-model reset stands.
+
 State document: `PROJECT.md` (read it first; it holds what exists and what
 failed). This file holds only what happens next and the gates between steps.
 History and per-run numbers live in `docs/worklog.md`.
+
+**Superseded 2026-09-09:** the user's new 0.954 target and permission to revise
+the approach are covered by [target_0954_plan.md](target_0954_plan.md).
+Retain this file as historical context, not the active experiment queue.
 
 Adopted 2026-08-28, replacing the phase plan that ran to Phase E. That plan
 closed its own levers: Phase A (label delivery) and B (capacity) are done,

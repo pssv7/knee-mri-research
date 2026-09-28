@@ -13,6 +13,7 @@ What it cannot catch: whether the predictions are any good.
 """
 
 import json
+import argparse
 import os
 import pathlib
 import sys
@@ -83,7 +84,7 @@ def build_fake_checkpoints(target: pathlib.Path):
     """Randomly initialised stand-ins for the trained weights."""
     import timm
     import torch
-    from src.model import embed, net, side_classifier
+    from src.model import artifacts, embed, experiments, net, side_classifier
 
     target.mkdir(parents=True, exist_ok=True)
     torch.save(embed.build_encoder(pretrained=False).state_dict(),
@@ -108,22 +109,46 @@ def build_fake_checkpoints(target: pathlib.Path):
         # bare state dict notebook 08 exports, fold 1 as a raw Lightning
         # checkpoint. The submission has to read both, and the multi-fold
         # averaging is exercised at the same time.
+        members = []
         for fold in range(2):
             backbone = timm.create_model("convnext_tiny.fb_in22k_ft_in1k",
                                          pretrained=False, num_classes=0,
                                          in_chans=3)
-            state = net.KneeNet(backbone, backbone.num_features).state_dict()
+            explicit = os.environ.get("CHECK_EXPLICIT_ENSEMBLE") == "1"
+            state = net.KneeNet(backbone, backbone.num_features,
+                                classwise_pool=explicit and fold == 1).state_dict()
             if fold == 0:
-                torch.save(state, target / "convnext_fold0.pt")
+                path = target / "convnext_fold0.pt"
+                torch.save(state, path)
             else:
                 import datetime
+                path = target / "lit_fold1.ckpt"
                 torch.save(
                     {"state_dict": {f"model.{k}": v for k, v in state.items()},
                      # A non-tensor payload, as a real Lightning checkpoint
                      # carries: it makes weights_only refuse, exercising the
                      # loader's fallback rather than only the happy path.
                      "saved_at": datetime.datetime(2026, 8, 24)},
-                    target / "lit_fold1.ckpt")
+                    path)
+            if explicit:
+                spec = experiments.get_experiment("classwise" if fold else "baseline").to_dict()
+                spec.update(slices=24 if fold else 16,
+                            series_selection="protocol" if fold else "uniform")
+                artifacts.write_metadata(path, spec, fold, ["train"], ["validation"])
+                members.append({"checkpoint": path.name, "weight": fold + 1})
+        if members:
+            for variant in ("spatial", "spatial_planes"):
+                spec = experiments.get_experiment(variant).to_dict()
+                trunk = net.build_backbone(spec["backbone"], pretrained=False)
+                model = net.KneeNet(trunk, trunk.num_features, spatial_encoder=True,
+                                    plane_adapters=spec.get("plane_adapters", False))
+                path = target / f"{variant}_fold1.pt"
+                torch.save(model.state_dict(), path)
+                artifacts.write_metadata(path, spec, 1, ["train"], ["validation"])
+                members.append({"checkpoint": path.name, "weight": 1})
+            manifest = target / "ensemble.json"
+            manifest.write_text(json.dumps({"members": members}))
+            os.environ["KNEE_ENSEMBLE_JSON"] = str(manifest)
 
     import pandas as pd
     from src import config
@@ -144,6 +169,14 @@ def code_cells(path):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("notebook", nargs="?", choices=["07", "10"])
+    parser.add_argument("--explicit", action="store_true")
+    args = parser.parse_args()
+    if args.explicit:
+        if args.notebook != "10":
+            parser.error("--explicit requires notebook 10")
+        os.environ["CHECK_EXPLICIT_ENSEMBLE"] = "1"
     with tempfile.TemporaryDirectory() as tmp:
         base = pathlib.Path(tmp)
         data_root = base / "input" / "competitions" / "rsna-knee"
@@ -171,6 +204,8 @@ def main():
         }
 
         notebook = os.environ.get("CHECK_NOTEBOOK", "07_submit.ipynb")
+        if args.notebook:
+            notebook = "07_submit.ipynb" if args.notebook == "07" else "10_submit_ensemble.ipynb"
         print(f"\n{notebook}")
         cells = code_cells(ROOT / "notebooks" / notebook)
         namespace = {"__name__": "__main__"}
@@ -214,6 +249,17 @@ def main():
         print(f"\nsubmission.csv exists: {submission.exists()}")
         if submission.exists():
             print(submission.read_text()[:400])
+        import numpy as np
+        import pandas as pd
+        from src import config
+        output = pd.read_csv(submission)
+        assert output.columns.tolist() == config.SUBMISSION_COLUMNS
+        assert len(output) == N_STUDIES + 1
+        assert not output[config.ID_COL].duplicated().any()
+        values = output[config.LABELS].to_numpy()
+        assert np.isfinite(values).all() and ((values >= 0) & (values <= 1)).all()
+        if notebook.startswith("10"):
+            assert namespace["failures"] == 1, "readable studies unexpectedly used fallback"
 
     os.chdir(ROOT)
     print("\nsubmission notebook ran clean")

@@ -1,0 +1,3247 @@
+Reading additional input from stdin...
+OpenAI Codex v0.156.1
+--------
+workdir: /private/tmp/claude-501/-Users-pssv-PycharmProjects-knee-competition/8d9a739e-ad35-4f33-9528-76c72c8d6476/scratchpad/knee-sanitized
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: low
+reasoning summaries: none
+session id: 01a0cc78-9817-7110-ad1f-e21e2d56ee79
+--------
+user
+You are one of two reviewers converging on an implementation plan for this repository.
+Read /Users/pssv/PycharmProjects/knee_competition/.cross-plan/label-quality-solo/PLAN.v3.md (the current plan) and /Users/pssv/PycharmProjects/knee_competition/.cross-plan/label-quality-solo/DISCUSSION.md (points already raised and settled).
+Check the plan against the actual code: file paths, function names, existing patterns, tests, build tooling.
+Content you must not read: competition data. This working directory is a redacted copy of the repository with data/, outputs/, notebooks/, PROJECT.md and docs/worklog.md removed and report excerpts redacted; do not read those paths in /Users/pssv/PycharmProjects/knee_competition or anywhere else on disk. Outside this directory, read only the files in /Users/pssv/PycharmProjects/knee_competition/.cross-plan/label-quality-solo. Facts about data files are stated in the plan and were verified locally by the other reviewer. Note the user's instruction: the plan must be executable by one person; no one will join the team.
+
+Your final message must be ONLY a markdown document in this format:
+- First line exactly 'VERDICT: APPROVE' or 'VERDICT: REVISE'.
+- APPROVE only if you would ship this plan exactly as written; then '## Critique' followed by '- none'.
+- REVISE requires substantive problems (wrong facts about the code, missing/misordered steps,
+  clearly better approach, missing tests, unaddressed risks), never wording or style.
+  Then '## Critique' with numbered issues citing file paths, then '## Revised plan' containing the
+  COMPLETE plan using exactly these six headings, verbatim: '## Goal', '## Context', '## Approach', '## Steps', '## Testing', '## Risks and open questions'.
+- Do not re-raise points DISCUSSION.md marks settled unless you cite new evidence from the code.
+Do not modify any files.
+codex
+I’ll read the plan and settled discussion, then check them against the redacted repository’s code, tests, and tooling without accessing excluded content.
+exec
+/bin/zsh -lc 'cat /Users/pssv/PycharmProjects/knee_competition/.cross-plan/label-quality-solo/PLAN.v3.md /Users/pssv/PycharmProjects/knee_competition/.cross-plan/label-quality-solo/DISCUSSION.md' in /private/tmp/claude-501/-Users-pssv-PycharmProjects-knee-competition/8d9a739e-ad35-4f33-9528-76c72c8d6476/scratchpad/knee-sanitized
+ succeeded in 0ms:
+## Goal
+
+Execute `docs/label_quality_plan.md` with one person. No additional reviewers, MSK readers, adjudicator, language expert, or team custodian will join.
+
+Deliver, in order:
+
+1. A frozen baseline and solo report-review rubric.
+2. A blinded audit of Lateral Meniscus, Contusion, and PF OA, with an error ledger, sampling-aware estimates, and delayed self re-review.
+3. A decision under a stop rule fixed before sampling.
+4. If feasible, a frozen repair candidate validated on previously uninspected reports.
+5. If the review, validation, compute, and submission gates pass, a matched five-fold comparison submitted before the competition deadline and read once from the private leaderboard.
+
+Record each source requirement as done, adapted, deferred, or not executable, with reasons. No-go, inconclusive, and an audit-only result are valid outcomes.
+
+## Context
+
+The source is `docs/label_quality_plan.md`; preserve its committed version before implementation.
+
+Data facts supplied by the local reviewer:
+
+- `data/meta/train.csv` contains 4,407 reports; only the 58 gold studies have the twelve supplied labels.
+- `data/meta/train_labels.parquet` contains 4,349 studies, twelve targets, and twelve weights, excluding gold.
+- Categorical dumps contain finding, severity, confidence, and evidence fields, but no certainty field. Probability dumps contain finding and confidence.
+- Historical membership is in `outputs/ensemble_16_24/reconstructed_folds.parquet`.
+
+Relevant code:
+
+- `src/labels/llm_extract.py::FINDING_DEFINITIONS`, `src/labels/fuse.py`, and `src/labels/mode_fusion.py` define existing extraction and fusion behavior.
+- `tools/audit_labels.py` provides language detection and the recorded 104,376-cell reproduction check.
+- `tools/build_label_review.py` produces an unblinded queue with scores, targets, extractor evidence, and full reports. Existing review provenance must be retained.
+- `src/labels/reviewed.py::apply_reviewed` supports held-out folds 1 and 3 and zero-target corrections only.
+- `tools/prepare_reviewed_labels.py::stage_source` inserts corrections after fold construction and before index construction.
+- `tools/prepare_kaggle_training_pair.py::training_source` supports seeds 0 and 1; its `match_slice=True` baseline path already supports folds 0–4 with protocol series selection.
+- Existing preflight counts match the unchanged 4,349-study training population, but do not prove exact historical fold membership.
+- `tools/prepare_protocol_submission.py` and `tools/prepare_protocol_benchmark.py` implement a specific historical 15-model ensemble, not arbitrary five-model arms.
+- Tests use pytest. `requirements-dev.txt` includes the training and test dependencies. Some existing tests require actual data, outputs, or notebooks.
+
+The historical fold-3 pair took approximately 4.91 GPU-hours, giving an initial estimate of 25 GPU-hours for ten arm-folds and another five for the seed-1 fold-1 pair. Translation, packaging benchmarks, inference, and retries are additional costs.
+
+The historical eleven-cell experiment’s mined-OOF delta was −0.003086 with an interval crossing zero. It neither establishes a benefit nor excludes broader repair.
+
+Competition rules, deadline, submission limits, and private-score availability must be checked by the participant before execution. Competition content stays outside hosted assistants.
+
+## Approach
+
+Retain the source’s report audit, blinded packets, provenance, sampling design, validation reserve, and matched experiment. Adapt independent review to delayed self re-review and independent evaluation to the registered Kaggle private-score comparison.
+
+A report review establishes what the report says, not image truth. Omission, uncertainty, and unresolved image questions remain separate from fixable extraction errors. Silence never becomes a confident negative.
+
+Every applied target or weight change requires two agreeing report-based decisions from the same person, separated by at least seven days. This measures consistency, not independence. Corpus-wide rule matches are proposals until they satisfy this requirement; unseen matches never inherit another case’s review status.
+
+Reserve extraction-validation studies before discovery. Their complete reports and all findings stay out of rule design, including the secondary review workstream. This reserve does not create an image-model holdout: historical image-training membership remains unchanged, and extraction validation is described accordingly.
+
+Use a locally executed open-weight translation model where needed. Original-language evidence must match the source report exactly. Translation is an aid; uncertain language interpretation leads to abstention.
+
+Fix the initial stop rule before sampling: go only if at least one priority finding has five or more agreed fixable errors among its original 50 random controls. Any extra control batch improves estimation but cannot change this denominator or retrospectively redefine the gate.
+
+**Critical path.** The seven-day delay sets the schedule, so proposal work starts on first-pass findings rather than waiting for the October 10 audit report. The go/no-go decision gates training and submission, not rule drafting. If the result is no-go, the drafting time is lost; that cost is accepted in exchange for a feasible deadline.
+
+Alternatives rejected:
+- **The participant acting as image reader.** One person is not two independent qualified readers plus an adjudicator. It would produce labels that look independent and are not.
+- **An assistant or hosted model as second reviewer or translator.** This breaks the competition data rule (`docs/rules_notes.md`), and it would not be independent clinical review.
+- **Mined OOF or the gold 58 as the confirmation set.** Mined OOF is circular for label repair. The gold 58 has been inspected repeatedly, and the source rules it out for fresh confirmation.
+- **The public leaderboard as confirmation.** It has been reused for earlier decisions, so it is an interim diagnostic only.
+- **Cell-only corrections, like the fold-1 eleven.** They have already been measured inside noise (−0.003086).
+- **Reusing the existing protocol checkpoints as the control arm.** A fresh control from the same generator and campaign is the matched comparison the source asks for.
+
+Use mined OOF and gold-58 scores only as secondary diagnostics. Keep the settled approximate 0.01 decision threshold derived from the historical paired-OOF precision proxy, with its assumptions stated. It is not a private-test confidence interval or proof of statistical significance. Per-finding private-test safety and multiplicity claims remain unavailable.
+
+## Steps
+
+1. **Freeze inputs and protocol by September 27.**  
+   Create `tools/freeze_label_baseline.py`. Inventory hashes of original labels and weights, report hashes, historical fold membership, gold membership, extractor dumps, verified reference predictions, source document, and code. Reuse `build_label_review.py`’s verified protocol fallback logic. Provide separate creation and verification modes; verification rejects changed inputs.
+
+   In the same step, confirm on the competition pages or the Kaggle API how private scores are shown after the close: for every submission, or only for the selected final entries. Record the answer in the manifest. If only final entries are scored, the Stage 4 comparison needs both arms among the two final entries. The user decides at this point whether that is acceptable. If it is not, Stage 4 is dropped now, before any compute is spent on it.
+
+   Write the rubric and sampling protocol before the final manifest is sealed. Keep only safe hashes, counts, and protocol metadata in tracked documents; keep report-bearing artifacts and review mappings in ignored locations.
+
+2. **Write `docs/report_review_rubric.md`.**  
+   Reconcile competition definitions with `FINDING_DEFINITIONS` as far as a solo text reviewer can. Cover:
+
+   - Lateral Meniscus: tear versus degeneration, laterality, negation, multilingual mentions, postoperative and uncertain findings.
+   - Contusion: bone versus soft tissue, traumatic versus degenerative marrow change, uncertain cause, and coexistence with fracture.
+   - PF OA: patellar/trochlear versus tibiofemoral disease, lateral compartment confusion, mild changes, and unspecified compartment.
+
+   Mark unresolved definition questions explicitly. State that this is not an MSK image-annotation standard.
+
+3. **Create protected sampling manifests.**  
+   Implement `src/labels/audit_sampling.py` and `tools/build_priority_audit.py`.
+
+   Inventory prior report exposure from existing reviews and other known inspection records, conservatively marking uncertain exposure. From folds 0/2/4, reserve 40 pairs per priority finding, stratified by target threshold and language using seed 20260923, from studies without known prior exposure. Protect the union of their study IDs across every finding and review workflow.
+
+   If sufficiently fresh reports are unavailable, report the shortfall and limit or abandon fresh-validation claims.
+
+   For each finding, draw 50 controls uniformly from the eligible discovery population first. Preserve inclusion probabilities and disagreement overlap flags. Then fill separate 50-pair suspected-false-positive and 50-pair suspected-miss strata using target/OOF thresholds 0.5 and 0.3/0.7.
+
+   Count eligible existing reviews toward enriched quotas, documenting their nonrandom provenance; sample remaining slots randomly. Existing reviews count as controls only if selected by the new control draw. Never pool enriched cases into control error-rate estimates.
+
+   Obtain the user’s threshold choices before running sampling, then freeze them.
+
+4. **Build review infrastructure and translation.**  
+   Create `src/labels/ledger.py`, `tools/build_blinded_packets.py`, `tools/ingest_ledger.py`, and `tools/prepare_translation_colab.py`.
+
+   Packets show pseudonymous identifiers, finding/rubric, original report, and translation. They omit targets, scores, weights, extractor outputs, strata, and previous decisions. Keep identifier mappings outside the packet directory.
+
+   Capture report interpretation before revealing the original fused target and intermediate extraction for error classification. Preserve both stages rather than overwriting the blinded judgment.
+
+   The ledger records source hashes, exact evidence, anatomy, assertion, certainty, severity, old/proposed targets and weights, dispositions, timestamps, reviewer identity, and the seven source error classes. Reject unsupported changes and changes justified only by a low soft target or an incorrect intermediate call when the final target is already correct.
+
+   Generate translation in the participant’s permitted local/Colab environment. Test execution with synthetic multilingual examples covering negation, anatomy, and uncertainty; an English identity check alone is insufficient.
+
+5. **Perform the priority audit.**  
+   Start controls and eligible existing priority cases early. Complete first passes in time for their seven-day delayed review.
+
+   Re-review all controls and all proposed target or weight changes with new IDs and order, without first-pass decisions. Record disagreements as unresolved; do not apply their changes.
+
+   Assess the predefined interval-width trigger early. If the initial control interval exceeds width 0.20, draw at most one additional batch of 50 controls for that finding. Complete its two passes or report the enlarged estimate as incomplete. Keep the original 50-control go/no-go gate unchanged.
+
+6. **Report the audit by October 10.**  
+   Create `tools/audit_report.py` and `docs/label_audit_v2.md`.
+
+   Report error counts by finding, direction, and sampling stratum; control estimates with suitable intervals; language, scanner, weight, and extraction-mode coverage; assertion classes; ranked mechanisms; and unresolved questions.
+
+   Report agreement on the random controls separately from agreement on selectively re-reviewed proposed changes. Document any adaptive sampling and its inferential limits.
+
+   Issue the predefined go/no-go decision. If required audit reviews are incomplete by October 10, deliver the audit alone. Complete remaining v1 checks only if time permits and they cannot expose the validation reserve.
+
+7. **Develop and review a feasible candidate.**  
+   If go, implement narrow rules in `src/labels/repair.py` using the reviewed mechanisms. A missed mention may require searching the original report locally; missing extractor evidence is not evidence of absence.
+
+   Generate proposals outside the validation reserve, with exact quotes, hashes, old/new values, anatomy, assertion, and uncertainty. Require individual two-pass agreement for every applied change, including weight-only changes.
+
+   Reuse valid completed audit reviews. Any new case starts its own seven-day clock. So draft rules from first-pass findings as soon as the control first passes are done (target October 2), and first-pass-review the resulting proposals by October 6. Their second passes then fall October 9–13. A proposal first read on October 10 could not be approved before October 17, which is too late for training. Proposals are not applied, and training does not start, unless the October 10 decision is go.
+
+   **Dated gates (hard cutoffs):**
+   - Controls' first passes: October 2.
+   - Proposal first passes: October 6.
+   - Go/no-go: October 10.
+   - Two-pass approvals and candidate freeze: October 13.
+   - Reserve validation: October 14.
+   - Training start: no later than October 15.
+   - Packaging and benchmarks: October 19.
+   - Both submissions: October 20.
+
+   Missing any gate means audit-only delivery from that point. No gate is bypassed to keep the date.
+
+   Before proceeding, assess the actual proposal count and remaining review/compute time. If full corpus-wide coverage cannot fit, freeze a smaller, explicitly review-gated candidate or deliver the audit alone. Do not describe a partially reviewed subset as an unrestricted corpus-wide repair.
+
+8. **Freeze and validate the candidate.**  
+   Freeze rule code, parameters, acceptance policy, and reviewed correction ledger before opening the reserved reports.
+
+   Implement `tools/validate_repair.py`. Review the reserved 120 pairs blind once, disclosing the single-pass limitation. Compare baseline and frozen rule outputs against those report interpretations, including per-language positives, negatives, ambiguity, false alarms, misses, and change coverage.
+
+   Reject if missed positives rise. Sparse or untouched strata cannot establish safety. If validation causes any rule or policy revision, the reserve is spent; require another fresh reserve or stop this candidate’s promotion. Do not silently reuse it as confirmation.
+
+9. **Implement fold-specific correction application.**  
+   Create `src/labels/corrections.py::apply_corrections` and `tools/build_candidate_labels.py`; leave `apply_reviewed` unchanged.
+
+   Validate IDs, finding names, finite target/weight ranges, stale old values, duplicates, source hashes, quotes, and two-pass approval. Apply only corrections belonging to the current training fold membership. Preserve every held-out row exactly and leave inputs immutable.
+
+   Keep one immutable correction ledger and produce fold-specific effective-label hashes. Do not train from a globally corrected table that also changes validation labels.
+
+10. **Train and enforce the matched comparison.**  
+    Create `tools/prepare_label_quality_pair.py` using the existing baseline protocol-selection path.
+
+    Load the exact frozen historical study-to-fold mapping independently of training seed. Validate membership, not just counts. Keep gold excluded.
+
+    Both arms use protocol ConvNeXt, 224 pixels, 16 slices, five series, 12 epochs, effective batch eight, and identical checkpoint selection. Compare arm contracts explicitly, allowing differences only in arm identity, output locations, correction metadata, and effective supervision. Require matching initial weights, settings, environment, and fold membership.
+
+    Run fold 1 at seeds 0 and 1 alongside seed-0 folds 0/2/3/4, not before them: sequential screening does not fit the October 15–19 window. About 30 GPU-h have to run in parallel across Kaggle (weekly quota, checked with `kaggle quota` before launch) and Colab. The screen gates **submission**: if the fold-1 macro mined-OOF delta is below −0.01 on both seeds, neither arm is submitted. Gold and mined-OOF results remain secondary diagnostics; discovery-fold OOF is not untouched validation of rule design.
+
+    Keep each matched pair on the same platform/environment. The user launches GPU jobs.
+
+11. **Package and benchmark both five-model arms.**  
+    Implement dedicated packaging/submission adapters or parameterize shared internals while preserving the historical tools’ existing contracts.
+
+    Each arm contains exactly one selected checkpoint from each seed-0 fold, equal probability weights of 1/5, identical inference settings, and isolated dataset/kernel identities.
+
+    Verify checkpoint sidecars and hashes, reference-prediction reproduction, raw-input inference, runtime, output schema/order, finite predictions, and fallback behavior for each exact package. Benchmark receipts must bind manifest, checkpoint, and inference-source hashes.
+
+    Reserve budget and time for these checks and retries. If completion cannot meet the submission buffer, deliver the completed work without claiming a private comparison.
+
+12. **Register, submit, and read once.**  
+    Before either submission, commit `docs/label_quality/registration_v1.json` with model/package hashes, benchmark receipts, notebook and dataset versions, inference settings, threshold derivation, endpoints, and readout rules.
+
+    The user submits both arms by October 20 if feasible. Append submission IDs and available prediction hashes in a separately bound receipt without changing the registered analysis.
+
+    Confirm private-score access for both submissions before relying on it, including whether final-entry selection affects availability. Public scores are interim diagnostics and cannot trigger changes to this comparison.
+
+    After results become available, `tools/read_lb_comparison.py` verifies registration and submission identities and records the private delta once. Use API retrieval if supported; otherwise use a documented, provenance-preserving participant export.
+
+13. **Deliver `docs/label_quality_result.md`.**  
+    Report audit results, candidate scope, all gates, actual time/cost, diagnostics, private readout if available, and limitations.
+
+    Include a source-requirement table covering every source bullet. Mark independent readers, adjudication, image-set partitions, image-reference capture, reader-power simulations, and private per-finding inference as not executable. Distinguish the protected report reserve from the unchanged image-training population.
+
+### Source requirement status (every item in `docs/label_quality_plan.md`)
+
+This table travels with the plan, not only with the final result, so completeness can be reviewed now. Step 13 carries it into `docs/label_quality_result.md` with final states.
+
+| Source requirement | Status | Step / reason |
+|---|---|---|
+| Gold 58 kept as historical diagnostics, excluded from training | done | already structurally excluded; secondary diagnostic (10, 13) |
+| Version labels, weights, report hashes, split, reference predictions; preserve historical folds | done | 1, 10 |
+| MSK readers reconcile definitions with competition criteria; severity/borderline rules | adapted | 2: solo text rubric, not reader-signed |
+| Ledger separates report / extractor / image questions | adapted | 4: image questions recorded as unresolved, never answered |
+| Assign membership before inspecting findings | done | 3 |
+| Exclude reviewed cases from the locked set; patient grouping; duplicate images; linkage limits | not executable | no locked image set; the test set is disjoint by competition design |
+| Folds 0/2/4 for discovery, excluding reserved studies; priority first; other pending checks as secondary | done / deferred | 3, 5, 6 (secondary only if time and reserve-safe) |
+| 150 unique pairs per priority finding; count existing reviews; dedupe; shortfall; controls with probabilities and overlap flags; enriched kept separate | done | 3, 6 |
+| Disagreement only for selection; summary by language, site/vendor, weight, extraction mode; uncertain and unmentioned | done | 3, 6 |
+| Blinded reader view | done | 4 |
+| Priority-question table | done | 2 |
+| Ledger fields, seven error classes, final vs intermediate, soft target < 0.5 not evidence | done | 4 |
+| Second reviewer before adjudication | adapted | 5: delayed blind self re-review; two-pass agreement |
+| Original-language expertise | adapted | 4: local translation aid; abstain on doubt |
+| Counts and uncertainty by finding/direction/stratum; enlarge controls | done | 5, 6 |
+| Deliverable: ledger, ranked categories, omissions distinct, silence not negative | done | 4, 6 |
+| 1,000-study image set, 300/700, 100-study pilot, representative core, all twelve findings | not executable | no readers |
+| Two blinded readers, third adjudicator, capture fields, no averaging, agreement by finding/site | not executable | no readers |
+| Unresolved/non-assessable image handling and sensitivity analyses | not executable | applies to image reads |
+| Authorized readers; access; budget from pilot minutes | not executable | no readers; solo review time tracked instead |
+| Current ensemble not scored as independent validation | done | fresh matched pair (10); incumbent not used as evidence |
+| Exclude new partitions and linked duplicates from training; matched population | adapted | report reserve only; identical historical training population in both arms (10) |
+| Locked labels with a custodian, out of prompts/calibration/rules/selection/blending | adapted | Kaggle holds the private labels (12) |
+| Extend the gold leakage assertion to a full manifest | adapted | exact historical membership verified, gold still asserted (10) |
+| OOF interim diagnostics only with verified exclusion; disclose | done | 10, 13 |
+| Power: +0.005 / +0.02 / +0.003, 80% / 5%, multiplicity, patient bootstrap | adapted / not executable | ~0.01 threshold from the paired-OOF proxy; per-finding and multiplicity not available |
+| Pilot conservative; increase before opening; limit the claim; no sequential additions | adapted | claim limited to the threshold; nothing can be added after submission |
+| 5.1 narrow rules, evidence, anatomy, uncertainty; evidence separate from conjecture | done | 7 |
+| 5.2 fresh reviewed validation, language-specific, misses must not rise, freeze | adapted | 3, 8: the reserve is fresh, the reviewer is not |
+| 5.3 versioned table and ledger; training-only; compare coverage | done | 8, 9 |
+| 5.4 one matched experiment; screening; matched seeds | adapted | 10: screening on secondary diagnostics gates submission |
+| 5.5 register before opening; paired deltas and CIs; missingness; site/language diagnostics | adapted | 12, 13: macro only from the private LB |
+| Gate: +0.005 with CI > 0; −0.02 noninferiority; twelve findings; multiplicity; inconclusive; no post-opening tuning | adapted | threshold rule; noninferiority and multiplicity not executable; inconclusive kept |
+| Delivery order and completion criteria; immediate next action | adapted | steps 1–13 with dated gates (7); next action: steps 1–4 |
+
+## Testing
+
+Use synthetic fixtures for development; no competition text in assistant-visible output or test failures.
+
+- **Baseline:** deterministic serialization; changed labels, reports, folds, predictions, rubric, or source rejected.
+- **Sampling:** study-level reserve isolation across findings; prior-exposure exclusion; deterministic strata; controls first; inclusion probabilities; existing-review quotas; deduplication; shortfalls; extra-batch behavior.
+- **Packets and ledger:** schema allowlists, no hidden review metadata, separate mappings, changed pass-2 IDs/order, seven-day enforcement, target/weight approval, unsupported-change rejection, and safe logging.
+- **Translation:** generated cells parse and execute under stubs; synthetic multilingual checks cover negation, anatomy, uncertainty, and model failures.
+- **Repair/validation:** positive and negative rule fixtures, abstention, missed-mention handling, exact evidence, immutable freeze, reserve isolation, miss-regression rejection, and spent-reserve handling.
+- **Corrections:** all five held-out folds unchanged; immutable inputs; invalid IDs, stale values, duplicates, nonfinite values, invalid weights, and quote/hash mismatches rejected.
+- **Training:** execute injected hooks on synthetic frames; verify historical membership under both seeds; reject changed initialization/settings; test both-arm contract comparison and paths; compile all generated fold/seed variants.
+- **Packaging:** five-member manifests; no mixed arms, missing or duplicate folds; exact benchmark binding; reproduction/runtime failures; submission schema and hash checks. Preserve historical 15-model regression tests.
+- **Registration/readout:** immutable registration, separately bound submission receipts, ID/hash mismatches, missing private scores, and threshold boundaries.
+- **Statistics:** deterministic synthetic examples and repeated simulations for estimator behavior and interval coverage.
+
+Run data-independent tests in the redacted environment where dependencies permit. The participant runs data-dependent regressions and `tools/audit_labels.py` locally in the full repository, reporting only safe summaries. Do not characterize the unrestricted full suite as runnable in the redacted copy.
+
+## Risks and open questions
+
+- One person remains responsible for every judgment; delayed agreement and a fresh report reserve do not create independent clinical review.
+- Corpus-wide proposals may exceed the review budget. Enforcing the settled two-pass policy may force a narrower candidate or audit-only delivery.
+- Seven-day delays, adaptive controls, validation, training, and benchmarks make the deadline tight. The dated gates in step 7 are the schedule. No stage may bypass its gate to meet a date.
+- About 30 GPU-h have to run in October 15–19, in parallel with any other final-submission work. If Kaggle quota and Colab capacity can't hold it, Stage 4 is dropped rather than shortened.
+- Translation may mishandle critical findings. Unresolved meaning requires abstention.
+- Previously inspected reports may be incompletely documented. Freshness claims must reflect that uncertainty.
+- Validation may contain too few examples of a rule or language to establish useful safety evidence.
+- The private leaderboard supplies a macro score without paired uncertainty or per-finding safety information; the historical precision proxy may transfer poorly.
+- Private-score retrieval and access to both entries must be confirmed before committing compute to that endpoint.
+- Training costs exclude translation, inference benchmarks, retries, and competing GPU work.
+- Competition data, translations, quotes, generated notebooks containing text, and error traces must remain in participant-controlled permitted environments.
+# Discussion: label-quality-solo
+
+Feature request: `docs/label_quality_plan.md use the cross-plan skill on this codex written plan and count this as first version of codex and write this plan for only one person no one will be joining my team`
+
+v1 merged by Claude from independent Claude and Codex drafts, with two departures from the skill, both by user instruction or unavoidable:
+- **Codex draft supplied by the user.** `DRAFT.codex.md` is a byte-identical copy of `docs/label_quality_plan.md`, which the user identifies as Codex-written. No Codex draft call was made in this run. It is not in the six-section format and was accepted as-is by user instruction.
+- **Claude's draft is not independent.** Claude had read `docs/label_quality_plan.md` in depth earlier in this session before drafting.
+
+Codex invocations so far: 0.
+
+`<restrictions>` for every Codex call: competition data must not reach a hosted model (`docs/rules_notes.md`). Codex runs with `-C` on a redacted copy (scratchpad `knee-sanitized/`) holding `src/`, `tools/`, `tests/`, `docs/*.md` (minus `docs/worklog.md`) and the requirements files, with the `EVIDENCE` report excerpts in `tools/prepare_reviewed_labels.py` replaced by `<redacted report excerpt>`. `data/`, `outputs/`, `notebooks/`, `PROJECT.md` and `docs/worklog.md` are absent. The prompt also forbids reading them in the real repo. This is instruction-plus-copy isolation, not an enforced boundary.
+
+### Round 0: drafts merged
+| # | Topic | Claude draft | Codex draft | Taken into v1 | Reason |
+|---|---|---|---|---|---|
+| 1 | Staffing | One person | Two MSK readers, adjudicator, custodian, second reviewer | Claude | User: no one will join the team |
+| 2 | Independent image reference (1,000 studies, 300 dev / 700 locked, 100 pilot) | Not executable | Core of stages 3–4 | neither (recorded as not executable) | Requires readers |
+| 3 | Locked evaluation and custodian | Kaggle private LB, registered before submission, read once after close | Custodian-held locked image labels | Claude | The only independent, tamper-proof evaluation available to one person |
+| 4 | Second reviewer | Delayed blind self re-review; a correction needs both passes | Independent second reviewer before adjudication | Claude (adapted) | No second person; disclosed as consistency, not independence |
+| 5 | Original-language expertise | Local open-weight translation aid; quotes in the original language | Language experts | Claude (adapted) | No experts; hosted translation forbidden by the rules |
+| 6 | Report audit design (150 per finding, controls, strata, ledger, error classes, blinding) | Kept | Specified | Codex | Executable solo; kept as written |
+| 7 | Extraction-validation sample | Reserved before any review (40 per finding) | Fresh, independently reviewed sample | combined | Fresh sample kept; reviewer not independent |
+| 8 | Stop rule before the audit | ≥ 5/50 controls with an agreed fixable error in some priority finding | none | Claude | Solo time is the binding cost; label repair's LB record |
+| 9 | Power and the confirmation gate | MDE ≈ 0.01 from the fold-1 bootstrap; +0.005 not confirmable; per-finding/noninferiority/multiplicity not executable | Simulation; +0.005 gate; −0.02 noninferiority; multiplicity | combined | The source's own "limit the claim" rule applied to the LB |
+| 10 | Patient linkage and the expanded leakage manifest | Not executable / not needed | Required | neither (recorded) | No reserved training subset; test disjoint by design |
+| 11 | Matched pair | Five folds, fresh control, seed 0 plus a fold-1 seed-1 screen | Matched pair on remaining population | combined | Same principle; population unchanged |
+| 12 | Report-text handling | No console printing; local only | Blinded packets | combined | Solo work runs through an assistant; protects against exposure |
+| 13 | Timeline | Dated stages with hard cutoffs before 2026-10-22 | No dates | Claude | Final submission deadline |
+
+Merge status: merged
+
+### Round 1: Codex reviewed v1 → REVISE
+| # | Point | Raised by | Resolution in v2 | Evidence |
+|---|---|---|---|---|
+| 1 | Protocol submission helper hard-codes the 15-member ensemble; needs five-member packaging and benchmarks | Codex | Accepted (v2 step 11) | `tools/prepare_protocol_submission.py:16,24,41,75,77` |
+| 2 | Validation reserve must be study-level and exclude previously inspected reports | Codex | Accepted (v2 step 3) | `tools/build_label_review.py` stores full reports; source §2/§5.2 |
+| 3 | Corpus-wide rules vs the two-pass requirement; weight changes; delay on extra controls | Codex | Accepted: every applied change needs two passes (v2 steps 5, 7) | `apply_reviewed` / `prepare_reviewed_labels.build` are per-case |
+| 4 | Pair adapter doesn't enforce matched contracts (same `baseline` experiment); verify exact fold membership | Codex | Accepted (v2 step 10); Claude notes the fold split uses fixed `splits.SEED=0`, not the training seed | `prepare_kaggle_training_pair.py:100`; notebook 08 `make_folds(labels, groups=groups)` |
+
+### Round 2: Claude reviewed v2 → REVISE
+| # | Point | Raised by | Resolution in v3 | Evidence |
+|---|---|---|---|---|
+| R1.1–R1.4 | Round-1 points | Codex | settled (verified; the R1.4 remedy stands) | see Round 1 |
+| 1 | Status table moved out of the plan | Claude | Restored in-plan, renumbered | round-0 row; user's "do not miss out anything" |
+| 2 | Rejected alternatives dropped | Claude | Restored | plan format |
+| 3 | Critical path infeasible (approvals ≥ Oct 17 vs submission Oct 20) | Claude | Rule drafting starts on first passes; dated hard cutoffs | v2 step 7 text; ~30 GPU-h (`docs/protocol_fold3.md` 4.91 h/pair) |
+| 4 | Serial fold-1 screen doesn't fit the window | Claude | Parallel; the screen gates submission | same |
+| 5 | Private-score availability checked after compute | Claude | Moved to step 1 as a user decision | v2 step 12 |
+
+Codex invocations so far: 1.
+
+exec
+/bin/zsh -lc "pwd; rg --files -g '"'!data/**'"' -g '"'!outputs/**'"' -g '"'!notebooks/**'"' -g '"'!PROJECT.md'"' -g '"'!docs/worklog.md'"'" in /private/tmp/claude-501/-Users-pssv-PycharmProjects-knee-competition/8d9a739e-ad35-4f33-9528-76c72c8d6476/scratchpad/knee-sanitized
+ succeeded in 0ms:
+/private/tmp/claude-501/-Users-pssv-PycharmProjects-knee-competition/8d9a739e-ad35-4f33-9528-76c72c8d6476/scratchpad/knee-sanitized
+src/data/resolution.py
+src/data/__init__.py
+src/data/cache.py
+src/data/dicom_io.py
+src/data/index.py
+src/config.py
+requirements-dev.txt
+src/__init__.py
+requirements.txt
+src/labels/reviewed.py
+src/labels/fuse.py
+src/labels/calibrate.py
+src/labels/lexicon.py
+src/labels/report_embed.py
+src/labels/llm_extract.py
+src/labels/__init__.py
+src/labels/mode_fusion.py
+src/labels/eval_fusion.py
+docs/benchmark_16_24_results.md
+docs/target_0954_plan.md
+docs/submission_protocol.md
+docs/agent_playbook.md
+docs/classwise_fold1.md
+docs/plan.md
+docs/resolution_384.md
+docs/protocol_incumbent.md
+docs/submission_resolution384.md
+docs/protocol_fold1.md
+docs/submission_16_24.md
+docs/slice_transformer.md
+docs/rules_notes.md
+docs/dev_data.md
+docs/multiplane_campaign_plan.md
+docs/benchmark_protocol_results.md
+docs/spatial_multiplane.md
+docs/protocol_fold3.md
+docs/protocol_colab.md
+docs/label_quality_plan.md
+docs/competition_pages.md
+docs/multiplane_campaign_implementation.md
+docs/label_review_v1.md
+docs/architecture.md
+docs/reviewed_labels_candidate.md
+docs/convnextv2_fold1.md
+docs/classwise_fold3.md
+docs/multiplane_reset_plan.md
+src/model/conditional.py
+src/model/artifacts.py
+src/model/averaging.py
+src/model/splits.py
+src/model/lightning.py
+src/model/experiments.py
+src/model/inspect.py
+src/model/dataset.py
+src/model/augment.py
+src/model/__init__.py
+src/model/net.py
+src/model/embed.py
+src/model/side_classifier.py
+tools/prepare_protocol_benchmark.py
+tools/check_notebook.py
+tools/check_submission.py
+tools/compare_protocol_incumbent.py
+tools/kaggle_benchmark_body.py
+tools/synovitis_gate.py
+tools/prepare_kaggle_submission.py
+tools/prepare_colab_spatial_pair.py
+tools/protocol_benchmark_body.py
+tools/kaggle_training_pair_body.py
+tools/compare_resolution_fold_logs.py
+tools/compare_resolution.py
+tools/compare_oof.py
+tools/package_16_24_ensemble.py
+tools/score_categorical_upgrade.py
+tools/prepare_kaggle_benchmark.py
+tools/audit_orientation.py
+tools/prepare_colab_protocol_completion.py
+tools/audit_inputs.py
+tools/prepare_colab_resolution.py
+tools/verify_cache.py
+tools/launch_reviewed_labels_pair.py
+tools/audit_labels.py
+tools/inspect_extraction_errors.py
+tools/make_notebook.py
+tools/prepare_resolution_benchmark.py
+tools/score_prompt_variants.py
+tools/prepare_slice_overlay_submission.py
+tools/prepare_reviewed_labels.py
+tools/prepare_colab_reviewed_labels.py
+tools/compare_incumbent_addition.py
+tools/campaign_receipt.py
+tools/package_slice_overlay.py
+tools/prepare_kaggle_protocol_completion.py
+tools/prepare_colab_resolution_remaining.py
+tools/training_measurement.py
+tools/score_categorical_merge.py
+tools/colab_slice_runtime.py
+tools/prepare_campaign_completion.py
+tools/check_kaggle_notebooks.py
+tools/prepare_slice_overlay_upload.py
+tools/score_prompt_ensembles.py
+tools/label_review_v1_notes.json
+tools/spatial_smoke.py
+tools/audit_geometry.py
+tools/colab_resolution_runtime.py
+tools/kaggle_audit.py
+tools/prepare_resolution_submission.py
+tools/prepare_colab_resolution_pair.py
+tools/colab_protocol_runtime.py
+tools/build_label_review.py
+tools/prepare_resolution_training.py
+tools/prepare_colab_slice_pair.py
+tools/check_resolution_submission.py
+tools/prepare_resolution_cache.py
+tools/prepare_protocol_submission.py
+tools/resolution_completion.py
+tools/series_audit.py
+tools/error_analysis.py
+tests/test_colab_resolution.py
+tools/recover_reviewed_comparison.py
+tests/test_protocol_submission.py
+tools/resolution_gpu_probe.py
+tests/test_target_pipeline.py
+tools/prepare_kaggle_training_pair.py
+tests/test_cache.py
+tests/test_reviewed_recovery.py
+tests/test_protocol_incumbent.py
+tests/test_kaggle_training_pair.py
+tests/test_fuse.py
+tests/test_synovitis_gate.py
+tests/test_protocol_benchmark.py
+tests/test_backbone_normalisation.py
+tests/test_campaign.py
+tests/test_embed.py
+tests/test_inspect_errors.py
+tests/test_lexicon.py
+tests/test_side_classifier.py
+tests/test_inspect.py
+tests/test_campaign_gates.py
+tests/test_slice_transformer.py
+tests/test_training_measurement.py
+tests/test_dataset.py
+tests/test_averaging.py
+tests/test_protocol_completion.py
+tests/test_kaggle_benchmark.py
+tests/test_colab_slice_pair.py
+tests/test_report_embed.py
+tests/test_notebook.py
+tests/test_spatial.py
+tests/test_spatial_pair.py
+tests/test_error_analysis.py
+tests/test_kaggle_submission.py
+tests/test_series_audit.py
+tests/test_conditional.py
+tests/test_augment.py
+tests/test_resolution_completion.py
+tests/test_llm_extract.py
+tests/test_splits.py
+tests/test_audit_labels.py
+tests/test_geometry_audit.py
+tests/test_lightning.py
+tests/test_net.py
+tests/test_mode_fusion.py
+tests/test_reviewed_labels.py
+tests/test_resolution.py
+tests/test_dicom_io.py
+tests/test_colab_protocol_completion.py
+
+exec
+/bin/zsh -lc 'cat src/labels/reviewed.py tools/prepare_kaggle_training_pair.py tools/prepare_reviewed_labels.py' in /private/tmp/claude-501/-Users-pssv-PycharmProjects-knee-competition/8d9a739e-ad35-4f33-9528-76c72c8d6476/scratchpad/knee-sanitized
+ succeeded in 0ms:
+"""Apply explicit reviewed corrections without changing validation or split IDs."""
+import hashlib
+
+import numpy as np
+
+
+def apply_reviewed(labels, folded, corrections, heldout_fold, reports=None):
+    if heldout_fold not in (1, 3):
+        raise ValueError('Only reserved evaluation folds 1 and 3 are supported')
+    key = 'StudyInstanceUID'
+    if labels[key].duplicated().any() or folded[key].duplicated().any():
+        raise ValueError('Duplicate study IDs')
+    folds = folded.set_index(key)['fold']
+    original = labels.set_index(key)
+    if set(original.index) != set(folds.index):
+        raise ValueError('Labels and fixed folds differ')
+    result = original.copy(deep=True)
+    seen = set()
+    for correction in corrections:
+        uid, finding = correction[key], correction['finding']
+        if (uid, finding) in seen:
+            raise ValueError('Duplicate correction')
+        seen.add((uid, finding))
+        if uid not in folds.index or folds.at[uid] not in (0, 2, 4):
+            raise ValueError('Correction would touch a reserved or unknown study')
+        if finding not in result or finding + '_weight' not in result:
+            raise ValueError('Unknown finding')
+        if not np.isclose(original.at[uid, finding], correction['old_target'], atol=1e-9, rtol=0):
+            raise ValueError('Original target changed')
+        if correction['new_target'] != 0.0 or not correction['evidence'].strip():
+            raise ValueError('This candidate only supports reviewed, evidenced exclusions')
+        if reports is not None:
+            text = str(reports.loc[uid, 'Report'])
+            if hashlib.sha256(text.encode()).hexdigest() != correction['report_sha256']:
+                raise ValueError('Reviewed report changed')
+            if correction['evidence'] not in text:
+                raise ValueError('Evidence quote absent from report')
+        result.at[uid, finding] = 0.0
+    heldout = folds.index[folds == heldout_fold]
+    if not result.loc[heldout].equals(original.loc[heldout]):
+        raise ValueError('Validation labels changed')
+    return result.reset_index()[labels.columns]
+"""Stage isolated, sequential matched experiments; never launch remotely."""
+
+import ast
+import argparse
+import csv
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+KERNEL = "pssv27/knee-protocol-fold1-pair"
+EXPERIMENTS = ("baseline", "protocol", "classwise", "convnextv2", "slice_transformer",
+               "spatial_control", "spatial")
+# The spatial candidate is screened against its own 24-slice control rather
+# than against the 16-slice baseline: the plan varies the 3D path only, and a
+# control that also differs in slice count would confound the two.
+CONTROLS = {"spatial": "spatial_control"}
+VALIDATION_COUNTS = {1: 871, 3: 869}
+ALL_VALIDATION_COUNTS = {0: 871, 1: 871, 2: 870, 3: 869, 4: 868}
+
+INPUT_SEARCH = '''
+def attached_files(pattern):
+    import pathlib
+    found = []
+    for root in sorted(pathlib.Path("/kaggle/input").iterdir()):
+        if root.name not in ("competitions", "rsna-knee-abnormality-detection"):
+            found.extend(root.rglob(pattern))
+    return found
+'''
+
+
+class OutputPaths(ast.NodeTransformer):
+    def __init__(self, directory):
+        self.directory = directory
+
+    def visit_Constant(self, node):
+        if isinstance(node.value, str) and node.value.startswith("/kaggle/working"):
+            return ast.copy_location(ast.Constant(
+                self.directory + node.value[len("/kaggle/working"):]), node)
+        return node
+
+
+PREFLIGHT = '''
+assert (FOLD, EPOCHS, SEED, SLICES_PER_SERIES, MAX_SERIES) == (EXPECTED_FOLD, 12, EXPECTED_SEED, EXPECTED_SLICES, 5)
+assert not RESAMPLE and not GROUPED_FOLDS
+assert RUN.classwise_pool == (EXPERIMENT == "classwise")
+assert not SILENCE_REWEIGHT and POS_WEIGHT is None and RESIDUAL_BETA is None
+assert (LAMBDA_REPORT, LAMBDA_RANK, LAMBDA_STRATIFIED_RANK, LAMBDA_COUPLING) == (0., 0., 0., 0.)
+assert len(index) == 4349 and len(gold_index) == 58 and len(CACHE_PATHS) == 3
+assert len(train_studies) == 4349 - EXPECTED_VAL and len(val_studies) == EXPECTED_VAL
+assert BATCH_STUDIES * DEVICES * ACCUM_STEPS == 8
+assert BACKBONE == ("convnextv2_tiny.fcmae_ft_in22k_in1k" if EXPERIMENT == "convnextv2" else "convnext_tiny.fb_in22k_ft_in1k")
+if MATCH_BACKBONE:
+    assert FEATURE_DIM == 768
+    assert BACKBONE_DEFAULTS == {"input_mean": None, "input_std": None, "backbone_lr_scale": 1.0}
+if MATCH_SLICE or MATCH_SPATIAL:
+    assert RUN.series_selection == "protocol"
+    assert RUN.slice_transformer == (EXPERIMENT == "slice_transformer")
+    assert RUN.spatial_encoder == (EXPERIMENT == "spatial")
+    assert not RUN.plane_adapters, "Plane adapters are a separate ablation"
+else:
+    assert RUN.series_selection == ("protocol" if EXPERIMENT == "protocol" else "uniform")
+assert all(volume.shape[1:] == (24, 224, 224) for volume in shards.values())
+import hashlib, json, pathlib
+_initial = hashlib.sha256()
+for _key, _tensor in sorted(module.state_dict().items()):
+    _initial.update(_key.encode())
+    _initial.update(_tensor.detach().cpu().contiguous().numpy().tobytes())
+_contract = {
+    "experiment": RUN.to_dict(), "fold": FOLD, "epochs": EPOCHS, "seed": SEED,
+    "devices": DEVICES, "effective_batch": EFFECTIVE_STUDIES,
+    "steps": TOTAL_STEPS, "lr": LR, "schedule": SCHEDULE,
+    "warmup_steps": WARMUP_STEPS, "initial_weights_sha256": _initial.hexdigest(),
+    "torch": torch.__version__, "timm": timm.__version__, "lightning": pl.__version__,
+}
+if MATCH_CLASSWISE or MATCH_BACKBONE or MATCH_SLICE or MATCH_SPATIAL:
+    # Hash only unchanged modules; keep the full initial-state hash for provenance.
+    _excluded = (("model.spatial_encoder.",) if MATCH_SPATIAL else
+                 ("model.slice_encoder.",) if MATCH_SLICE else
+                ("model.backbone.",) if MATCH_BACKBONE else
+                 ("model.study_pool.", "model.head."))
+    _shared = hashlib.sha256()
+    for _key, _tensor in sorted(module.state_dict().items()):
+        if not _key.startswith(_excluded):
+            _shared.update(_key.encode())
+            _shared.update(_tensor.detach().cpu().contiguous().numpy().tobytes())
+    _contract["shared_initial_weights_sha256"] = _shared.hexdigest()
+if MATCH_BACKBONE:
+    _contract["aggregation_seed"] = SEED
+    _contract["feature_dim"] = FEATURE_DIM
+    _contract["input_defaults"] = BACKBONE_DEFAULTS
+if "REFERENCE_CONTRACT" in globals():
+    _fold_specific = {"fold", "steps", "warmup_steps"}
+    assert {k: v for k, v in _contract.items() if k not in _fold_specific} == {k: v for k, v in REFERENCE_CONTRACT.items() if k not in _fold_specific}, "Completion settings or initialization differ from screened protocol"
+_baseline_contract = pathlib.Path(BASELINE_CONTRACT_PATH)
+if EXPERIMENT != CONTROL_EXPERIMENT and _baseline_contract.exists():
+    _control = json.loads(_baseline_contract.read_text())
+    _ignored = {"experiment"} | ({"initial_weights_sha256"} if MATCH_CLASSWISE or MATCH_BACKBONE or MATCH_SLICE or MATCH_SPATIAL else set())
+    assert {k: v for k, v in _contract.items() if k not in _ignored} == {k: v for k, v in _control.items() if k not in _ignored}, "Candidate settings or shared initialization differ from baseline"
+if int(os.environ.get("LOCAL_RANK", "0")) == 0:
+    pathlib.Path("run_contract.json").write_text(json.dumps(_contract, indent=2) + "\\n")
+print("Matched-run preflight passed", flush=True)
+'''
+
+
+def training_source(notebook, experiment, labels_sha256, recovery=None, smoke=False, fold=1,
+                    match_classwise=False, match_backbone=False, complete_protocol=False,
+                    match_slice=False, match_spatial=False, training_seed=0, campaign_completion=False):
+    if training_seed not in (0, 1):
+        raise ValueError("Campaign seeds are 0 (primary) and 1 (repeat)")
+    if campaign_completion and (fold not in (0, 2, 4) or experiment not in ("spatial", "baseline")):
+        raise ValueError("Campaign completion supports candidate folds 0, 2, 4 only")
+    match_spatial = match_spatial or experiment in ("spatial", "spatial_control")
+    if match_spatial and (recovery or complete_protocol or match_classwise
+                          or match_backbone or match_slice
+                          or experiment not in ("spatial_control", "spatial")):
+        raise ValueError("Spatial comparison requires fresh 24-slice protocol arms only")
+    match_slice = match_slice or experiment == "slice_transformer"
+    if match_slice and (recovery or complete_protocol or match_classwise or match_backbone
+                        or experiment not in ("baseline", "slice_transformer")):
+        raise ValueError("Slice comparison requires fresh baseline/protocol inputs only")
+    if complete_protocol:
+        if (fold not in (0, 2, 4) or experiment != "protocol" or recovery
+                or match_classwise or match_backbone):
+            raise ValueError("Completion is only for unchanged protocol folds 0, 2 and 4")
+    elif fold not in VALIDATION_COUNTS and not campaign_completion and not (match_slice and fold in ALL_VALIDATION_COUNTS):
+        raise ValueError("Only screening folds 1 and 3 are supported")
+    if recovery and fold != 1:
+        raise ValueError("The saved recovery checkpoint belongs to fold 1")
+    if experiment not in EXPERIMENTS:
+        raise ValueError(f"Only the authorized experiments {EXPERIMENTS} are supported")
+    match_classwise = match_classwise or experiment == "classwise"
+    match_backbone = match_backbone or experiment == "convnextv2"
+    if match_backbone and (match_classwise or experiment not in ("baseline", "convnextv2")):
+        raise ValueError("Backbone comparison cannot include other architecture or selection changes")
+    if recovery and match_classwise:
+        raise ValueError("Classwise comparison requires a fresh native-DDP baseline")
+    if recovery and match_backbone:
+        raise ValueError("Backbone comparison requires a fresh baseline with matched aggregation seed")
+    control = "spatial_control" if match_spatial else "baseline"
+    sources = ["".join(c["source"]) for c in notebook["cells"] if c["cell_type"] == "code"]
+    if len(sources) != 10:
+        raise ValueError("Notebook 08 structure changed; review the staging adapter")
+    if not sources[0].startswith("!pip install -q timm\n"):
+        raise ValueError("Notebook setup changed")
+    # Kaggle may mount the competition tree either as /input/competitions/*
+    # or directly as /input/rsna-knee-abnormality-detection. The notebook's
+    # historical finder skips only the former; patch the embedded run source
+    # so it never recursively walks the raw-DICOM tree while locating caches.
+    for i, source in enumerate(sources):
+        sources[i] = source.replace(
+            'if os.path.basename(root) == "competitions":\n            continue',
+            'if (os.path.basename(root) == "competitions" or\n'
+            '                os.path.exists(os.path.join(root, "train.csv")) or\n'
+            '                os.path.exists(os.path.join(root, "train_series.csv"))):\n'
+            '            continue')
+    # The pinned Kaggle image already supplies timm; do not upgrade between runs.
+    sources[0] = sources[0].split("\n", 1)[1]
+    directory = f"/kaggle/working/{'ddp_smoke' if smoke else experiment + '_fold' + str(fold)}"
+    header = INPUT_SEARCH + f'''\nimport hashlib, os, pathlib
+EXPECTED_FOLD = {fold}
+EXPECTED_SEED = {training_seed}
+EXPECTED_VAL = {ALL_VALIDATION_COUNTS[fold]}
+MATCH_CLASSWISE = {match_classwise!r}
+MATCH_BACKBONE = {match_backbone!r}
+MATCH_SLICE = {match_slice!r}
+MATCH_SPATIAL = {match_spatial!r}
+EXPECTED_SLICES = {24 if match_spatial else 16}
+CONTROL_EXPERIMENT = {control!r}
+BASELINE_CONTRACT_PATH = "/kaggle/working/{control}_fold{fold}/run_contract.json"
+os.environ["KNEE_EXPERIMENT"] = {experiment!r}
+os.environ["PYTHONUNBUFFERED"] = "1"
+paths = attached_files("train_labels.parquet")
+assert len(paths) == 1, f"Expected one label file, found {{paths}}"
+assert hashlib.sha256(paths[0].read_bytes()).hexdigest() == {labels_sha256!r}, "Label file changed"
+import faulthandler
+faulthandler.enable()
+# Keep fatal-signal diagnostics, but do not arm a background stack-dump timer.
+# Fold 2 and fold 4 SIGSEGVs occurred inside scheduled dumps while training
+# was progressing. Parent time limits are configured by the staging command.
+'''
+    if recovery:
+        header += f'''
+import shutil
+_recovery = {recovery!r}
+_checkpoints = attached_files("baseline_lit_fold1.ckpt")
+assert len(_checkpoints) == 1, "Expected exactly one recoverable baseline checkpoint"
+with _checkpoints[0].open("rb") as _handle:
+    assert hashlib.file_digest(_handle, "sha256").hexdigest() == _recovery["checkpoint_sha256"]
+shutil.copy2(_checkpoints[0], "lit_fold1.ckpt")
+pathlib.Path("lit_fold1/metrics").mkdir(parents=True, exist_ok=True)
+shutil.copy2(_checkpoints[0].parent / "baseline_metrics.csv", "lit_fold1/metrics/metrics.csv")
+print("Recovered the completed baseline checkpoint; no baseline retraining", flush=True)
+'''
+    result = [header]
+    guard_inserted = False
+    aggregation_seed_inserted = False
+    for i, source in enumerate(sources):
+        if smoke and i >= 7:
+            continue
+        if source.startswith('FINDING, STRATIFY_BY = "Synovitis", "Effusion"'):
+            continue
+        if match_slice and i != 1:
+            # The control must use the same successful protocol selector as
+            # the slice-transformer candidate, before loaders are constructed.
+            source = source.replace(
+                'RUN = experiments.get_experiment(EXPERIMENT)',
+                'RUN = experiments.get_experiment(EXPERIMENT)\n'
+                'from dataclasses import replace\n'
+                'RUN = replace(RUN, series_selection="protocol")')
+        tree = ast.parse(source)
+        if i != 1:  # Embedded repo source must remain byte-for-byte unchanged.
+            tree = OutputPaths(directory).visit(tree)
+        if match_backbone:
+            for pos, node in enumerate(tree.body):
+                if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                        and ast.unparse(node.value.func) == "knee_lightning.KneeLitModule"):
+                    keyword = next(k for k in node.value.keywords if k.arg == "backbone")
+                    if ast.unparse(keyword.value) != "net.build_backbone(BACKBONE)":
+                        raise ValueError("Backbone construction changed; review aggregation seeding")
+                    keyword.value = ast.Name(id="_matched_backbone", ctx=ast.Load())
+                    # Different trunk constructors consume different RNG draws.
+                    before = ast.parse('_matched_backbone = net.build_backbone(BACKBONE)\npl.seed_everything(SEED, workers=True)').body
+                    tree.body[pos:pos] = before
+                    aggregation_seed_inserted = True
+                    break
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == "SEED" for t in node.targets):
+                node.value = ast.Constant(training_seed)
+            if isinstance(node, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == "FOLD" for t in node.targets):
+                node.value = ast.Constant(fold)
+            if isinstance(node, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == "STRATEGY" for t in node.targets):
+                node.value = ast.parse('"ddp" if DEVICES > 1 else "auto"', mode="eval").body
+            if smoke and isinstance(node, ast.Call) and ast.unparse(node.func) == "pl.Trainer":
+                node.keywords = [k for k in node.keywords if k.arg != "max_epochs"]
+                node.keywords += [ast.keyword(arg=k, value=ast.Constant(v)) for k, v in {
+                    "max_epochs": 1, "limit_train_batches": 8,
+                    "limit_val_batches": 8, "num_sanity_val_steps": 0}.items()]
+        for pos, node in enumerate(tree.body):
+            if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                    and ast.unparse(node.value.func) == "trainer.fit"):
+                before = PREFLIGHT
+                if recovery:
+                    before += '\nassert json.loads(pathlib.Path("run_contract.json").read_text()) == _recovery["contract"], "Recovered baseline settings changed"\n'
+                if smoke:
+                    before += '\naverager.total_steps = 2\naverager.swa_fraction = 1.0\n'
+                fit = ([ast.parse('checkpointer.best_model_path = str(pathlib.Path("lit_fold1.ckpt").resolve())').body[0]]
+                       if recovery else [node])
+                # Script DDP re-executes this file. Only rank zero exports/scores.
+                after = ast.parse('if not trainer.is_global_zero:\n    raise SystemExit(0)').body
+                tree.body[pos:pos + 1] = ast.parse(before).body + fit + after
+                guard_inserted = True
+                break
+        result.append(ast.unparse(ast.fix_missing_locations(tree)))
+    if not guard_inserted:
+        raise ValueError("Could not locate training preflight insertion point")
+    if match_backbone and not aggregation_seed_inserted:
+        raise ValueError("Could not locate backbone/aggregation initialization boundary")
+    if smoke:
+        result.append('assert all(pathlib.Path(p).exists() for p in [CHECKPOINT, averager.ema_path, averager.swa_path])\nprint("DDP_SMOKE_PASSED: fit returned and selected/EMA/SWA exports exist", flush=True)')
+    if recovery:
+        result.append('''
+_recovered_truth = (labels.set_index(config.ID_COL).loc[oof_ids, config.LABELS].to_numpy() >= .5).astype(int)
+_recovered_macro = knee_lightning.macro_auc(_recovered_truth, oof[config.LABELS].to_numpy())
+assert np.isfinite(oof[config.LABELS].to_numpy()).all()
+assert abs(_recovered_macro - _recovery["expected_val_macro"]) < .001, "Recovered OOF does not reproduce the selected checkpoint"
+print(f"BASELINE_RECOVERED: OOF macro {_recovered_macro:.6f}", flush=True)
+''')
+    source = "\n\n".join(result) + "\n"
+    if match_spatial:
+        from tools.training_measurement import instrument
+        source = instrument(source)
+        source = source.replace("_contract.update(microbatch=", f"_contract.update(labels_sha256={labels_sha256!r}, microbatch=")
+    ast.parse(source)
+    return source
+
+
+def prepare(root=ROOT, recover_baseline=None, fold=1, candidate="protocol", smoke_only=False,
+            no_timeout=False):
+    if candidate not in EXPERIMENTS[1:]:
+        raise ValueError(f"Candidate must be one of {EXPERIMENTS[1:]}")
+    if recover_baseline and candidate != "protocol":
+        raise ValueError("Recovery is supported only for the protocol experiment")
+    if recover_baseline and smoke_only:
+        raise ValueError("Smoke-only runs must not attach recovery artifacts")
+    if candidate == "spatial_control":
+        raise ValueError("spatial_control is the control arm, not a candidate")
+    allowed_folds = ALL_VALIDATION_COUNTS if candidate == "slice_transformer" else VALIDATION_COUNTS
+    if fold not in allowed_folds or (recover_baseline and fold != 1):
+        raise ValueError("Use fold 1 or 3; recovery is available only for fold 1")
+    notebook_path = root / "notebooks/08_finetune.ipynb"
+    notebook = json.loads(notebook_path.read_text())
+    digest = hashlib.sha256((root / "data/meta/train_labels.parquet").read_bytes()).hexdigest()
+    recovery = None
+    if recover_baseline:
+        directory = Path(recover_baseline) / "baseline_fold1"
+        with (directory / "lit_fold1.ckpt").open("rb") as handle:
+            checkpoint_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+        recovery = {"checkpoint_sha256": checkpoint_hash,
+                    "contract": json.loads((directory / "run_contract.json").read_text())}
+        with (directory / "lit_fold1/metrics/metrics.csv").open() as handle:
+            recovery["expected_val_macro"] = max(float(row["val_macro"])
+                for row in csv.DictReader(handle) if row["val_macro"])
+        upload = root / "outputs/kaggle_recovery_upload"
+        upload.mkdir(parents=True, exist_ok=True)
+        target = upload / "baseline_lit_fold1.ckpt"
+        if not target.exists():
+            os.link(directory / "lit_fold1.ckpt", target)
+        with target.open("rb") as handle:
+            assert hashlib.file_digest(handle, "sha256").hexdigest() == checkpoint_hash
+        shutil.copy2(directory / "lit_fold1/metrics/metrics.csv", upload / "baseline_metrics.csv")
+        shutil.copy2(directory / "run_contract.json", upload / "baseline_run_contract.json")
+        (upload / "dataset-metadata.json").write_text(json.dumps({
+            "id": "pssv27/knee-fold1-recovery-private", "title": "Knee Fold1 Recovery Private",
+            "licenses": [{"name": "other"}],
+            "description": "Private recovery of the completed baseline from the failed paired training job."
+        }, indent=2) + "\n")
+    control = CONTROLS.get(candidate, "baseline")
+    required_macro_delta = .005 if candidate == "spatial" else .003
+    experiments = (control, candidate)
+    scripts = {name: training_source(notebook, name, digest,
+               recovery=recovery if name == "baseline" else None, fold=fold,
+               match_classwise=candidate == "classwise",
+               match_backbone=candidate == "convnextv2",
+               match_slice=candidate == "slice_transformer",
+               match_spatial=candidate == "spatial") for name in experiments}
+    smoke_source = training_source(notebook, candidate, digest, smoke=True, fold=fold)
+    smoke_scripts = {"ddp_smoke": smoke_source}
+    if candidate == "spatial":
+        smoke_scripts = {f"smoke_{arm}": training_source(notebook, arm, digest, smoke=True, fold=fold).replace(
+            "/kaggle/working/ddp_smoke", f"/kaggle/working/smoke_{arm}") for arm in experiments}
+    runner = (root / "tools/kaggle_training_pair_body.py").read_text()
+    comparison = (root / "tools/compare_oof.py").read_text()
+    source = (INPUT_SEARCH + f"\nTRAINING_SCRIPTS = {scripts!r}\nSMOKE_SOURCE = {smoke_source!r}\nSMOKE_SCRIPTS = {smoke_scripts!r}\nCOMPARE_SOURCE = {comparison!r}\n"
+              f"LABELS_SHA256 = {digest!r}\nRECOVERY = {recovery!r}\nFOLD = {fold}\nCANDIDATE = {candidate!r}\nCONTROL = {control!r}\nSMOKE_ONLY = {smoke_only!r}\nVALIDATION_STUDIES = {ALL_VALIDATION_COUNTS[fold]}\n"
+              f"REQUIRED_MACRO_DELTA = {required_macro_delta!r}\n"
+              f"SMOKE_TIMEOUT = {None if no_timeout else 900!r}\nRUN_TIMEOUT = {None if no_timeout else 18000!r}\n" + runner)
+    ast.parse(source)
+    kernel = "pssv27/knee-protocol-fold1-recovery" if recovery else KERNEL
+    output = root / ("outputs/kaggle_training_recovery" if recovery else "outputs/kaggle_training_pair")
+    if fold != 1:
+        kernel = f"pssv27/knee-protocol-fold{fold}-pair"
+        output = root / f"outputs/kaggle_protocol_fold{fold}"
+    if candidate != "protocol":
+        kernel = f"pssv27/knee-{candidate.replace('_', '-')}-fold{fold}-pair"
+        output = root / f"outputs/kaggle_{candidate}_fold{fold}"
+    if smoke_only:
+        kernel = f"pssv27/knee-{candidate.replace('_', '-')}-fold{fold}-smoke"
+        output = root / f"outputs/kaggle_{candidate}_fold{fold}_smoke"
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "train_pair.py").write_text(source)
+    previous = json.loads((root / "outputs/kaggle_sources/knee-finetune/kernel-metadata.json").read_text())
+    metadata = {key: previous[key] for key in (
+        "competition_sources", "kernel_sources", "dataset_sources", "docker_image")}
+    if recovery:
+        metadata["dataset_sources"].append("pssv27/knee-fold1-recovery-private")
+    metadata.update(id=kernel, title="Knee Protocol Fold1 Recovery" if recovery else f"Knee {candidate.replace('_', ' ').title()} Fold{fold} Pair", code_file="train_pair.py",
+                    language="python", kernel_type="script", is_private=True,
+                    enable_gpu=True, enable_internet=True, machine_shape="NvidiaTeslaT4")
+    if smoke_only:
+        metadata["title"] = f"Knee {candidate.title()} Fold{fold} Smoke"
+    (output / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    (output / "staging_receipt.json").write_text(json.dumps({
+        "kernel": kernel, "labels_sha256": digest, "recovery": recovery,
+        "notebook_sha256": hashlib.sha256(notebook_path.read_bytes()).hexdigest(),
+        "script_sha256": hashlib.sha256(source.encode()).hexdigest(),
+        "experiments": list(experiments), "fold": fold, "epochs": 12,
+        "required_macro_delta": required_macro_delta, "maximum_finding_drop": .020,
+        "smoke_only": smoke_only, "smoke_max_epochs": 1, "smoke_train_batches": 8,
+        "per_run_timeout_seconds": None if no_timeout else 18000,
+        "smoke_timeout_seconds": None if no_timeout else 900,
+    }, indent=2) + "\n")
+    print(f"Staged {output}; no GPU job or competition submission launched")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--recover-baseline", type=Path)
+    parser.add_argument("--fold", type=int, choices=sorted(ALL_VALIDATION_COUNTS), default=1)
+    parser.add_argument("--candidate", choices=EXPERIMENTS[1:], default="protocol")
+    parser.add_argument("--smoke-only", action="store_true")
+    parser.add_argument("--no-timeout", action="store_true",
+                        help="Remove parent smoke/full timeouts; platform limit still applies")
+    args = parser.parse_args()
+    prepare(recover_baseline=args.recover_baseline, fold=args.fold, candidate=args.candidate,
+            smoke_only=args.smoke_only, no_timeout=args.no_timeout)
+"""Build a separate reviewed-label candidate and stage a 224 protocol pair."""
+import ast
+import hashlib
+import inspect
+import json
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+import pandas as pd
+from src.labels.reviewed import apply_reviewed
+from tools.prepare_kaggle_training_pair import training_source
+
+# Exact excerpts checked against full reports. Unsupported/ambiguous positives
+# are deliberately absent: absence of report evidence alone is not a negative.
+EVIDENCE = {
+    'R049': '<redacted report excerpt>',
+    'R058': '<redacted report excerpt>',
+    'R088': '<redacted report excerpt>',
+    'R125': '<redacted report excerpt>',
+    'R127': '<redacted report excerpt>',
+    'R149': '<redacted report excerpt>',
+    'R150': '<redacted report excerpt>',
+    'R163': '<redacted report excerpt>',
+    'R168': '<redacted report excerpt>',
+    'R193': '<redacted report excerpt>',
+    'R195': '<redacted report excerpt>'
+}
+
+
+def stage_source(notebook, label_hash, corrections, arm, fold=1):
+    source = training_source(notebook, 'baseline', label_hash, fold=fold, match_slice=True)
+    source = source.replace(f'/kaggle/working/baseline_fold{fold}',
+                            f'/kaggle/working/reviewed_{arm}_fold{fold}')
+    tree = ast.parse(source)
+    changed = 0
+    correction_hash = hashlib.sha256(json.dumps(corrections, sort_keys=True).encode()).hexdigest()
+    for pos in range(len(tree.body)-1, -1, -1):
+        node = tree.body[pos]
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'index' for t in node.targets):
+            hook = f'''import hashlib
+import json
+import numpy as np
+{inspect.getsource(apply_reviewed)}
+_review_corrections = {corrections!r}
+_fixed_split = folded[["StudyInstanceUID", "fold"]].copy()
+_unchanged_validation = folded.loc[folded.fold == {fold}].copy(deep=True)
+if {arm == 'candidate'!r}:
+    folded = apply_reviewed(folded, _fixed_split, _review_corrections, {fold})
+pd.testing.assert_frame_equal(_fixed_split, folded[["StudyInstanceUID", "fold"]])
+pd.testing.assert_frame_equal(_unchanged_validation, folded.loc[folded.fold == {fold}])
+pathlib.Path("label_review_contract.json").write_text(json.dumps({{"arm": {arm!r}, "corrections_sha256": {correction_hash!r}, "original_labels_sha256": {label_hash!r}, "correction_count": {len(corrections) if arm == 'candidate' else 0}, "validation_labels_changed": False, "folds_changed": False}}, indent=2))
+'''
+            tree.body[pos:pos] = ast.parse(hook).body
+            changed += 1
+    if changed != 1:
+        raise ValueError('StudyIndex construction changed; no safe insertion point')
+    return ast.unparse(ast.fix_missing_locations(tree)) + '\n'
+
+
+def build():
+    root = ROOT / 'outputs/reviewed_labels_v1'
+    root.mkdir(parents=True, exist_ok=True)
+    queue = [json.loads(line) for line in (ROOT / 'outputs/label_review_v1/review_queue.jsonl').read_text().splitlines()]
+    labels_path = ROOT / 'data/meta/train_labels.parquet'
+    labels = pd.read_parquet(labels_path)
+    folded = pd.read_parquet(ROOT / 'outputs/ensemble_16_24/reconstructed_folds.parquet')
+    reports = pd.read_csv(ROOT / 'data/meta/train.csv').set_index('StudyInstanceUID')
+    corrections = []
+    for row in queue:
+        if row['review_id'] not in EVIDENCE:
+            continue
+        evidence = EVIDENCE[row['review_id']]
+        text = str(reports.at[row['StudyInstanceUID'], 'Report'])
+        if evidence not in text or text != row['report']:
+            raise ValueError('Review source changed')
+        corrections.append({'review_id': row['review_id'], 'StudyInstanceUID': row['StudyInstanceUID'],
+            'finding': row['finding'], 'old_target': row['target'], 'new_target': 0.,
+            'evidence': evidence, 'rationale': row['review_note'],
+            'report_sha256': hashlib.sha256(text.encode()).hexdigest()})
+    if len(corrections) != len(EVIDENCE):
+        raise ValueError('Missing reviewed correction')
+    candidate = apply_reviewed(labels, folded, corrections, 1, reports)
+    candidate.to_parquet(root / 'train_labels_reviewed_v1.parquet', index=False)
+    (root / 'corrections.json').write_text(json.dumps(corrections, ensure_ascii=False, indent=2)+'\n')
+    notebook = json.loads((ROOT / 'notebooks/08_finetune.ipynb').read_text())
+    label_hash = hashlib.sha256(labels_path.read_bytes()).hexdigest()
+    for arm in ('control', 'candidate'):
+        source = stage_source(notebook, label_hash, corrections, arm)
+        compile(source, arm, 'exec')
+        (root / f'{arm}_fold1.py').write_text(source)
+    receipt = {'state': 'staged_not_trained', 'corrections': len(corrections),
+        'original_labels_sha256': label_hash,
+        'candidate_labels_sha256': hashlib.sha256((root/'train_labels_reviewed_v1.parquet').read_bytes()).hexdigest(),
+        'reserved_folds': [1,3], 'recipe': '224px protocol ConvNeXt V1, 16 slices, five series, 12 epochs, effective batch eight',
+        'scope': 'Eleven report-grounded corrections, not a corpus-wide automatic relabeler. Original weights and validation labels retained. Fixed original split computed before changes.'}
+    (root / 'receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
+    print(json.dumps(receipt, indent=2))
+
+
+if __name__ == '__main__':
+    build()
+
+exec
+/bin/zsh -lc "cat docs/label_quality_plan.md requirements-dev.txt requirements.txt; sed -n '1,260p' tools/build_label_review.py" in /private/tmp/claude-501/-Users-pssv-PycharmProjects-knee-competition/8d9a739e-ad35-4f33-9528-76c72c8d6476/scratchpad/knee-sanitized
+ succeeded in 0ms:
+# Label quality and independent validation plan
+
+Proposed 2026-09-22. Scope: prioritize lateral meniscus, contusion, and PF OA
+label errors, then measure whether better supervision improves image predictions.
+This document proposes work; it does not launch review, relabeling, or training.
+
+## Why this is the next priority
+
+The existing 58 image-labeled studies have been inspected repeatedly. Keep them
+as historical diagnostics, excluded from training; they cannot provide a fresh
+confirmation of small improvements. A larger set needs independent image review,
+adequate positive and negative counts, and protection from model selection.
+
+The [initial audit](label_review_v1.md) screened 250 study–finding pairs but
+checked only 23 full reports; 227 remain pending. Its targeted findings establish
+extraction problems, not a population error rate. The
+[eleven-cell correction experiment](reviewed_labels_candidate.md) produced
+fold-1 macro delta -0.003086 with a paired interval crossing zero. That neither
+validates nor rules out broader label repair.
+
+## 1. Freeze definitions and evaluation membership first
+
+- Version the original labels, weights, report hashes, split manifest, and
+  reference predictions. Preserve the existing fold assignments for historical
+  comparisons; create a separate manifest for the new evaluation protocol.
+- Have qualified musculoskeletal readers reconcile the project's definitions
+  in `src/labels/llm_extract.py` with the competition annotation criteria before
+  review. Record severity thresholds and how borderline cases are handled.
+- Separate three questions in the ledger: what the report states, whether the
+  extractor represents it correctly, and what the images establish. An accurate
+  extraction can still disagree with image truth.
+- Assign studies to audit/development or locked evaluation before inspecting
+  their findings. Exclude previously reviewed cases from the new locked set.
+  Group repeat examinations by patient where identifiers permit; check duplicate
+  images and record any limits on patient linkage.
+
+## 2. Audit the three priority findings
+
+Use development folds 0/2/4 for report-error discovery, excluding all newly
+reserved validation studies. Finish the existing priority cases first, then
+complete the other pending full-report checks as a secondary workstream.
+
+For each priority finding, start with 150 unique development study–finding pairs:
+50 suspected false positives, 50 suspected missed positives, and 50 random
+controls. This is 450 pairs, potentially fewer unique studies. Count eligible
+existing reviews toward the target and deduplicate. If a stratum is smaller,
+review all available cases and record the shortfall. Select controls randomly
+from the full eligible population, preserving inclusion probabilities and
+overlap flags; keep disagreement-enriched results separate from control estimates.
+
+Use held-out model disagreement only to select cases for review. Include report
+language, site/vendor where known, target weight, and extraction mode in the
+sampling summary. Cover uncertain and unmentioned findings as well as explicit
+positives and negatives. The current review HTML exposes model scores and targets;
+prepare a blinded reader view before using it for independent review.
+
+| Priority | Questions to resolve under the agreed annotation rubric |
+| --- | --- |
+| Lateral Meniscus | True tear versus degeneration/intrasubstance signal; medial versus lateral attribution; negation; missed tear phrases across languages; postoperative or uncertain findings. |
+| Contusion | Bone versus soft-tissue/tendon edema; traumatic marrow findings versus purely degenerative subchondral change; uncertain cause; coexisting fracture without assuming labels are mutually exclusive. |
+| PF OA | Patellar/trochlear cartilage disease versus tibiofemoral OA; lateral patellar disease incorrectly assigned to Lateral OA; mild/borderline cartilage changes; unspecified OA compartment. |
+
+Record exact source evidence, anatomical location, assertion/negation,
+certainty, severity, old target/weight, proposed disposition, and reviewer IDs.
+Classify errors as anatomy, negation, missed mention, severity/definition,
+fusion/weighting, report–image disagreement, or unresolved. Review final fused
+targets as well as intermediate extraction: fixing an intermediate call need
+not require changing an already-correct final target. A soft target below 0.5
+alone is not evidence of an error.
+
+Have a second reviewer independently assess proposed corrections and random
+controls before adjudication. Use original-language expertise where needed.
+Report error counts and uncertainty separately by finding, direction, and
+sampling stratum. Fifty controls per finding are an initial audit, not a precise
+estimate of rare errors; enlarge controls if their intervals are too wide.
+
+Deliverable: a reviewed error ledger and ranked, evidence-supported repair
+categories. Report omissions and unresolved image questions stay distinct from
+fixable extraction errors. Silence must not become a confident negative.
+
+## 3. Build a substantially larger image-reviewed set
+
+Planning target: **1,000 additional unique studies**, initially allocated to
+300 development-validation studies and 700 locked confirmation studies.
+The first 100 development studies form a reader-calibration and feasibility
+pilot. The 58 historical studies are separate. These counts are a budget target,
+not a claim that 700 cases can distinguish a 0.003–0.005 AUC gain.
+
+- Sample a representative core across available sites, vendors, report languages,
+  and acquisition protocols, with a fixed random seed and sampling manifest.
+  Keep audit-selected hard cases outside the representative locked core.
+- Review all twelve findings so the set supports the competition macro metric
+  and detects regressions outside the three priorities. Expedite the three
+  priority findings in the pilot to establish their prevalence and disagreement.
+- Seek at least 100 adjudicated positives and 100 negatives per priority finding
+  in locked evaluation as an initial feasibility check, not a power guarantee.
+  Expand the representative sample if necessary. Any separately enriched rare-
+  finding panel must be reported separately; do not pool it unweighted into the
+  main score. AUC can still be distorted by selecting unusually easy/hard cases.
+- Two qualified musculoskeletal readers independently review full diagnostic
+  image series, blinded to reports, mined targets, model predictions, and each
+  other's decisions. A third reader adjudicates disagreements and uncertainty.
+  Report review happens only after the image reference has been committed.
+- Capture present/absent/indeterminate, severity, location, assessability, and
+  supporting series/image references. Preserve both original reads and the
+  adjudication. Resolve disagreement through review rather than averaging labels.
+- Predefine handling of unresolved or non-assessable study–finding pairs. Report
+  exclusions and sensitivity analyses; never silently convert them to negatives.
+  Summarize reader agreement and adjudication rates by finding and site.
+
+Use appropriately authorized participating readers and permitted data access;
+confirm applicable access requirements before distributing review packets.
+Reader availability, review time, and adjudication capacity are execution
+dependencies. Estimate the budget from measured pilot minutes per study:
+two reads per study plus observed adjudication time, preparation, and QA.
+
+### Prevent training and selection leakage
+
+Newly reviewed training studies are not automatically held out from existing
+models. The current five-fold ensemble includes members trained on those studies.
+Do not score that full ensemble on them and call it independent validation.
+
+For the new protocol, exclude both new validation partitions, all patient-linked
+duplicates, and the old 58 from training of every reference/candidate member.
+Train matched reference and candidate models on the same remaining population.
+Development validation may guide selection; locked labels remain with the
+evaluation custodian and are excluded from prompts, calibration, correction
+rules, checkpoint selection, and blend fitting. Extend the current gold-only
+leakage assertion to check the complete versioned exclusion manifest.
+
+Verified OOF predictions can provide interim diagnostics on newly reviewed
+studies only when each contributing checkpoint excluded that study/patient.
+Historical model selection means those diagnostics are not a pristine test.
+If no previously untouched studies are available, disclose that limitation;
+relabeling cannot erase previous exposure.
+
+## 4. Determine what improvement the sample can resolve
+
+Before locking the final sample size and evaluating a candidate, use development
+review data and matched held-out predictions to plan paired AUC comparisons.
+Proposed effects worth detecting: +0.005 twelve-finding macro AUC and +0.02 on
+each priority finding. Also estimate the sample needed for +0.003 macro AUC.
+
+Simulate power across plausible prevalence, model-score correlation, reader
+uncertainty, and between-patient variation; target 80% power with two-sided
+5% significance for the primary macro comparison. Plan multiplicity control
+for the three secondary finding-specific claims. Bootstrap patients jointly
+across models and findings, respecting the sampling design. Document the method,
+assumptions, positive/negative counts, and resulting minimum detectable effects.
+
+Use the pilot estimates conservatively: 100 cases cannot precisely establish
+all these quantities. Increase enrollment before opening locked results if the
+projected precision is inadequate. Small gains may require thousands of studies.
+If that is infeasible, explicitly limit the claim to the effects the available
+sample can resolve. Do not repeatedly add cases after inspecting significance.
+
+## 5. Test a label-repair candidate only after the audit
+
+1. Develop narrowly scoped extraction/weighting changes on reviewed development
+   data. Require exact evidence, correct anatomy, and explicit uncertainty.
+   Keep evidence-backed corrections separate from conjectural image labels.
+2. Validate extraction on a fresh, independently reviewed development sample
+   unused in rule/prompt design. Include language-specific negative, positive,
+   and ambiguous examples; verify that fixing false positives does not increase
+   missed positives. Freeze the candidate before confirmation.
+3. Produce a separate versioned label table and correction ledger with source
+   hashes, old/new targets and weights, reviewer decisions, and rationale. Apply
+   corrections only to training membership; leave evaluation reference labels
+   independent of the candidate. Compare extraction quality and report coverage
+   against the image-reviewed development set.
+4. Run one matched supervision experiment: same architecture, input resolution,
+   training population, initialization/seeds, compute, and selection procedure;
+   only training supervision changes. Use development validation for screening
+   and matched seeds to assess training variability before the final comparison.
+5. Register the final reference/candidate, prediction hashes, sample size,
+   endpoints, and analysis before the custodian opens locked evaluation. Report
+   paired macro/per-finding AUC deltas and 95% intervals, plus missingness and
+   site/language diagnostics. Keep mined-label scores as secondary diagnostics.
+
+Proposed confirmation gate: macro delta at least +0.005 with its paired 95%
+interval above zero, plus no priority finding showing a material regression.
+Predeclare a -0.02 per-finding noninferiority margin and assess uncertainty;
+an interval crossing that margin leaves safety against regression unresolved.
+Report all twelve findings. A priority-finding improvement requires its own
+multiplicity-adjusted evidence. An inconclusive result remains inconclusive.
+Further tuning after opening the locked set requires new confirmation data.
+
+## Delivery order and completion criteria
+
+1. **Protocol and manifests:** rubric, reader workflow, blinded packets, sampling,
+   partition membership, and expanded leakage checks ready for review.
+2. **Audit and 100-study pilot:** prioritize the three findings; measure correction
+   mechanisms, positive counts, reader disagreement, and annotation cost.
+3. **Expanded review:** complete development and locked image review to the
+   power-informed sample size, with adjudication and a versioned reference set.
+4. **Candidate and comparison:** freeze reviewed corrections, train the matched
+   pair, and issue the locked comparison with uncertainty and provenance.
+
+Completion means an independently reviewed, auditable evaluation set and a
+credible estimate of the effect of label repair. It does not require claiming
+a gain when the data cannot establish one. The immediate next action is to
+prepare the rubric, membership manifest, and blinded priority-review packets.
+-r requirements.txt
+torch>=2.4
+timm>=1.0
+lightning>=2.4
+pytest>=8
+matplotlib>=3.9
+# core data
+numpy>=1.26
+pandas>=2.2
+pyarrow>=16.0
+
+# dicom / imaging
+pydicom>=3.0
+pylibjpeg>=2.0
+pylibjpeg-libjpeg>=2.1
+pylibjpeg-openjpeg>=2.3
+opencv-python-headless>=4.10
+
+# modeling (colab / kaggle only -- not installed locally)
+# torch>=2.4
+# timm>=1.0
+
+# utils
+tqdm>=4.66
+"""Build a reproducible report-review queue; never alter training labels."""
+import hashlib
+import html
+import json
+from pathlib import Path
+import sys
+
+import numpy as np
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from src import config
+from tools.compare_oof import read_predictions
+
+
+def sha(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def build():
+    out = ROOT / 'outputs/label_review_v1'
+    out.mkdir(parents=True, exist_ok=True)
+    summary_path = ROOT / 'data/meta/compare_protocol_incumbent_all_folds/summary.json'
+    summary = json.loads(summary_path.read_text())
+    folded = pd.read_parquet(ROOT / 'outputs/ensemble_16_24/reconstructed_folds.parquet')
+    paths, provenance = [], []
+    for entry in summary['source_receipts']:
+        if entry['family'] != 'protocol':
+            continue
+        path = ROOT / entry['oof']
+        if not path.exists():
+            fold = entry['fold']
+            path = ROOT / f'outputs/slice_overlay_staging/fold{fold}/baseline_fold{fold}/oof_fold{fold}.parquet'
+        if sha(path) != entry['oof_sha256']:
+            raise ValueError(f'Protocol OOF hash mismatch: {path}')
+        sidecar = path.parent / f"convnext_fold{entry['fold']}.pt.json"
+        meta = json.loads(sidecar.read_text())
+        expected = set(folded.loc[folded.fold == entry['fold'], config.ID_COL])
+        if set(meta['val_uids']) != expected or expected & set(meta['train_uids']):
+            raise ValueError('Protocol training/validation exclusion failed')
+        if meta['sha256'] != entry['checkpoint_sha256']:
+            raise ValueError('Protocol checkpoint association changed')
+        paths.append(path)
+        provenance.append({'path': str(path.relative_to(ROOT)), 'sha256': sha(path)})
+    protocol = read_predictions(paths, folded).sort_index()
+    legacy_path = ROOT / 'data/meta/compare_protocol_incumbent_all_folds/incumbent_oof.parquet'
+    legacy = read_predictions([legacy_path], folded).sort_index()
+    if not legacy.index.equals(protocol.index):
+        raise ValueError('OOF populations differ')
+    labels_path = ROOT / 'data/meta/train_labels.parquet'
+    reports_path = ROOT / 'data/meta/train.csv'
+    labels = pd.read_parquet(labels_path).set_index(config.ID_COL)
+    reports = pd.read_csv(reports_path).set_index(config.ID_COL)
+    categorical = pd.read_parquet(ROOT / 'data/meta/llm_labels.parquet').set_index(config.ID_COL)
+    probability = pd.read_parquet(ROOT / 'data/meta/llm_probs.parquet').set_index(config.ID_COL)
+    rows = []
+    # Development only. Neither held-out fold 1 nor 3 is opened for report review.
+    eligible = protocol.index[protocol.fold.isin([0, 2, 4])]
+    for uid in eligible:
+        for finding in config.LABELS:
+            target = float(labels.at[uid, finding])
+            a, b = float(legacy.at[uid, finding]), float(protocol.at[uid, finding])
+            direction = 'possible_missed_positive' if target < .5 else 'possible_false_positive'
+            strength = min(a, b) if target < .5 else 1 - max(a, b)
+            rows.append({'StudyInstanceUID': uid, 'fold': int(protocol.at[uid, 'fold']),
+                'finding': finding, 'target': target,
+                'weight': float(labels.at[uid, finding + '_weight']),
+                'legacy_blend': a, 'protocol': b, 'direction': direction,
+                'opposition_strength': strength,
+                'categorical_call': None if pd.isna(categorical.at[uid, finding]) else float(categorical.at[uid, finding]),
+                'categorical_evidence': str(categorical.at[uid, finding + '_evidence']),
+                'probability_target': float(probability.at[uid, finding]),
+                'report': str(reports.at[uid, 'Report'])})
+    pairs = pd.DataFrame(rows)
+    # Threshold fixed before reviewing text; require BOTH available sources to oppose.
+    candidates = pairs[pairs.opposition_strength >= .7].copy()
+    if len(candidates) < 200:
+        raise ValueError(f'Only {len(candidates)} strong disagreements; do not silently loosen threshold')
+    selected = candidates.sort_values('opposition_strength', ascending=False, kind='stable').head(200).copy()
+    selected['sample'] = 'disagreement'
+    # Random control comes from the remaining pair population, not just agreements.
+    controls = pairs.drop(index=selected.index).sample(n=50, random_state=20260915).copy()
+    controls['sample'] = 'random_control'
+    packet = pd.concat([selected, controls], ignore_index=True)
+    packet.insert(0, 'review_id', [f'R{i:03}' for i in range(1, len(packet)+1)])
+    notes_path = ROOT / 'tools/label_review_v1_notes.json'
+    notes = json.loads(notes_path.read_text()) if notes_path.exists() else {}
+    packet['review_status'] = [notes.get(i, ['evidence_screened_full_report_pending', ''])[0] for i in packet.review_id]
+    packet['review_note'] = [notes.get(i, ['', ''])[1] for i in packet.review_id]
+    packet['review_scope'] = ['full_report' if i in notes else 'categorical_evidence_only' for i in packet.review_id]
+    packet.to_json(out / 'review_queue.jsonl', orient='records', lines=True, force_ascii=False)
+    stats = {'population_studies': len(eligible), 'population_pairs': len(pairs),
+        'strong_disagreements': len(candidates), 'review_pairs': len(packet),
+        'discovery_folds': [0, 2, 4], 'reserved_folds': [1, 3],
+        'selected_by_finding': selected.finding.value_counts().to_dict(),
+        'selected_by_direction': selected.direction.value_counts().to_dict(),
+        'selected_by_weight': selected.weight.value_counts().to_dict(),
+        'review_status_counts': packet.review_status.value_counts().to_dict(),
+        'protocol_provenance': provenance,
+        'input_sha256': {str(p.relative_to(ROOT)): sha(p) for p in [labels_path, reports_path, legacy_path, summary_path]},
+        'limitation': 'Legacy blend has recorded OOF provenance but missing individual source files; independent legacy training exclusion cannot be re-proven. Protocol exclusion checked against sidecars. Correlated predictions are review signals, not ground truth. Discovery folds are not clean future validation folds.'}
+    (out / 'summary.json').write_text(json.dumps(stats, indent=2) + '\n')
+    cards = []
+    for row in packet.to_dict('records'):
+        cards.append('<article><h2>' + html.escape(f"{row['review_id']} — {row['finding']} ({row['sample']})") + '</h2><p>'
+            + html.escape(f"Fold {row['fold']} | target {row['target']:.3f} | weight {row['weight']:.3f} | legacy {row['legacy_blend']:.3f} | protocol {row['protocol']:.3f}")
+            + '</p><p>Review: ' + html.escape(row['review_status'] + ' — ' + row['review_note'])
+            + '</p><p>Extractor evidence: ' + html.escape(row['categorical_evidence']) + '</p><pre>' + html.escape(row['report']) + '</pre></article>')
+    (out / 'review.html').write_text('<!doctype html><meta charset="utf-8"><title>Label review</title><style>body{max-width:950px;margin:30px auto;font:16px sans-serif}pre{white-space:pre-wrap}article{border-top:1px solid #aaa;padding:20px 0}</style><h1>Label review — development folds 0, 2, 4</h1><p>Review suggestions only. No labels changed. Report agreement does not establish image truth.</p>' + ''.join(cards))
+    print(json.dumps({k:v for k,v in stats.items() if k not in ['protocol_provenance','input_sha256']}, indent=2))
+
+
+if __name__ == '__main__':
+    build()
+
+exec
+/bin/zsh -lc "sed -n '1,125p' tools/prepare_reviewed_labels.py; cat src/model/splits.py; sed -n '1,180p' tests/test_reviewed_labels.py; sed -n '1,100p' tests/test_kaggle_training_pair.py" in /private/tmp/claude-501/-Users-pssv-PycharmProjects-knee-competition/8d9a739e-ad35-4f33-9528-76c72c8d6476/scratchpad/knee-sanitized
+ succeeded in 0ms:
+"""Build a separate reviewed-label candidate and stage a 224 protocol pair."""
+import ast
+import hashlib
+import inspect
+import json
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+import pandas as pd
+from src.labels.reviewed import apply_reviewed
+from tools.prepare_kaggle_training_pair import training_source
+
+# Exact excerpts checked against full reports. Unsupported/ambiguous positives
+# are deliberately absent: absence of report evidence alone is not a negative.
+EVIDENCE = {
+    'R049': '<redacted report excerpt>',
+    'R058': '<redacted report excerpt>',
+    'R088': '<redacted report excerpt>',
+    'R125': '<redacted report excerpt>',
+    'R127': '<redacted report excerpt>',
+    'R149': '<redacted report excerpt>',
+    'R150': '<redacted report excerpt>',
+    'R163': '<redacted report excerpt>',
+    'R168': '<redacted report excerpt>',
+    'R193': '<redacted report excerpt>',
+    'R195': '<redacted report excerpt>'
+}
+
+
+def stage_source(notebook, label_hash, corrections, arm, fold=1):
+    source = training_source(notebook, 'baseline', label_hash, fold=fold, match_slice=True)
+    source = source.replace(f'/kaggle/working/baseline_fold{fold}',
+                            f'/kaggle/working/reviewed_{arm}_fold{fold}')
+    tree = ast.parse(source)
+    changed = 0
+    correction_hash = hashlib.sha256(json.dumps(corrections, sort_keys=True).encode()).hexdigest()
+    for pos in range(len(tree.body)-1, -1, -1):
+        node = tree.body[pos]
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'index' for t in node.targets):
+            hook = f'''import hashlib
+import json
+import numpy as np
+{inspect.getsource(apply_reviewed)}
+_review_corrections = {corrections!r}
+_fixed_split = folded[["StudyInstanceUID", "fold"]].copy()
+_unchanged_validation = folded.loc[folded.fold == {fold}].copy(deep=True)
+if {arm == 'candidate'!r}:
+    folded = apply_reviewed(folded, _fixed_split, _review_corrections, {fold})
+pd.testing.assert_frame_equal(_fixed_split, folded[["StudyInstanceUID", "fold"]])
+pd.testing.assert_frame_equal(_unchanged_validation, folded.loc[folded.fold == {fold}])
+pathlib.Path("label_review_contract.json").write_text(json.dumps({{"arm": {arm!r}, "corrections_sha256": {correction_hash!r}, "original_labels_sha256": {label_hash!r}, "correction_count": {len(corrections) if arm == 'candidate' else 0}, "validation_labels_changed": False, "folds_changed": False}}, indent=2))
+'''
+            tree.body[pos:pos] = ast.parse(hook).body
+            changed += 1
+    if changed != 1:
+        raise ValueError('StudyIndex construction changed; no safe insertion point')
+    return ast.unparse(ast.fix_missing_locations(tree)) + '\n'
+
+
+def build():
+    root = ROOT / 'outputs/reviewed_labels_v1'
+    root.mkdir(parents=True, exist_ok=True)
+    queue = [json.loads(line) for line in (ROOT / 'outputs/label_review_v1/review_queue.jsonl').read_text().splitlines()]
+    labels_path = ROOT / 'data/meta/train_labels.parquet'
+    labels = pd.read_parquet(labels_path)
+    folded = pd.read_parquet(ROOT / 'outputs/ensemble_16_24/reconstructed_folds.parquet')
+    reports = pd.read_csv(ROOT / 'data/meta/train.csv').set_index('StudyInstanceUID')
+    corrections = []
+    for row in queue:
+        if row['review_id'] not in EVIDENCE:
+            continue
+        evidence = EVIDENCE[row['review_id']]
+        text = str(reports.at[row['StudyInstanceUID'], 'Report'])
+        if evidence not in text or text != row['report']:
+            raise ValueError('Review source changed')
+        corrections.append({'review_id': row['review_id'], 'StudyInstanceUID': row['StudyInstanceUID'],
+            'finding': row['finding'], 'old_target': row['target'], 'new_target': 0.,
+            'evidence': evidence, 'rationale': row['review_note'],
+            'report_sha256': hashlib.sha256(text.encode()).hexdigest()})
+    if len(corrections) != len(EVIDENCE):
+        raise ValueError('Missing reviewed correction')
+    candidate = apply_reviewed(labels, folded, corrections, 1, reports)
+    candidate.to_parquet(root / 'train_labels_reviewed_v1.parquet', index=False)
+    (root / 'corrections.json').write_text(json.dumps(corrections, ensure_ascii=False, indent=2)+'\n')
+    notebook = json.loads((ROOT / 'notebooks/08_finetune.ipynb').read_text())
+    label_hash = hashlib.sha256(labels_path.read_bytes()).hexdigest()
+    for arm in ('control', 'candidate'):
+        source = stage_source(notebook, label_hash, corrections, arm)
+        compile(source, arm, 'exec')
+        (root / f'{arm}_fold1.py').write_text(source)
+    receipt = {'state': 'staged_not_trained', 'corrections': len(corrections),
+        'original_labels_sha256': label_hash,
+        'candidate_labels_sha256': hashlib.sha256((root/'train_labels_reviewed_v1.parquet').read_bytes()).hexdigest(),
+        'reserved_folds': [1,3], 'recipe': '224px protocol ConvNeXt V1, 16 slices, five series, 12 epochs, effective batch eight',
+        'scope': 'Eleven report-grounded corrections, not a corpus-wide automatic relabeler. Original weights and validation labels retained. Fixed original split computed before changes.'}
+    (root / 'receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
+    print(json.dumps(receipt, indent=2))
+
+
+if __name__ == '__main__':
+    build()
+"""Cross-validation splits and the gold holdout.
+
+Two rules govern every split here, and both exist because the obvious
+alternative produces a number that looks better and means less.
+
+**Split by study, never by series.** A study's ~5.5 series image the same knee
+in the same session. A random series split puts near-duplicates on both sides
+and reports an accuracy the model does not have.
+
+**The 58 gold studies never enter training.** They are the only radiologist
+labels in the dataset and the only honest measurement available. Everything
+else is trained on mined labels, and a model evaluated against mined labels can
+score well by reproducing the extractor's mistakes. `assert_no_gold_leakage`
+is called by the training entrypoint rather than trusted to discipline.
+"""
+
+from typing import Iterator, List, Optional, Sequence, Tuple
+
+import numpy as np
+import pandas as pd
+
+from src import config
+
+N_FOLDS = 5
+SEED = 0
+
+
+def load_gold_uids(train_csv=None) -> set:
+    """Study UIDs of the 58 radiologist-labelled studies."""
+    frame = pd.read_csv(train_csv or config.TRAIN_CSV)
+    labelled = frame[frame[config.LABELS[0]].notna()]
+    return set(labelled[config.ID_COL])
+
+
+def assert_no_gold_leakage(train_uids: Sequence[str], gold_uids: set) -> None:
+    """Fail loudly if a gold study appears in training data.
+
+    Called from the training entrypoint. The failure this guards against is
+    silent -- a leaked gold study inflates the one number being used to decide
+    whether the model works.
+    """
+    leaked = set(train_uids) & gold_uids
+    if leaked:
+        raise ValueError(
+            f"{len(leaked)} gold studies leaked into training: "
+            f"{sorted(leaked)[:3]}..."
+        )
+
+
+def stratification_key(labels: pd.DataFrame) -> pd.Series:
+    """A coarse key for balancing folds across a 12-label problem.
+
+    Full multi-label stratification over 2^12 combinations would leave most
+    cells empty at 4,349 studies. The count of positive findings captures the
+    axis that matters -- studies with many findings are rare and should not
+    cluster in one fold.
+    """
+    positives = (labels[config.LABELS] > 0.5).sum(axis=1)
+    return positives.clip(upper=4)
+
+
+def scanner_key(index: pd.DataFrame) -> pd.Series:
+    """A per-study scanner identity, from the header scan's index.
+
+    The dataset spans 16-19 sites on five continents, and a CNN reads scanner
+    signature as readily as it reads pathology. A fold split that puts the same
+    scanner on both sides therefore reports an accuracy that does not survive
+    a new site: the plan's figure is ~0.053 of inflation from random K-fold,
+    with one measured model showing a 0.136 grouped-vs-random gap.
+
+    Site is not given, so manufacturer + model + field strength stands in for
+    it. That is coarser than a site id -- two hospitals with the same scanner
+    collapse into one group, which makes the split *more* conservative, not
+    less -- and it is what the DICOM headers actually carry.
+
+    Takes the frame `src/data/index.py` writes (one row per instance or
+    series, carrying `StudyInstanceUID`), and returns one key per study,
+    indexed by study UID. A study whose headers name none of the three fields
+    gets "unknown", and those all land in one group together.
+    """
+    fields = [c for c in ("Manufacturer", "ManufacturerModelName",
+                          "MagneticFieldStrength") if c in index.columns]
+    if not fields:
+        raise ValueError(
+            "the index carries none of Manufacturer / ManufacturerModelName / "
+            f"MagneticFieldStrength; it has {list(index.columns)[:8]}")
+
+    # fillna after astype: pandas keeps a missing value missing through
+    # astype(str) rather than rendering it "nan", and the join below would
+    # then fail on a float instead of producing a key.
+    joined = index[fields].astype(str).fillna("nan").agg("|".join, axis=1)
+    joined = joined.where(~joined.str.fullmatch(r"(nan\|?)+"), "unknown")
+    # The first series scanned decides the study. A study imaged on two
+    # scanners is rare and either group is defensible; taking the first keeps
+    # the assignment deterministic.
+    return joined.groupby(index[config.ID_COL]).first()
+
+
+def make_folds(labels: pd.DataFrame, n_folds: int = N_FOLDS,
+               seed: int = SEED,
+               groups: Optional[pd.Series] = None) -> pd.DataFrame:
+    """Assign each study to a fold, stratified by positive-finding count.
+
+    Returns the frame with a `fold` column added.
+
+    `groups` maps study UID -> group id (see `scanner_key`). When given, a
+    whole group lands in one fold: the split becomes leave-scanner-out rather
+    than leave-study-out, so validation measures transfer to unseen equipment
+    instead of rewarding memorised scanner signature.
+
+    Grouping costs balance. Groups are sized very unequally -- one scanner may
+    hold a quarter of the corpus -- so groups are assigned largest-first to
+    whichever fold is currently smallest, which is the standard greedy
+    approximation and the best available without splitting a group. Check
+    `summarise()` afterwards: badly imbalanced folds are the price of grouping,
+    and worth knowing before a run rather than after.
+
+    **Changing this re-cuts every fold**, and every reference number on record
+    (fold 1: val 0.872 / gold 0.861 / LB 0.889) belongs to the ungrouped
+    split. Adopt it when the fold ensemble is rebuilt, not in the middle of an
+    experiment that is being compared against those numbers.
+    """
+    frame = labels.copy().reset_index(drop=True)
+    key = stratification_key(frame)
+    rng = np.random.default_rng(seed)
+
+    frame["fold"] = -1
+    if groups is None:
+        for value in key.unique():
+            rows = np.flatnonzero(key.to_numpy() == value)
+            rng.shuffle(rows)
+            frame.loc[rows, "fold"] = np.arange(len(rows)) % n_folds
+    else:
+        mapped = frame[config.ID_COL].map(groups).fillna("unknown")
+        sizes = mapped.value_counts()
+        # Shuffle before sorting so equal-sized groups do not always fall the
+        # same way, then place the largest first into the emptiest fold.
+        order = sizes.sample(frac=1.0, random_state=seed).sort_values(
+            ascending=False, kind="mergesort").index
+        counts = np.zeros(n_folds, dtype=int)
+        for group in order:
+            fold = int(np.argmin(counts))
+            rows = np.flatnonzero(mapped.to_numpy() == group)
+            frame.loc[rows, "fold"] = fold
+            counts[fold] += len(rows)
+
+    if (frame["fold"] < 0).any():
+        raise RuntimeError("some studies were not assigned a fold")
+    return frame
+
+
+def iter_folds(labels: pd.DataFrame,
+               n_folds: int = N_FOLDS) -> Iterator[Tuple[pd.DataFrame, pd.DataFrame]]:
+    """Yield (train, validation) frames for each fold."""
+    if "fold" not in labels.columns:
+        labels = make_folds(labels, n_folds=n_folds)
+
+    for fold in range(n_folds):
+        validation = labels[labels["fold"] == fold]
+        train = labels[labels["fold"] != fold]
+        yield train.reset_index(drop=True), validation.reset_index(drop=True)
+
+
+def series_for_studies(manifest: pd.DataFrame,
+                       study_uids: Sequence[str]) -> pd.DataFrame:
+    """All cached series belonging to a set of studies."""
+    wanted = set(study_uids)
+    return manifest[manifest[config.ID_COL].isin(wanted)].reset_index(drop=True)
+
+
+def summarise(labels: pd.DataFrame, n_folds: int = N_FOLDS) -> pd.DataFrame:
+    """Per-fold positive rates, to confirm the folds are actually comparable."""
+    if "fold" not in labels.columns:
+        labels = make_folds(labels, n_folds=n_folds)
+
+    rows = []
+    for fold in range(n_folds):
+        subset = labels[labels["fold"] == fold]
+        row = {"fold": fold, "studies": len(subset)}
+        for name in config.LABELS:
+            row[name] = float((subset[name] > 0.5).mean())
+        rows.append(row)
+    return pd.DataFrame(rows).set_index("fold")
+import copy
+import hashlib
+import json
+from pathlib import Path
+import ast
+import pathlib
+
+import pandas as pd
+import pytest
+
+from src.labels.reviewed import apply_reviewed
+from tools.prepare_reviewed_labels import stage_source
+
+
+def inputs():
+    labels = pd.DataFrame({'StudyInstanceUID': ['development', 'val1', 'val3'],
+                           'ACL': [.9, .7, .2], 'ACL_weight': [1., .7, .4]})
+    folds = pd.DataFrame({'StudyInstanceUID': ['development', 'val1', 'val3'], 'fold': [0,1,3]})
+    reports = pd.DataFrame({'Report': ['ACL intact.']}, index=['development'])
+    corrections = [{'StudyInstanceUID': 'development', 'finding': 'ACL',
+        'old_target': .9, 'new_target': 0., 'evidence': 'ACL intact.',
+        'report_sha256': hashlib.sha256(b'ACL intact.').hexdigest()}]
+    return labels, folds, corrections, reports
+
+
+@pytest.mark.parametrize('fold', [1,3])
+def test_training_only_with_immutable_inputs(fold):
+    labels, folds, corrections, reports = inputs()
+    before = labels.copy(deep=True)
+    result = apply_reviewed(labels, folds, corrections, fold, reports)
+    pd.testing.assert_frame_equal(labels, before)
+    assert result.loc[0, 'ACL'] == 0
+    pd.testing.assert_frame_equal(result.iloc[1:], before.iloc[1:])
+    pd.testing.assert_series_equal(result.ACL_weight, before.ACL_weight)
+
+
+@pytest.mark.parametrize('mutation', ['heldout', 'old_target', 'quote', 'duplicate'])
+def test_rejects_unreviewed_or_leaking_changes(mutation):
+    labels, folds, corrections, reports = inputs()
+    if mutation == 'heldout':
+        corrections[0]['StudyInstanceUID'] = 'val3'
+    elif mutation == 'old_target':
+        corrections[0]['old_target'] = .8
+    elif mutation == 'quote':
+        corrections[0]['evidence'] = 'ACL torn.'
+    else:
+        corrections.append(copy.deepcopy(corrections[0]))
+    with pytest.raises(ValueError):
+        apply_reviewed(labels, folds, corrections, 1, reports)
+
+
+def test_actual_candidate_has_exactly_reviewed_changes():
+    root = Path(__file__).resolve().parents[1]
+    labels = pd.read_parquet(root/'data/meta/train_labels.parquet')
+    candidate = pd.read_parquet(root/'outputs/reviewed_labels_v1/train_labels_reviewed_v1.parquet')
+    corrections = json.loads((root/'outputs/reviewed_labels_v1/corrections.json').read_text())
+    folded = pd.read_parquet(root/'outputs/ensemble_16_24/reconstructed_folds.parquet')
+    reports = pd.read_csv(root/'data/meta/train.csv').set_index('StudyInstanceUID')
+    expected = apply_reviewed(labels, folded, corrections, 1, reports)
+    pd.testing.assert_frame_equal(candidate, expected)
+    assert (labels != candidate).to_numpy().sum() == len(corrections) == 11
+    assert labels.StudyInstanceUID.equals(candidate.StudyInstanceUID)
+
+
+def test_staged_review_hook_executes_before_the_notebooks_later_imports(tmp_path, monkeypatch):
+    """Exercise the exact injected preflight, not merely compilation."""
+    root = Path(__file__).resolve().parents[1]
+    notebook = json.loads((root / 'notebooks/08_finetune.ipynb').read_text())
+    corrections = json.loads((root / 'outputs/reviewed_labels_v1/corrections.json').read_text())
+    label_hash = hashlib.sha256((root / 'data/meta/train_labels.parquet').read_bytes()).hexdigest()
+    labels = pd.read_parquet(root / 'data/meta/train_labels.parquet')
+    split = pd.read_parquet(root / 'outputs/ensemble_16_24/reconstructed_folds.parquet')
+    folded = labels.merge(split, on='StudyInstanceUID', validate='one_to_one')
+    monkeypatch.chdir(tmp_path)
+
+    for arm in ('control', 'candidate'):
+        source = stage_source(notebook, label_hash, corrections, arm, fold=1)
+        tree = ast.parse(source)
+        start = next(i for i, node in enumerate(tree.body)
+                     if isinstance(node, ast.Import)
+                     and [alias.name for alias in node.names] == ['hashlib']
+                     and i + 1 < len(tree.body)
+                     and isinstance(tree.body[i + 1], ast.Import)
+                     and [alias.name for alias in tree.body[i + 1].names] == ['json'])
+        end = next(i for i, node in enumerate(tree.body[start:], start)
+                   if any(isinstance(item, ast.Constant) and item.value == 'label_review_contract.json'
+                          for item in ast.walk(node)))
+        namespace = {'folded': folded.copy(deep=True), 'pd': pd, 'pathlib': pathlib}
+        exec(compile(ast.fix_missing_locations(ast.Module(tree.body[start:end + 1], [])),
+                     f'{arm}_preflight.py', 'exec'), namespace)
+        contract = json.loads((tmp_path / 'label_review_contract.json').read_text())
+        assert contract['arm'] == arm
+        assert contract['validation_labels_changed'] is False
+        assert contract['folds_changed'] is False
+"""Check isolation and compute guards before spending remote training time."""
+
+import ast
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tools.prepare_kaggle_training_pair import INPUT_SEARCH, ROOT, training_source
+from tools.kaggle_training_pair_body import validate_contracts
+
+
+@pytest.mark.parametrize("experiment", ["baseline", "protocol", "classwise", "convnextv2"])
+@pytest.mark.parametrize("fold", [1, 3])
+def test_staged_training_preserves_modules_and_isolates_artifacts(experiment, fold):
+    notebook = json.loads((ROOT / "notebooks/08_finetune.ipynb").read_text())
+    source = training_source(notebook, experiment, "fixture-label-hash", fold=fold)
+    tree = ast.parse(source)
+    original = ["".join(c["source"]) for c in notebook["cells"] if c["cell_type"] == "code"]
+    def files(tree):
+        return next(ast.literal_eval(n.value) for n in tree.body
+                    if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
+                    and n.targets[0].id == "FILES")
+    assert files(tree) == files(ast.parse(original[1]))
+    paths = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant)
+             and isinstance(n.value, str) and n.value.startswith("/kaggle/working")]
+    assert paths and all(p.startswith(f"/kaggle/working/{experiment}_fold{fold}")
+                         or p == f"/kaggle/working/baseline_fold{fold}/run_contract.json"
+                         for p in paths)
+    assignments = [n for n in tree.body if isinstance(n, ast.Assign)
+                   and isinstance(n.targets[0], ast.Name) and n.targets[0].id == "FOLD"]
+    assert len(assignments) == 1 and ast.literal_eval(assignments[0].value) == fold
+    assert source.index("Matched-run preflight passed") < source.index("trainer.fit(")
+    assert "fixture-label-hash" in source
+    assert "KNEE_EXPERIMENT" in source
+    assert "BASELINE_CONDITIONAL" not in source
+    assert "oof.to_parquet" in source and "artifacts.write_metadata" in source
+    assert "!pip install" not in source
+    assert "STRATEGY = 'ddp' if DEVICES > 1 else 'auto'" in source
+    assert source.index("if not trainer.is_global_zero:") < source.index("n_tensors = knee_lightning.export_from_checkpoint")
+
+
+def test_staging_refuses_unreviewed_experiments_or_notebook_structure():
+    with pytest.raises(ValueError, match="screening folds"):
+        training_source({}, "baseline", "hash", fold=2)
+    with pytest.raises(ValueError, match="recovery checkpoint"):
+        training_source({}, "baseline", "hash", recovery={"fixture": True}, fold=3)
+    with pytest.raises(ValueError, match="authorized"):
+        training_source({}, "resample", "hash")
+    with pytest.raises(ValueError, match="structure"):
+        training_source({"cells": []}, "baseline", "hash")
+
+
+def test_recovery_cannot_retrain_and_smoke_checks_end_of_fit_exports():
+    notebook = json.loads((ROOT / "notebooks/08_finetune.ipynb").read_text())
+    recovery = training_source(notebook, "baseline", "label-hash", recovery={
+        "checkpoint_sha256": "checkpoint-hash", "contract": {}})
+    tree = ast.parse(recovery)
+    calls = [ast.unparse(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)]
+    assert "trainer.fit" not in calls
+    assert "checkpoint-hash" in recovery and "Recovered baseline settings changed" in recovery
+    assert "oof.to_parquet" in recovery
+    smoke = training_source(notebook, "protocol", "label-hash", smoke=True)
+    ast.parse(smoke)
+    assert "limit_train_batches=8" in smoke and "max_epochs=1" in smoke
+    assert "DDP_SMOKE_PASSED" in smoke and "oof.to_parquet" not in smoke
+
+
+def test_classwise_pair_checks_shared_initialization_without_changing_input_selection():
+    notebook = json.loads((ROOT / "notebooks/08_finetune.ipynb").read_text())
+    for experiment in ("baseline", "classwise"):
+        source = training_source(notebook, experiment, "hash", match_classwise=True)
+        assert "MATCH_CLASSWISE = True" in source
+        assert "shared_initial_weights_sha256" in source
+        assert "('protocol' if EXPERIMENT == 'protocol' else 'uniform')" in source
+        assert "RUN.classwise_pool == (EXPERIMENT == 'classwise')" in source
+        assert "('model.study_pool.', 'model.head.')" in source
+    with pytest.raises(ValueError, match="fresh native-DDP baseline"):
+        training_source(notebook, "baseline", "hash", recovery={"fixture": True},
+                        match_classwise=True)
+
+
+@pytest.mark.parametrize("candidate", ["protocol", "classwise", "convnextv2"])
+def test_contract_guard_rejects_settings_and_initialization_drift(candidate):
+    from src.model.experiments import get_experiment
+    contracts = [{"experiment": get_experiment(name).to_dict(), "seed": 0,
+                  "initial_weights_sha256": "full", "shared_initial_weights_sha256": "shared"}
+                 for name in ("baseline", candidate)]
+    if candidate == "convnextv2":
+        for contract in contracts:
+            contract.update(aggregation_seed=0, feature_dim=768, input_defaults={
+                "input_mean": None, "input_std": None, "backbone_lr_scale": 1.0})
+    original = json.dumps(contracts, sort_keys=True)
+    validate_contracts(contracts, candidate)
+    assert json.dumps(contracts, sort_keys=True) == original
+    contracts[1]["initial_weights_sha256"] = "different"
+    if candidate == "protocol":
+        with pytest.raises(ValueError, match="initial weights"):
+
+exec
+/bin/zsh -lc "rg -n 'def |15|checkpoint|manifest|reference' tools/prepare_protocol_submission.py tools/prepare_protocol_benchmark.py tests/test_protocol_submission.py tests/test_protocol_benchmark.py; rg -n 'def |104|language' tools/audit_labels.py; rg -n 'FINDING_DEFINITIONS|Contusion|Meniscus|PF OA' src/labels/llm_extract.py; cat src/labels/fuse.py src/labels/mode_fusion.py" in /private/tmp/claude-501/-Users-pssv-PycharmProjects-knee-competition/8d9a739e-ad35-4f33-9528-76c72c8d6476/scratchpad/knee-sanitized
+ succeeded in 0ms:
+tests/test_protocol_submission.py:13:def benchmark():
+tests/test_protocol_submission.py:14:    expected = {f"model:{i}": f"sha{i}" for i in range(15)}
+tests/test_protocol_submission.py:15:    return {"members": 15, "errors": [], "references_complete": True, "raw_complete": True,
+tests/test_protocol_submission.py:17:            "manifest_sha256": "manifest", "checkpoints": expected,
+tests/test_protocol_submission.py:18:            "reference_checks": [{"identity": key, "studies": list(range(8)), "max_abs_delta": .0005}
+tests/test_protocol_submission.py:22:def test_complete_matching_benchmark_passes(benchmark):
+tests/test_protocol_submission.py:24:    validate_benchmark(report, "manifest", expected)
+tests/test_protocol_submission.py:27:@pytest.mark.parametrize("problem", ["fatal", "errors", "unfinished", "slow", "manifest", "checkpoint",
+tests/test_protocol_submission.py:28:                                    "references", "delta", "nan", "raw_duplicate"])
+tests/test_protocol_submission.py:29:def test_rejects_failed_incomplete_or_different_benchmark(benchmark, problem):
+tests/test_protocol_submission.py:39:    elif problem == "manifest":
+tests/test_protocol_submission.py:40:        report["manifest_sha256"] = "other"
+tests/test_protocol_submission.py:41:    elif problem == "checkpoint":
+tests/test_protocol_submission.py:42:        report["checkpoints"] = {**expected, "model:0": "other"}
+tests/test_protocol_submission.py:43:    elif problem == "references":
+tests/test_protocol_submission.py:44:        report["reference_checks"].pop()
+tests/test_protocol_submission.py:46:        report["reference_checks"][0]["max_abs_delta"] = .1 if problem == "delta" else float("nan")
+tests/test_protocol_submission.py:50:        validate_benchmark(report, "manifest", expected)
+tests/test_protocol_benchmark.py:23:def test_package_preserves_incumbent_and_binds_all_fifteen_members(tmp_path):
+tests/test_protocol_benchmark.py:40:                members.append({"checkpoint": source.name, "weight": .1})
+tests/test_protocol_benchmark.py:47:            receipts.append({"family": family, "fold": fold, "checkpoint_sha256": artifacts.sha256(source),
+tests/test_protocol_benchmark.py:49:    manifest_bytes = json.dumps({"members": members}).encode()
+tests/test_protocol_benchmark.py:50:    (incumbent / "ensemble.json").write_bytes(manifest_bytes)
+tests/test_protocol_benchmark.py:57:        "paired_macro_delta_95ci": {"candidate": [.005, .015]}, "source_receipts": receipts}))
+tests/test_protocol_benchmark.py:65:    assert (incumbent / "ensemble.json").read_bytes() == manifest_bytes
+tests/test_protocol_benchmark.py:67:    manifest = json.loads((upload / "ensemble.json").read_text())
+tests/test_protocol_benchmark.py:68:    assert len(manifest["members"]) == 15
+tests/test_protocol_benchmark.py:69:    assert all(m["weight"] == 1 / 15 for m in manifest["members"])
+tests/test_protocol_benchmark.py:70:    assert len(list(upload.glob("*.pt"))) == 15 and len(list(upload.glob("reference_*.parquet"))) == 15
+tests/test_protocol_benchmark.py:82:def test_search_never_recurses_into_raw_competition(tmp_path, monkeypatch):
+tests/test_protocol_benchmark.py:89:    def guarded(path, pattern):
+tests/test_protocol_benchmark.py:98:@pytest.mark.parametrize("bad_reference", [False, True])
+tests/test_protocol_benchmark.py:99:def test_benchmark_checks_every_member_before_timing_raw_studies(tmp_path, monkeypatch, bad_reference):
+tests/test_protocol_benchmark.py:111:            expected[identity] = {"sha256": identity, "reference": identity}
+tests/test_protocol_benchmark.py:114:    if bad_reference:
+tests/test_protocol_benchmark.py:117:        files[f"manifest_train_series_{i}.parquet"] = series.iloc[i::3][[config.ID_COL, "SeriesInstanceUID"]].assign(position=0)
+tests/test_protocol_benchmark.py:124:    manifest = tmp_path / "ensemble.json"
+tests/test_protocol_benchmark.py:125:    manifest.write_text("{}")
+tests/test_protocol_benchmark.py:127:    def build(uid, fast):
+tests/test_protocol_benchmark.py:132:        "RUN_STARTED": time.monotonic(), "ENSEMBLE_JSON": manifest, "explicit_members": members,
+tests/test_protocol_benchmark.py:133:        "EXPECTED_MODELS": expected, "member_weights": [1 / 15] * 15,
+tests/test_protocol_benchmark.py:140:        "tuned_predict": lambda *a, **kw: np.full((15, 12), .5), "watchdog": SimpleNamespace(cancel=lambda: None)}
+tests/test_protocol_benchmark.py:142:    if bad_reference:
+tests/test_protocol_benchmark.py:149:        assert report["references_complete"] and report["raw_complete"] and report["runtime_gate_passed"]
+tests/test_protocol_benchmark.py:150:        assert len(report["reference_checks"]) == 15 and len(raw) == len(set(raw)) == 100
+tools/prepare_protocol_benchmark.py:1:"""Package and stage the fixed 15-model protocol benchmark; never upload or launch."""
+tools/prepare_protocol_benchmark.py:20:def attached_files(pattern):
+tools/prepare_protocol_benchmark.py:31:def link_verified(source, dest):
+tools/prepare_protocol_benchmark.py:40:def prepare(root=ROOT):
+tools/prepare_protocol_benchmark.py:55:        source = incumbent / member["checkpoint"]
+tools/prepare_protocol_benchmark.py:62:    if len(entries) != 15 or {(family, meta["fold"]) for _, meta, family in entries} != expected:
+tools/prepare_protocol_benchmark.py:66:    # binds checkpoint and OOF hashes to the exact equal-family result.
+tools/prepare_protocol_benchmark.py:69:        if meta["sha256"] != receipt["checkpoint_sha256"]:
+tools/prepare_protocol_benchmark.py:78:    manifest, provenance, expected_hashes = {"members": []}, [], {}
+tools/prepare_protocol_benchmark.py:81:        reference = f"reference_{family}_fold{meta['fold']}.parquet"
+tools/prepare_protocol_benchmark.py:86:        link_verified(root / receipt["oof"], upload / reference)
+tools/prepare_protocol_benchmark.py:87:        manifest["members"].append({"checkpoint": filename, "weight": 1 / 15})
+tools/prepare_protocol_benchmark.py:91:        expected_hashes[identity] = {"sha256": meta["sha256"], "reference": reference}
+tools/prepare_protocol_benchmark.py:92:        provenance.append({**receipt, "source": str(source.relative_to(root)), "checkpoint": filename})
+tools/prepare_protocol_benchmark.py:93:    manifest_bytes = (json.dumps(manifest, indent=2) + "\n").encode()
+tools/prepare_protocol_benchmark.py:95:        (directory / "ensemble.json").write_bytes(manifest_bytes)
+tools/prepare_protocol_benchmark.py:101:        "description": "Fixed selected 16/24/protocol ensemble and held-out reference predictions for private inference verification."
+tools/prepare_protocol_benchmark.py:114:    tree.body[finders[0]] = ast.parse('def find_inputs(pattern):\n    return [str(p) for p in attached_files(pattern)]').body[0]
+tools/prepare_protocol_benchmark.py:122:def hard_stop():
+tools/prepare_protocol_benchmark.py:131:manifests = attached_files("ensemble.json")
+tools/prepare_protocol_benchmark.py:132:assert len(manifests) == 1, "Expected exactly one ensemble manifest"
+tools/prepare_protocol_benchmark.py:133:assert hashlib.sha256(manifests[0].read_bytes()).hexdigest() == {hashlib.sha256(manifest_bytes).hexdigest()!r}
+tools/prepare_protocol_benchmark.py:134:os.environ["KNEE_ENSEMBLE_JSON"] = str(manifests[0])
+tools/prepare_protocol_benchmark.py:149:               "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+tools/prepare_protocol_submission.py:15:def validate_benchmark(report, manifest_hash, expected):
+tools/prepare_protocol_submission.py:16:    if (report.get("fatal_error") or report.get("errors") or report.get("members") != 15
+tools/prepare_protocol_submission.py:17:            or not report.get("references_complete") or not report.get("raw_complete")
+tools/prepare_protocol_submission.py:20:        raise ValueError("A complete passing 15-model benchmark is required")
+tools/prepare_protocol_submission.py:21:    if report.get("manifest_sha256") != manifest_hash or report.get("checkpoints") != expected:
+tools/prepare_protocol_submission.py:23:    checks = report.get("reference_checks", [])
+tools/prepare_protocol_submission.py:24:    if (len(checks) != 15 or {c["identity"] for c in checks} != set(expected)
+tools/prepare_protocol_submission.py:26:        raise ValueError("Incomplete or failed reference reproduction")
+tools/prepare_protocol_submission.py:32:def prepare(root=ROOT):
+tools/prepare_protocol_submission.py:37:    manifest_bytes = (upload / "ensemble.json").read_bytes()
+tools/prepare_protocol_submission.py:38:    manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+tools/prepare_protocol_submission.py:40:    members = json.loads(manifest_bytes)["members"]
+tools/prepare_protocol_submission.py:41:    if len(members) != 15 or any(m["weight"] != 1 / 15 for m in members):
+tools/prepare_protocol_submission.py:44:        meta = artifacts.load_metadata(upload / member["checkpoint"])
+tools/prepare_protocol_submission.py:49:    if manifest_hash != staged["manifest_sha256"] or expected != {k: v["sha256"] for k, v in staged["members"].items()}:
+tools/prepare_protocol_submission.py:52:    validate_benchmark(report, manifest_hash, expected)
+tools/prepare_protocol_submission.py:64:    setup.body[finders[0]] = ast.parse('def find_inputs(pattern):\n    return [str(p) for p in attached_files(pattern)]').body[0]
+tools/prepare_protocol_submission.py:68:manifests = attached_files("ensemble.json")
+tools/prepare_protocol_submission.py:69:assert len(manifests) == 1
+tools/prepare_protocol_submission.py:70:assert hashlib.sha256(manifests[0].read_bytes()).hexdigest() == {manifest_hash!r}
+tools/prepare_protocol_submission.py:71:os.environ["KNEE_ENSEMBLE_JSON"] = str(manifests[0])
+tools/prepare_protocol_submission.py:75:assert len(explicit_members) == len(tuned_models) == 15
+tools/prepare_protocol_submission.py:77:assert np.array_equal(np.asarray(member_weights), np.full(15, 1 / 15))
+tools/prepare_protocol_submission.py:78:actual_checkpoints = {f"{m['spec']['name']}:{m['metadata']['fold']}": m['metadata']['sha256'] for m in explicit_members}
+tools/prepare_protocol_submission.py:79:assert actual_checkpoints == EXPECTED_CHECKPOINTS
+tools/prepare_protocol_submission.py:87:          "checkpoints": actual_checkpoints, "weights": list(map(float, member_weights)),
+1:"""Audit of the label tributary: reproduction, properties, and language reach.
+30:     reach varies by language, then studies are weighted by what language they
+39:documented property has drifted. The language section never fails the run --
+61:# No language detector is installed and none is worth a dependency for this:
+63:# anatomy and laterality words identify the language with far higher precision
+90:def detect_language(text) -> str:
+120:def check_reproduction(shipped: pd.DataFrame, rebuilt: pd.DataFrame,
+160:def check_properties(labels: pd.DataFrame, tolerance: float = 0.01,
+184:def language_reach(reports: pd.DataFrame, unlabelled: pd.DataFrame,
+186:    """Per-language informativeness of each of the two extractor signals.
+193:    language = reports.set_index(config.ID_COL)["language"]
+194:    groups = unlabelled[config.ID_COL].map(language).to_numpy()
+221:    print("\n   informative share of the 12 slots, per language\n")
+242:def stem_reach(reports: pd.DataFrame):
+243:    """Where a stem list misses a language, name the word it missed.
+250:    print("\n   stem lists that do not reach their own language")
+262:        subset = reports[reports["language"] == lang]
+286:def check_against_gold(gold: pd.DataFrame, fused_gold: pd.DataFrame,
+311:    def rates(mask):
+362:def sweep_lexicon_weight(gold: pd.DataFrame):
+396:def main():
+403:                        help="write the per-language table to this csv")
+416:    reports["language"] = reports["Report"].map(detect_language)
+418:    table = language_reach(reports, unlabelled)
+19:FINDING_DEFINITIONS = {
+26:    "Medial Meniscus": "Tear of the medial (internal) meniscus. Degeneration "
+28:    "Lateral Meniscus": "Tear of the lateral (external) meniscus. Degeneration "
+34:    "PF OA": "Osteoarthritis, chondromalacia, or cartilage loss in the "
+39:    "Contusion": "Bone contusion or bone marrow oedema (excluding oedema that "
+65:        f'  "{name}": {definition}' for name, definition in FINDING_DEFINITIONS.items()
+101:        for name in FINDING_DEFINITIONS
+175:    for name in FINDING_DEFINITIONS:
+214:            for name in FINDING_DEFINITIONS
+218:    for name in FINDING_DEFINITIONS:
+299:{{"ACL": 3, "MCL": 12, "Medial Meniscus": 88, ...}}
+314:# at, from the fused labels: Synovitis 0.792, Lateral OA and PF OA next.
+365:        f'  "{name}": {definition}' for name, definition in FINDING_DEFINITIONS.items()
+378:    result = {name: None for name in FINDING_DEFINITIONS}
+397:    for name in FINDING_DEFINITIONS:
+419:    for name in FINDING_DEFINITIONS:
+"""Combine the rule-based and LLM extractors into soft training targets.
+
+Produces one row per study with, for each finding, a target in [0, 1] and a
+sample weight. Neither is a hard label: the extractors disagree often enough,
+and are wrong often enough, that training on thresholded output would teach the
+model to reproduce extraction errors.
+
+**Nothing here is fitted on the 58 gold studies.** An earlier version derived
+per-finding blend weights from gold AUCs and per-finding silence priors from
+gold positive rates -- 24 numbers estimated from 58 samples. It scored macro AUC
+0.860 in-sample and 0.812 under leave-one-out, which is worse than the LLM
+extractor alone at 0.838. The apparent gain was the fit, not the fusion.
+
+What replaced it is deliberately parameter-free:
+
+**A fixed blend.** Targets are 0.10 x lexicon + 0.90 x LLM for every finding.
+The ratio sits on a plateau, not an argmax: with the dual-mode LLM scores,
+0.00 through 0.15 all land within 0.002 on gold (0.889-0.891) and the weight
+falls away steadily above that -- the 0.30 chosen for the categorical-only
+LLM cost ~0.010 against the stronger extractor. A small nonzero weight keeps
+the lexicon's independent evidence without letting it drag the ranking.
+
+**Silence scores zero, and is handled by the weight instead.** Measuring
+P(positive | both silent) on gold and using it as the target was worse than
+using zero, on every variant tested. The concern that motivated it -- that a
+silent finding is not a confident negative -- is real, and is addressed by
+giving those studies a low sample weight rather than a fabricated target.
+
+**Disagreement lowers the weight rather than picking a winner.** A study where
+the extractors conflict is genuinely ambiguous and should not pull as hard as
+one where they concur.
+"""
+
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from src import config
+from src.labels import calibrate, lexicon
+
+# Blend ratio. Chosen from a plateau, not an argmax -- see module docstring.
+LEXICON_WEIGHT = 0.10
+LLM_WEIGHT = 1.0 - LEXICON_WEIGHT
+
+# Sample weights by how much the two extractors corroborate each other.
+WEIGHT_AGREE = 1.0        # both informative, same call
+WEIGHT_DISAGREE = 0.4     # both informative, opposite calls
+WEIGHT_SINGLE = 0.7       # one informative, one silent
+WEIGHT_SILENT = 0.25      # neither informative; target is zero but barely counts
+
+
+def silence_rates(labels: pd.DataFrame) -> pd.Series:
+    """Per finding, the share of studies neither extractor said anything about.
+
+    Measured on the mined corpus -- 4,349 studies -- and never on gold. That
+    distinction is what separates this from the per-finding silence priors this
+    module removed: those were 24 numbers fitted on 58 samples and scored 0.860
+    in-sample against 0.812 leave-one-out. A rate over 4,349 studies is an
+    observation, not a fit.
+    """
+    return pd.Series(
+        {name: float((labels[f"{name}_weight"] == WEIGHT_SILENT).mean())
+         for name in config.LABELS})
+
+
+def rescale_silent_weights(labels: pd.DataFrame) -> pd.DataFrame:
+    """Down-weight silence in proportion to how uninformative it is.
+
+    **The problem, measured on Synovitis.** 82.2% of studies are silent about
+    it, the mined target averages 0.087, and the true prevalence on gold is
+    46.6%. So roughly 1,666 of the 3,576 silent studies are true positives
+    being trained toward zero -- and because silence is so common here, those
+    studies carry 57% of the finding's gradient. The model is being taught to
+    rank real positives low. Synovitis duly scores 0.682 on gold, the only
+    finding where the fine-tuned model is WORSE than the retired frozen one
+    (0.746), which is what fitting label noise harder looks like.
+
+    **The fix, and why it is not the one that failed.** Targets are untouched:
+    fabricating P(positive | silent) as a target measured worse on every
+    variant tested, and that stands. What changes is the *weight*, which this
+    module's own docstring already names as the mechanism for silence being an
+    unconfident negative. The weight becomes
+
+        WEIGHT_SILENT x (1 - silence_rate(finding))
+
+    which is one rule with no free parameters, evaluated on the mined corpus.
+    Silence about ACL (9.2% of studies) stays worth nearly the full 0.25,
+    because a report that discusses ligaments and omits the ACL is saying
+    something. Silence about Synovitis (82.2%) falls to 0.044, because a
+    corpus that mentions it in one study out of six is not saying anything.
+
+    Returns a copy; the target columns are passed through unchanged.
+    """
+    rates = silence_rates(labels)
+    out = labels.copy()
+    for name in config.LABELS:
+        column = f"{name}_weight"
+        silent = out[column] == WEIGHT_SILENT
+        out.loc[silent, column] = WEIGHT_SILENT * (1.0 - rates[name])
+    return out
+
+
+def _informative(present) -> bool:
+    """False when an extractor said nothing about this finding."""
+    if present is None:
+        return False
+    if isinstance(present, float) and np.isnan(present):
+        return False
+    return True
+
+
+def _score(present, severity) -> float:
+    """One extractor's contribution to the target, in [0, 1]."""
+    if not _informative(present):
+        return 0.0
+    if int(present) == 1:
+        return float(severity) if severity == severity and severity is not None else 1.0
+    return 0.0
+
+
+def lexicon_frame(reports, ids) -> pd.DataFrame:
+    """Run the rule-based extractor over a set of reports."""
+    records = []
+    for report in reports:
+        extracted = lexicon.extract_report(report)
+        row = {}
+        for name in config.LABELS:
+            row[name] = extracted[name]["present"]
+            row[f"{name}_severity"] = extracted[name]["severity"]
+        records.append(row)
+
+    frame = pd.DataFrame(records)
+    frame.insert(0, config.ID_COL, list(ids))
+    return frame
+
+
+def fuse(lex: pd.DataFrame, llm: pd.DataFrame) -> pd.DataFrame:
+    """Blend two extractor frames into soft targets and sample weights."""
+    merged = lex.merge(llm, on=config.ID_COL, suffixes=("_lex", "_llm"))
+    if len(merged) != len(lex):
+        raise ValueError(f"merge lost rows: {len(lex)} -> {len(merged)}")
+
+    output = {config.ID_COL: merged[config.ID_COL].to_numpy()}
+
+    for name in config.LABELS:
+        lex_present = merged[f"{name}_lex"].to_numpy(dtype=object)
+        llm_present = merged[f"{name}_llm"].to_numpy(dtype=object)
+        lex_sev = merged[f"{name}_severity_lex"].to_numpy()
+        llm_sev = merged[f"{name}_severity_llm"].to_numpy()
+
+        targets = np.empty(len(merged))
+        sample_weights = np.empty(len(merged))
+
+        for i in range(len(merged)):
+            lex_score = _score(lex_present[i], lex_sev[i])
+            llm_score = _score(llm_present[i], llm_sev[i])
+            targets[i] = LEXICON_WEIGHT * lex_score + LLM_WEIGHT * llm_score
+
+            lex_ok = _informative(lex_present[i])
+            llm_ok = _informative(llm_present[i])
+            if lex_ok and llm_ok:
+                agree = (lex_score > 0) == (llm_score > 0)
+                sample_weights[i] = WEIGHT_AGREE if agree else WEIGHT_DISAGREE
+            elif lex_ok or llm_ok:
+                sample_weights[i] = WEIGHT_SINGLE
+            else:
+                sample_weights[i] = WEIGHT_SILENT
+
+        output[name] = np.clip(targets, 0.0, 1.0)
+        output[f"{name}_weight"] = sample_weights
+
+    return pd.DataFrame(output)
+
+
+def fuse_scores(lex: pd.DataFrame, llm_scores: pd.DataFrame) -> pd.DataFrame:
+    """Blend the lexicon frame with an already-combined LLM score frame.
+
+    `llm_scores` is the output of `mode_fusion.combine` (or
+    `mode_fusion.from_categorical`): per finding a score in [0, 1], an
+    `_informative` flag, and a `_call` boolean. The weight semantics mirror
+    `fuse`: agreement compares the lexicon's call with the LLM's call.
+    """
+    merged = lex.merge(llm_scores, on=config.ID_COL, suffixes=("_lex", ""))
+    if len(merged) != len(lex):
+        raise ValueError(f"merge lost rows: {len(lex)} -> {len(merged)}")
+
+    output = {config.ID_COL: merged[config.ID_COL].to_numpy()}
+
+    for name in config.LABELS:
+        lex_present = merged[f"{name}_lex"].to_numpy(dtype=object)
+        lex_sev = merged[f"{name}_severity"].to_numpy()
+        llm_score = merged[name].to_numpy(dtype=float)
+        llm_ok = merged[f"{name}_informative"].to_numpy(dtype=bool)
+        llm_call = merged[f"{name}_call"].to_numpy(dtype=bool)
+
+        targets = np.empty(len(merged))
+        sample_weights = np.empty(len(merged))
+
+        for i in range(len(merged)):
+            lex_score = _score(lex_present[i], lex_sev[i])
+            targets[i] = LEXICON_WEIGHT * lex_score + LLM_WEIGHT * llm_score[i]
+
+            lex_ok = _informative(lex_present[i])
+            if lex_ok and llm_ok[i]:
+                agree = (lex_score > 0) == llm_call[i]
+                sample_weights[i] = WEIGHT_AGREE if agree else WEIGHT_DISAGREE
+            elif lex_ok or llm_ok[i]:
+                sample_weights[i] = WEIGHT_SINGLE
+            else:
+                sample_weights[i] = WEIGHT_SILENT
+
+        output[name] = np.clip(targets, 0.0, 1.0)
+        output[f"{name}_weight"] = sample_weights
+
+    return pd.DataFrame(output)
+
+
+# Order-keeper inside the reference distribution's tie blocks. Small enough
+# that the restored shape dominates the target value; the epsilon term only
+# arranges studies within a block.
+SHARPEN_EPSILON = 0.02
+
+
+def sharpen_targets(fused: pd.DataFrame, reference: pd.DataFrame) -> pd.DataFrame:
+    """Restore `reference`'s target distribution, keeping `fused`'s ordering.
+
+    The dual-mode targets rank studies better than the categorical fusion
+    (0.891 vs 0.854 on gold) but drained the confident mass out of the
+    distribution -- extreme targets fell from 73% to 60% of slots and the
+    model trained on them regressed on the leaderboard (0.845 -> 0.827).
+    AUC is invariant under strictly monotone maps, so the ordering gain and
+    the crisp shape are separable: each finding's targets are quantile-mapped
+    onto the reference marginal, plus an epsilon-scaled rank term that keeps
+    the map strictly increasing where the reference has ties. Sample weights
+    are not touched.
+    """
+    from src.labels import mode_fusion
+
+    out = fused.copy()
+    for name in config.LABELS:
+        targets = fused[name].to_numpy(dtype=float)
+        ref = np.sort(reference[name].to_numpy(dtype=float))
+        ranks = mode_fusion._tied_ranks_01(targets)
+        mapped = np.quantile(ref, np.clip(ranks, 0.0, 1.0))
+        out[name] = np.clip(
+            (mapped + SHARPEN_EPSILON * ranks) / (1.0 + SHARPEN_EPSILON),
+            0.0, 1.0)
+    return out
+
+
+def extractor_aucs(gold: pd.DataFrame, lex_gold: pd.DataFrame,
+                   llm_gold: pd.DataFrame) -> pd.DataFrame:
+    """Diagnostic only: how each extractor scores on gold.
+
+    These numbers are reported, never fed back into the targets. Letting them
+    set blend weights is exactly the overfit this module was rewritten to avoid.
+    """
+    rows = []
+    for name in config.LABELS:
+        truth = gold[name].to_numpy().astype(int)
+        lex_scores = np.array([
+            _score(p, s) for p, s in
+            zip(lex_gold[name], lex_gold[f"{name}_severity"])])
+        llm_scores = np.array([
+            _score(p, s) for p, s in
+            zip(llm_gold[name], llm_gold[f"{name}_severity"])])
+        rows.append({
+            "finding": name,
+            "lexicon_auc": calibrate._auc(truth, lex_scores),
+            "llm_auc": calibrate._auc(truth, llm_scores),
+        })
+    return pd.DataFrame(rows).set_index("finding")
+
+
+def build(train_csv=None, llm_mined=None, llm_gold=None,
+          probs_mined=None, probs_gold=None,
+          out_path: Optional[str] = None):
+    """Full pipeline: extract, fuse, and score against gold.
+
+    When the probability-mode parquets exist alongside the categorical ones,
+    the two modes are combined by `mode_fusion` before the lexicon blend.
+    Otherwise this is the original categorical-only fusion, so the pipeline
+    still runs on a machine that never downloaded the probability dumps.
+    """
+    from src.labels import mode_fusion
+
+    gold = calibrate.load_gold(train_csv)
+    unlabelled = calibrate.load_unlabelled(train_csv)
+
+    mined_frame = pd.read_parquet(
+        llm_mined or (config.META_DIR / "llm_labels.parquet"))
+    gold_frame = pd.read_parquet(
+        llm_gold or (config.META_DIR / "llm_labels_gold.parquet"))
+
+    # Align to CSV order so positional comparisons stay valid.
+    gold_frame = (gold_frame.set_index(config.ID_COL)
+                  .loc[gold[config.ID_COL]].reset_index())
+    mined_frame = (mined_frame.set_index(config.ID_COL)
+                   .loc[unlabelled[config.ID_COL]].reset_index())
+
+    probs_mined_path = probs_mined or (config.META_DIR / "llm_probs.parquet")
+    probs_gold_path = probs_gold or (config.META_DIR / "llm_probs_gold.parquet")
+    use_probs = (Path(probs_mined_path).exists()
+                 and Path(probs_gold_path).exists())
+
+    if use_probs:
+        probs_mined_frame = pd.read_parquet(probs_mined_path)
+        probs_gold_frame = pd.read_parquet(probs_gold_path)
+        scores_mined = mode_fusion.combine(mined_frame, probs_mined_frame)
+        scores_gold = mode_fusion.combine(gold_frame, probs_gold_frame)
+    else:
+        scores_mined = mode_fusion.from_categorical(mined_frame)
+        scores_gold = mode_fusion.from_categorical(gold_frame)
+
+    lex_gold = lexicon_frame(gold["Report"], gold[config.ID_COL])
+    lex_mined = lexicon_frame(unlabelled["Report"], unlabelled[config.ID_COL])
+
+    fused = fuse_scores(lex_mined, scores_mined)
+    fused_gold = fuse_scores(lex_gold, scores_gold)
+
+    if use_probs:
+        # The categorical-only fusion of the same inputs supplies the shape
+        # the dual-mode targets are sharpened back onto.
+        ref_mined = fuse_scores(
+            lex_mined, mode_fusion.from_categorical(mined_frame))
+        ref_gold = fuse_scores(
+            lex_gold, mode_fusion.from_categorical(gold_frame))
+        fused = sharpen_targets(fused, ref_mined)
+        fused_gold = sharpen_targets(fused_gold, ref_gold)
+
+    aucs = extractor_aucs(gold, lex_gold, gold_frame)
+
+    if out_path:
+        fused.to_parquet(out_path, index=False)
+
+    return fused, fused_gold, aucs
+
+
+def report(gold: pd.DataFrame, fused_gold: pd.DataFrame,
+           aucs: pd.DataFrame, fused: pd.DataFrame) -> str:
+    """Per-finding summary of the fused targets.
+
+    The fused AUC column is an honest estimate: no parameter in this module was
+    estimated from the gold studies, so in-sample and held-out are the same.
+    """
+    lines = [
+        f"{'finding':18s} {'lexAUC':>7s} {'llmAUC':>7s} {'fusedAUC':>9s} "
+        f"{'delta':>7s} {'mean w':>7s} {'silent':>7s}",
+        "-" * 72,
+    ]
+    fused_aucs = []
+    for name in config.LABELS:
+        truth = gold[name].to_numpy().astype(int)
+        auc = calibrate._auc(truth, fused_gold[name].to_numpy())
+        fused_aucs.append(auc)
+        best_single = max(aucs.loc[name, "lexicon_auc"], aucs.loc[name, "llm_auc"])
+        silent = float((fused[f"{name}_weight"] == WEIGHT_SILENT).mean())
+        lines.append(
+            f"{name:18s} {aucs.loc[name, 'lexicon_auc']:7.3f} "
+            f"{aucs.loc[name, 'llm_auc']:7.3f} {auc:9.3f} "
+            f"{auc - best_single:+7.3f} "
+            f"{fused[f'{name}_weight'].mean():7.2f} {silent:6.0%}"
+        )
+    lines.append("-" * 72)
+    lines.append(
+        f"macro: fused {np.nanmean(fused_aucs):.3f}   "
+        f"lexicon {aucs['lexicon_auc'].mean():.3f}   "
+        f"LLM {aucs['llm_auc'].mean():.3f}"
+    )
+    return "\n".join(lines)
+
+
+def main():
+    out = config.META_DIR / "train_labels.parquet"
+    fused, fused_gold, aucs = build(out_path=out)
+    gold = calibrate.load_gold()
+    print(report(gold, fused_gold, aucs, fused))
+    print(f"\nwrote {out}  {fused.shape}")
+
+
+if __name__ == "__main__":
+    main()
+"""Combine the categorical and probability extraction modes into one score.
+
+The two LLM extraction modes fail in complementary ways. The categorical mode
+is precise where reports state a finding crisply (Medial Meniscus 0.944, MCL
+0.959 on gold) but collapses more than half of all label slots onto a single
+value, and AUC cannot order studies inside a tie block. The probability mode
+spreads the silent studies (Fracture 0.885 vs 0.752) but leaves Medial
+Meniscus and MCL nearly all tied. Best-of-both per finding scores ~0.869
+against 0.854 for the categorical-only fusion -- but picking a winner per
+finding on 58 gold studies is the same overfit that sank the fitted fusion
+weights (0.860 in-sample, 0.812 leave-one-out).
+
+Every strategy here therefore applies one rule globally, with at most one
+global parameter, so in-sample and held-out are the same number. Per-finding
+selection is deliberately not offered.
+
+Measured on the 32B gold dump (2026-08-23): categorical alone 0.838,
+probability alone 0.860, `score_average` and `rank_average` tied at 0.889 --
+above the 0.885 per-finding oracle, because averaging complementary errors
+beats choosing between them. The delete-8 jackknife split 0.54/0.47 between
+the two, which is a tie, and the tie-break rule is simplicity: freeze
+`score_average`. It also keeps a probability-like scale (mean target 0.33
+against gold prevalence 0.35, where rank scores are uniform at 0.5 by
+construction), which matters because these become BCE targets downstream --
+imputing silence priors as targets measured worse than zero every time.
+"""
+
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from src import config
+from src.labels import fuse
+
+# Frozen from the gold-dump comparison recorded in the module docstring.
+DEFAULT_STRATEGY = "score_average"
+
+# Tiebreak weight. Correctness only needs it below the smallest gap between
+# distinct categorical scores (severity x certainty products; adjacent values
+# sit ~0.05 apart), so 0.01 is not a tuned quantity.
+TIEBREAK_EPSILON = 0.01
+
+# Global blend weight on the categorical rank for the `global_blend` strategy.
+# Must be set from a plateau, never an argmax -- see eval_fusion.py.
+GLOBAL_BLEND_ALPHA = 0.5
+
+STRATEGIES = (
+    "score_average",
+    "rank_average",
+    "cat_primary_tiebreak",
+    "global_blend",
+    "confidence_weighted",
+)
+
+
+def _tied_ranks_01(values: np.ndarray) -> np.ndarray:
+    """Tie-averaged ranks rescaled to [0, 1]; NaN positions come back NaN."""
+    result = np.full(len(values), np.nan)
+    mask = ~np.isnan(values)
+    n = int(mask.sum())
+    if n == 0:
+        return result
+    if n == 1:
+        result[mask] = 0.5
+        return result
+
+    subset = values[mask]
+    order = np.argsort(subset, kind="mergesort")
+    ranks = np.empty(n, dtype=float)
+    ranks[order] = np.arange(1, n + 1)
+    unique, inverse, counts = np.unique(subset, return_inverse=True,
+                                        return_counts=True)
+    tie_sums = np.zeros(len(unique))
+    np.add.at(tie_sums, inverse, ranks)
+    ranks = (tie_sums / counts)[inverse]
+
+    result[mask] = (ranks - 1.0) / (n - 1.0)
+    return result
+
+
+def _categorical_scores(cat_frame: pd.DataFrame, name: str) -> np.ndarray:
+    """Map one finding's categorical columns through the fusion score."""
+    return np.array([
+        fuse._score(p, s) for p, s in
+        zip(cat_frame[name], cat_frame[f"{name}_severity"])
+    ])
+
+
+def _categorical_informative(cat_frame: pd.DataFrame, name: str) -> np.ndarray:
+    return np.array([fuse._informative(p) for p in cat_frame[name]])
+
+
+def _combine_finding(cat_score, cat_ok, prob, prob_conf, cat_conf,
+                     strategy: str) -> np.ndarray:
+    """Combine one finding's two score vectors. `prob` may contain NaN."""
+    has_prob = ~np.isnan(prob)
+
+    if strategy == "score_average":
+        # Plain mean of the two scores. On the gold dump this matched rank
+        # averaging's AUC exactly while keeping a probability-like scale --
+        # its mean target sits at the gold prevalence, where rank scores are
+        # uniform by construction. Scale matters because these become BCE
+        # targets downstream.
+        return np.where(has_prob, 0.5 * (cat_score + prob), cat_score)
+
+    if strategy == "cat_primary_tiebreak":
+        tiebreak = np.where(has_prob, prob, 0.0)
+        combined = cat_score + TIEBREAK_EPSILON * tiebreak
+        return combined / (1.0 + TIEBREAK_EPSILON)
+
+    if strategy == "rank_average":
+        cat_rank = _tied_ranks_01(cat_score)
+        prob_rank = _tied_ranks_01(np.where(has_prob, prob, np.nan))
+        return np.where(has_prob, 0.5 * (cat_rank + prob_rank), cat_rank)
+
+    if strategy == "global_blend":
+        alpha = GLOBAL_BLEND_ALPHA
+        cat_rank = _tied_ranks_01(cat_score)
+        prob_rank = _tied_ranks_01(np.where(has_prob, prob, np.nan))
+        return np.where(has_prob,
+                        alpha * cat_rank + (1.0 - alpha) * prob_rank,
+                        cat_rank)
+
+    if strategy == "confidence_weighted":
+        w_cat = np.where(cat_ok, np.nan_to_num(cat_conf, nan=0.0), 0.0)
+        w_prob = np.where(has_prob, np.nan_to_num(prob_conf, nan=0.0), 0.0)
+        total = w_cat + w_prob
+        # Neither mode confident: fall back to the categorical score, which
+        # is zero for silence anyway.
+        blended = np.where(
+            total > 0,
+            (w_cat * cat_score + w_prob * np.where(has_prob, prob, 0.0))
+            / np.where(total > 0, total, 1.0),
+            cat_score,
+        )
+        return blended
+
+    raise ValueError(f"unknown strategy {strategy!r}; one of {STRATEGIES}")
+
+
+def combine(cat_frame: pd.DataFrame, prob_frame: pd.DataFrame,
+            strategy: str = DEFAULT_STRATEGY) -> pd.DataFrame:
+    """Merge the two extraction modes into one score frame.
+
+    Output has, per finding: `<name>` (score in [0, 1]), `<name>_informative`
+    (the *categorical* mode asserted something -- see the comment below, this
+    deliberately excludes the probability mode's context-guesses), and
+    `<name>_call` (the positive/negative call used for agreement weighting
+    downstream -- the categorical call where it exists, else probability
+    >= 0.5).
+    """
+    merged = cat_frame.merge(prob_frame, on=config.ID_COL,
+                             suffixes=("", "_prob"))
+    if len(merged) != len(cat_frame):
+        raise ValueError(
+            f"mode merge lost rows: {len(cat_frame)} -> {len(merged)}")
+
+    output = {config.ID_COL: merged[config.ID_COL].to_numpy()}
+    for name in config.LABELS:
+        cat_score = _categorical_scores(merged, name)
+        cat_ok = _categorical_informative(merged, name)
+        cat_conf = merged.get(
+            f"{name}_confidence",
+            pd.Series(1.0, index=merged.index)).to_numpy(dtype=float)
+        prob = merged[f"{name}_prob"].to_numpy(dtype=float)
+        prob_conf_col = merged.get(f"{name}_confidence_prob")
+        prob_conf = (prob_conf_col.to_numpy(dtype=float)
+                     if prob_conf_col is not None
+                     else np.ones(len(merged)))
+        has_prob = ~np.isnan(prob)
+
+        combined = _combine_finding(cat_score, cat_ok, prob, prob_conf,
+                                    cat_conf, strategy)
+        output[name] = np.clip(combined, 0.0, 1.0)
+        # Informative means an extractor *asserted* something, which only the
+        # categorical mode tracks. The probability mode is never silent -- its
+        # prompt asks it to estimate unmentioned findings from context -- so
+        # `cat_ok | has_prob` would be True everywhere and would silently
+        # retire the silence down-weighting. That is not a free change: 34.5%
+        # of slots are both-silent, and lifting them from WEIGHT_SILENT to
+        # WEIGHT_SINGLE puts 2.8x the training mass on the least trustworthy
+        # third of the corpus. The probability estimate still ranks studies
+        # inside that block, which is the tie-breaking gain worth having --
+        # the value is kept, the certainty is not asserted.
+        output[f"{name}_informative"] = cat_ok
+        output[f"{name}_call"] = np.where(
+            cat_ok, cat_score > 0, np.where(has_prob, prob >= 0.5, False)
+        ).astype(bool)
+
+    return pd.DataFrame(output)
+
+
+def from_categorical(cat_frame: pd.DataFrame) -> pd.DataFrame:
+    """A score frame from the categorical mode alone.
+
+    The baseline every strategy is compared against, and the shape `combine`
+    degrades to when the probability frame has nothing to say.
+    """
+    output = {config.ID_COL: cat_frame[config.ID_COL].to_numpy()}
+    for name in config.LABELS:
+        score = _categorical_scores(cat_frame, name)
+        ok = _categorical_informative(cat_frame, name)
+        output[name] = score
+        output[f"{name}_informative"] = ok
+        output[f"{name}_call"] = (score > 0) & ok
+    return pd.DataFrame(output)
+
+codex
+The code supports the plan’s main integration choices: a new correction function is needed, the baseline generator supports all five folds with protocol selection, and submission packaging is hard-coded to 15 models. The plan addresses those constraints. I’m checking the remaining test and provenance assumptions before issuing the verdict.
+exec
+/bin/zsh -lc "sed -n '1,115p' tools/prepare_protocol_submission.py; sed -n '1,140p' tools/prepare_protocol_benchmark.py; sed -n '1,140p' tests/test_audit_labels.py; sed -n '1,100p' tests/test_protocol_benchmark.py; cat docs/rules_notes.md" in /private/tmp/claude-501/-Users-pssv-PycharmProjects-knee-competition/8d9a739e-ad35-4f33-9528-76c72c8d6476/scratchpad/knee-sanitized
+ succeeded in 0ms:
+"""Stage the benchmarked fixed protocol ensemble; never launch or submit."""
+
+import ast
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from src.model import artifacts
+from tools.prepare_protocol_benchmark import INPUT_SEARCH
+
+
+def validate_benchmark(report, manifest_hash, expected):
+    if (report.get("fatal_error") or report.get("errors") or report.get("members") != 15
+            or not report.get("references_complete") or not report.get("raw_complete")
+            or not report.get("runtime_gate_passed")
+            or not 0 < report.get("projected_1300_study_hours", 0) < 6.3):
+        raise ValueError("A complete passing 15-model benchmark is required")
+    if report.get("manifest_sha256") != manifest_hash or report.get("checkpoints") != expected:
+        raise ValueError("Benchmark did not use this exact ensemble")
+    checks = report.get("reference_checks", [])
+    if (len(checks) != 15 or {c["identity"] for c in checks} != set(expected)
+            or any(len(c["studies"]) != 8 or not 0 <= c["max_abs_delta"] < .01 for c in checks)):
+        raise ValueError("Incomplete or failed reference reproduction")
+    raw = report.get("raw_studies", [])
+    if len(raw) != 100 or len({r["uid"] for r in raw}) != 100:
+        raise ValueError("Expected 100 unique timed studies")
+
+
+def prepare(root=ROOT):
+    root = Path(root)
+    upload = root / "outputs/kaggle_protocol_ensemble_upload"
+    staging = root / "outputs/kaggle_protocol_ensemble_benchmark"
+    staged = json.loads((staging / "staging_receipt.json").read_text())
+    manifest_bytes = (upload / "ensemble.json").read_bytes()
+    manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+    expected = {}
+    members = json.loads(manifest_bytes)["members"]
+    if len(members) != 15 or any(m["weight"] != 1 / 15 for m in members):
+        raise ValueError("Expected fifteen equal selected members")
+    for member in members:
+        meta = artifacts.load_metadata(upload / member["checkpoint"])
+        identity = f"{meta['experiment']['name']}:{meta['fold']}"
+        if identity in expected:
+            raise ValueError("Duplicate family/fold")
+        expected[identity] = meta["sha256"]
+    if manifest_hash != staged["manifest_sha256"] or expected != {k: v["sha256"] for k, v in staged["members"].items()}:
+        raise ValueError("Package changed since benchmark staging")
+    report = json.loads((root / "outputs/kaggle_protocol_ensemble_benchmark_results/benchmark_report.json").read_text())
+    validate_benchmark(report, manifest_hash, expected)
+    notebook_path = root / "notebooks/10_submit_ensemble.ipynb"
+    if artifacts.sha256(notebook_path) != staged["notebook_sha256"]:
+        raise ValueError("Inference source changed since benchmark")
+    notebook = json.loads(notebook_path.read_text())
+    sources = ["".join(c["source"]) for c in notebook["cells"] if c["cell_type"] == "code"]
+    if len(sources) != 5:
+        raise ValueError("Submission template changed")
+    setup = ast.parse("\n".join(line for line in sources[1].splitlines() if not line.startswith("!")))
+    finders = [i for i, node in enumerate(setup.body) if isinstance(node, ast.FunctionDef) and node.name == "find_inputs"]
+    if len(finders) != 1:
+        raise ValueError("Input finder changed")
+    setup.body[finders[0]] = ast.parse('def find_inputs(pattern):\n    return [str(p) for p in attached_files(pattern)]').body[0]
+    sources[1] = ast.unparse(setup) + '\nassert device == "cuda"\ntorch.set_num_threads(2)\n'
+    header = 'import hashlib, json, os, pathlib, time\nSUBMISSION_STARTED = time.monotonic()\n' + INPUT_SEARCH
+    header += f'''
+manifests = attached_files("ensemble.json")
+assert len(manifests) == 1
+assert hashlib.sha256(manifests[0].read_bytes()).hexdigest() == {manifest_hash!r}
+os.environ["KNEE_ENSEMBLE_JSON"] = str(manifests[0])
+EXPECTED_CHECKPOINTS = {expected!r}
+'''
+    sources[2] += '''
+assert len(explicit_members) == len(tuned_models) == 15
+assert BLEND == 1.0 and not FLIP_TTA and not SOUP and not MEMBER_RANK_AVERAGE
+assert np.array_equal(np.asarray(member_weights), np.full(15, 1 / 15))
+actual_checkpoints = {f"{m['spec']['name']}:{m['metadata']['fold']}": m['metadata']['sha256'] for m in explicit_members}
+assert actual_checkpoints == EXPECTED_CHECKPOINTS
+'''
+    validation = '''
+assert not FAST_DECODE
+assert submission[config.ID_COL].tolist() == test_csv[config.ID_COL].tolist()
+assert submission.columns.tolist() == config.SUBMISSION_COLUMNS
+assert np.isfinite(submission[config.LABELS].to_numpy()).all()
+report = {"rows": len(submission), "members": len(explicit_members), "fallbacks": failures,
+          "checkpoints": actual_checkpoints, "weights": list(map(float, member_weights)),
+          "elapsed_seconds": time.monotonic() - SUBMISSION_STARTED,
+          "gpu": torch.cuda.get_device_name(), "columns": submission.columns.tolist(),
+          "submission_sha256": hashlib.sha256(pathlib.Path("/kaggle/working/submission.csv").read_bytes()).hexdigest()}
+pathlib.Path("/kaggle/working/submission_report.json").write_text(json.dumps(report, indent=2))
+print(json.dumps(report, indent=2))
+'''
+    code = [header, *sources, validation]
+    for source in code:
+        ast.parse(source)
+    notebook["cells"] = [{"cell_type": "markdown", "metadata": {}, "source": [
+        "# Fixed 16/24/protocol ensemble\n", "Five selected models per family, equal probability weights.\n"]}]
+    notebook["cells"] += [{"cell_type": "code", "metadata": {}, "execution_count": None,
+        "outputs": [], "source": source.splitlines(keepends=True)} for source in code]
+    output = root / "outputs/kaggle_protocol_submission"
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "submission.ipynb").write_text(json.dumps(notebook, indent=1) + "\n")
+    receipt = json.loads((root / "outputs/kaggle_protocol_ensemble_benchmark_receipt/kernel-metadata.json").read_text())
+    metadata = {"id": "pssv27/knee-16-24-protocol-fixed-blend", "title": "Knee 16 24 Protocol Fixed Blend",
+        "code_file": "submission.ipynb", "language": "python", "kernel_type": "notebook", "is_private": True,
+        "enable_gpu": True, "enable_internet": False, "machine_shape": "NvidiaTeslaT4",
+        "docker_image": receipt["docker_image"], "dataset_sources": receipt["dataset_sources"],
+        "kernel_sources": ["pssv27/knee-side-classifier"], "competition_sources": receipt["competition_sources"]}
+    (output / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    print(f"Staged {output}; no remote run or competition submission")
+
+
+if __name__ == "__main__":
+    prepare()
+"""Package and stage the fixed 15-model protocol benchmark; never upload or launch."""
+
+import ast
+import hashlib
+import json
+import shutil
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from src import config
+from src.model import artifacts
+from tools.compare_protocol_incumbent import completed_protocol_directory
+
+DATASET = "pssv27/knee-ensemble-protocol-private"
+KERNEL = "pssv27/knee-protocol-ensemble-benchmark"
+
+INPUT_SEARCH = '''
+def attached_files(pattern):
+    found = []
+    for root in sorted(pathlib.Path("/kaggle/input").iterdir()):
+        if (root.name in ("competitions", "rsna-knee-abnormality-detection")
+                or (root / "train.csv").exists() or (root / "train_series.csv").exists()):
+            continue
+        found.extend(root.rglob(pattern))
+    return sorted(found)
+'''
+
+
+def link_verified(source, dest):
+    """Reuse immutable weights without duplicating storage or accepting stale files."""
+    if dest.exists():
+        if artifacts.sha256(source) != artifacts.sha256(dest):
+            raise ValueError(f"Existing package file changed: {dest}")
+    else:
+        dest.hardlink_to(source)
+
+
+def prepare(root=ROOT):
+    root = Path(root)
+    incumbent = root / "outputs/ensemble_16_24"
+    report_path = root / "data/meta/compare_protocol_incumbent_all_folds/summary.json"
+    report = json.loads(report_path.read_text())
+    if (report["folds"] != list(range(5)) or report["shared_studies"] != 4349
+            or report["baseline_only"] or report["candidate_only"]
+            or any(v["candidate"] <= v["baseline"] for v in report["per_fold_macro"].values())
+            or report["paired_macro_delta_95ci"]["candidate"][0] <= 0):
+        raise ValueError("Full five-fold fixed-family comparison must pass")
+    members = json.loads((incumbent / "ensemble.json").read_text())["members"]
+    if len(members) != 10 or any(m["weight"] != .1 for m in members):
+        raise ValueError("Incumbent must contain ten equal selected models")
+    entries = []
+    for member in members:
+        source = incumbent / member["checkpoint"]
+        meta = artifacts.load_metadata(source)
+        entries.append((source, meta, "slices_" + str(meta["experiment"]["slices"])))
+    for fold in range(5):
+        source = completed_protocol_directory(root, fold) / f"convnext_fold{fold}.pt"
+        entries.append((source, artifacts.load_metadata(source), "protocol"))
+    expected = {(family, fold) for family in ("slices_16", "slices_24", "protocol") for fold in range(5)}
+    if len(entries) != 15 or {(family, meta["fold"]) for _, meta, family in entries} != expected:
+        raise ValueError("Expected five selected folds per family")
+    receipts = {(r["family"], r["fold"]): r for r in report["source_receipts"]}
+    # Validate every input before constructing the package; the comparison
+    # binds checkpoint and OOF hashes to the exact equal-family result.
+    for source, meta, family in entries:
+        receipt = receipts[family, meta["fold"]]
+        if meta["sha256"] != receipt["checkpoint_sha256"]:
+            raise ValueError("Checkpoint differs from full OOF comparison")
+        if artifacts.sha256(root / receipt["oof"]) != receipt["oof_sha256"]:
+            raise ValueError("OOF predictions changed since comparison")
+    output = root / "outputs/ensemble_16_24_protocol"
+    upload = root / "outputs/kaggle_protocol_ensemble_upload"
+    kernel = root / "outputs/kaggle_protocol_ensemble_benchmark"
+    for path in (output, upload, kernel):
+        path.mkdir(parents=True, exist_ok=True)
+    manifest, provenance, expected_hashes = {"members": []}, [], {}
+    for source, meta, family in entries:
+        filename = f"{family}_fold{meta['fold']}.pt"
+        reference = f"reference_{family}_fold{meta['fold']}.parquet"
+        for suffix in ("", ".json"):
+            link_verified(Path(str(source) + suffix), output / (filename + suffix))
+            link_verified(output / (filename + suffix), upload / (filename + suffix))
+        receipt = receipts[family, meta["fold"]]
+        link_verified(root / receipt["oof"], upload / reference)
+        manifest["members"].append({"checkpoint": filename, "weight": 1 / 15})
+        identity = f"{meta['experiment']['name']}:{meta['fold']}"
+        if identity in expected_hashes:
+            raise ValueError("Duplicate model identity")
+        expected_hashes[identity] = {"sha256": meta["sha256"], "reference": reference}
+        provenance.append({**receipt, "source": str(source.relative_to(root)), "checkpoint": filename})
+    manifest_bytes = (json.dumps(manifest, indent=2) + "\n").encode()
+    for directory in (output, upload):
+        (directory / "ensemble.json").write_bytes(manifest_bytes)
+        (directory / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+        shutil.copy2(incumbent / "reconstructed_folds.parquet", directory / "reconstructed_folds.parquet")
+        shutil.copy2(report_path, directory / "oof_comparison.json")
+    (upload / "dataset-metadata.json").write_text(json.dumps({
+        "id": DATASET, "title": "Knee Ensemble Protocol Private", "licenses": [{"name": "other"}],
+        "description": "Fixed selected 16/24/protocol ensemble and held-out reference predictions for private inference verification."
+    }, indent=2) + "\n")
+    notebook_path = root / "notebooks/10_submit_ensemble.ipynb"
+    notebook = json.loads(notebook_path.read_text())
+    sources = ["".join(c["source"]) for c in notebook["cells"] if c["cell_type"] == "code"]
+    if len(sources) != 5:
+        raise ValueError("Submission notebook structure changed")
+    bootstrap, setup, models, inference, _ = sources
+    setup = "\n".join(line for line in setup.splitlines() if not line.startswith("!"))
+    tree = ast.parse(setup)
+    finders = [i for i, node in enumerate(tree.body) if isinstance(node, ast.FunctionDef) and node.name == "find_inputs"]
+    if len(finders) != 1:
+        raise ValueError("Submission input finder changed")
+    tree.body[finders[0]] = ast.parse('def find_inputs(pattern):\n    return [str(p) for p in attached_files(pattern)]').body[0]
+    setup = ast.unparse(tree)
+    marker = "ids, frozen_rows, tuned_rows, failures = [], [], [], 0"
+    if inference.count(marker) != 1:
+        raise ValueError("Submission inference boundary changed")
+    inference = inference.split(marker)[0]
+    header = '''import hashlib, json, os, time, threading, pathlib
+RUN_STARTED = time.monotonic()
+def hard_stop():
+    print("Benchmark wall-time limit reached", flush=True)
+    os._exit(124)
+watchdog = threading.Timer(3500, hard_stop)
+watchdog.daemon = True
+watchdog.start()
+'''
+    header += INPUT_SEARCH
+    header += f'''
+manifests = attached_files("ensemble.json")
+assert len(manifests) == 1, "Expected exactly one ensemble manifest"
+assert hashlib.sha256(manifests[0].read_bytes()).hexdigest() == {hashlib.sha256(manifest_bytes).hexdigest()!r}
+os.environ["KNEE_ENSEMBLE_JSON"] = str(manifests[0])
+EXPECTED_MODELS = {expected_hashes!r}
+'''
+    source = "\n\n".join((header, bootstrap, setup,
+        'assert device == "cuda", "GPU required"\ntorch.set_num_threads(2)', models, inference,
+        (root / "tools/protocol_benchmark_body.py").read_text()))
+    ast.parse(source)
+"""Tests for the label-matrix audit, on a synthetic corpus with known answers.
+
+The audit's whole value is that it can fail. On the real corpus every check
+passes, which proves nothing about the checks themselves -- a function that
+returns True unconditionally would look identical. So the fixtures here are
+built with the answer known in advance, and every check is exercised twice:
+once on data that should pass, once on data broken in the specific way that
+check exists to catch.
+
+The synthetic corpus is deliberately multilingual and deliberately silent in
+places, because those are the two properties the audit measures.
+"""
+
+import os
+import sys
+
+import numpy as np
+import pandas as pd
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src import config  # noqa: E402
+from src.labels import fuse  # noqa: E402
+from tools import audit_labels  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+REPORTS = {
+    # One report per language the detector claims to separate. Each is written
+    # the way that language actually writes it -- the Bulgarian carries the
+    # definite-article suffix, the Croatian coordinates the two menisci --
+    # because those are exactly the constructions the stem lists miss.
+    "en": "MRI of the right knee. Tear of the medial meniscus posterior horn. "
+          "Small joint effusion. The ACL is intact.",
+    "es": "RMN de rodilla derecha. Rotura del menisco medial. "
+          "Derrame articular leve. Los ligamentos cruzados sin alteraciones.",
+    "bg": "ЯМР на дясна колянна става. Установява се увреда на задния рог на "
+          "медиалния менискус. Ставният хрущял е изтънен. Налице е ставен излив.",
+    "hr": "MR desnog koljena. Medijalni i lateralni menisk uredne morfologije. "
+          "Prikazuje se manji izljev u zglobu.",
+    "el": "Μαγνητική τομογραφία δεξιού γόνατος. Ρήξη του έσω μηνίσκου. "
+          "Παρουσία αρθρικής συλλογής.",
+    "tr": "Sag diz MR. Medial menisk arka boynuzunda yirtik izlenmistir. "
+          "Eklem icinde efuzyon mevcuttur.",
+}
+
+
+def fake_ids(n):
+    return [f"1.2.826.0.1.3680043.8.498.{i:051d}" for i in range(n)]
+
+
+def fake_corpus(n_per_language=4, n_gold=6, seed=0):
+    """A train.csv-shaped frame: reports, plus labels on the gold rows only.
+
+    `calibrate.load_gold` splits on whether the first finding column is null,
+    so the gold rows are the ones carrying integers and the mined rows are the
+    ones carrying NaN. Reproducing that convention here is the point -- a
+    fixture that got it backwards would test nothing.
+    """
+    rng = np.random.default_rng(seed)
+    languages = list(REPORTS)
+    rows = []
+    for i in range(n_per_language * len(languages)):
+        rows.append({"Report": REPORTS[languages[i % len(languages)]]})
+    frame = pd.DataFrame(rows)
+    frame.insert(0, config.ID_COL, fake_ids(len(frame)))
+    for name in config.LABELS:
+        frame[name] = np.nan
+    # The gold rows get integer labels; everything else stays NaN.
+    for i in range(n_gold):
+        for name in config.LABELS:
+            frame.loc[i, name] = int(rng.random() < 0.35)
+    return frame
+
+
+def fake_label_matrix(ids, seed=0, silent_share=0.345, mean_weight=0.625):
+    """A train_labels-shaped frame hitting the documented properties on purpose.
+
+    Built to satisfy `check_properties` so that the failing case below is
+    unambiguous: if the passing fixture did not pass, a later failure would be
+    the fixture's fault rather than the check's.
+    """
+    rng = np.random.default_rng(seed)
+    n = len(ids)
+    out = {config.ID_COL: list(ids)}
+    for name in config.LABELS:
+        # 75% of targets extreme, matching the shipped shape.
+        extreme = rng.random(n) < 0.75
+        target = np.where(extreme,
+                          np.where(rng.random(n) < 0.5, rng.random(n) * 0.05,
+                                   0.95 + rng.random(n) * 0.05),
+                          0.1 + rng.random(n) * 0.8)
+        # Weights drawn so the mean lands near 0.625 with ~34.5% at 0.25.
+        draw = rng.random(n)
+        weight = np.where(draw < silent_share, fuse.WEIGHT_SILENT,
+                          np.where(draw < 0.60, fuse.WEIGHT_SINGLE,
+                                   np.where(draw < 0.66, fuse.WEIGHT_DISAGREE,
+                                            fuse.WEIGHT_AGREE)))
+        out[name] = target
+        out[f"{name}_weight"] = weight
+    return pd.DataFrame(out)
+
+
+# ---------------------------------------------------------------------------
+# A. Reproduction
+# ---------------------------------------------------------------------------
+
+class TestReproduction:
+    def test_identical_frames_pass(self):
+        frame = fake_label_matrix(fake_ids(50))
+        assert audit_labels.check_reproduction(frame, frame.copy()) is True
+
+    def test_one_changed_cell_fails(self):
+        """The check exists for this: a single drifted number, nothing else."""
+        frame = fake_label_matrix(fake_ids(50))
+        broken = frame.copy()
+        broken.loc[7, "ACL"] = broken.loc[7, "ACL"] + 1e-6
+        assert audit_labels.check_reproduction(frame, broken) is False
+
+    def test_changed_weight_fails(self):
+        """Weights are half the artifact and are easy to forget."""
+        frame = fake_label_matrix(fake_ids(50))
+        broken = frame.copy()
+        broken.loc[3, "Effusion_weight"] = fuse.WEIGHT_SILENT
+        assert audit_labels.check_reproduction(frame, broken) is False
+
+    def test_reordered_studies_fail(self):
+        frame = fake_label_matrix(fake_ids(50))
+        assert audit_labels.check_reproduction(
+            frame, frame.iloc[::-1].reset_index(drop=True)) is False
+
+    def test_missing_column_fails(self):
+        frame = fake_label_matrix(fake_ids(50))
+        assert audit_labels.check_reproduction(
+            frame, frame.drop(columns=["ACL_weight"])) is False
+
+"""Exercise the fixed package, guarded input discovery and GPU benchmark orchestration."""
+
+import ast
+import hashlib
+import json
+import shutil
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pandas as pd
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from src import config
+from src.model import artifacts, dataset
+from tools.prepare_protocol_benchmark import INPUT_SEARCH, prepare
+
+
+def test_package_preserves_incumbent_and_binds_all_fifteen_members(tmp_path):
+    incumbent = tmp_path / "outputs/ensemble_16_24"
+    incumbent.mkdir(parents=True)
+    members, receipts = [], []
+    for family in ("slices_16", "slices_24", "protocol"):
+        for fold in range(5):
+            if family == "protocol":
+                suffix = "results" if fold in (1, 3) else "comparison_download"
+                result = tmp_path / f"outputs/kaggle_protocol_fold{fold}_{suffix}"
+                directory = result / f"protocol_fold{fold}"
+                directory.mkdir(parents=True)
+                name = "pair_progress.json" if fold in (1, 3) else "completion_progress.json"
+                (result / name).write_text(json.dumps({"state": "complete", "fold": fold,
+                    "completed": [f"protocol_fold{fold}"]}))
+                source = directory / f"convnext_fold{fold}.pt"
+            else:
+                source = incumbent / f"{family}_fold{fold}.pt"
+                members.append({"checkpoint": source.name, "weight": .1})
+            source.write_bytes(f"{family}:{fold}".encode())
+            spec = {"name": family, "slices": 24 if family == "slices_24" else 16,
+                    "max_series": 5, "series_selection": "protocol" if family == "protocol" else "uniform"}
+            artifacts.write_metadata(source, spec, fold, [], [])
+            oof = source.with_suffix(".parquet")
+            oof.write_bytes(b"fixture OOF")
+            receipts.append({"family": family, "fold": fold, "checkpoint_sha256": artifacts.sha256(source),
+                "oof": str(oof.relative_to(tmp_path)), "oof_sha256": artifacts.sha256(oof)})
+    manifest_bytes = json.dumps({"members": members}).encode()
+    (incumbent / "ensemble.json").write_bytes(manifest_bytes)
+    (incumbent / "reconstructed_folds.parquet").write_bytes(b"fixture folds")
+    report = tmp_path / "data/meta/compare_protocol_incumbent_all_folds/summary.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"folds": list(range(5)), "shared_studies": 4349,
+        "baseline_only": 0, "candidate_only": 0,
+        "per_fold_macro": {str(f): {"baseline": .8, "candidate": .81} for f in range(5)},
+        "paired_macro_delta_95ci": {"candidate": [.005, .015]}, "source_receipts": receipts}))
+    for name in ("notebooks/10_submit_ensemble.ipynb", "tools/protocol_benchmark_body.py",
+                 "outputs/kaggle_sources/knee-finetune/kernel-metadata.json"):
+        dest = tmp_path / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, dest)
+    prepare(tmp_path)
+    prepare(tmp_path)
+    assert (incumbent / "ensemble.json").read_bytes() == manifest_bytes
+    upload = tmp_path / "outputs/kaggle_protocol_ensemble_upload"
+    manifest = json.loads((upload / "ensemble.json").read_text())
+    assert len(manifest["members"]) == 15
+    assert all(m["weight"] == 1 / 15 for m in manifest["members"])
+    assert len(list(upload.glob("*.pt"))) == 15 and len(list(upload.glob("reference_*.parquet"))) == 15
+    kernel = tmp_path / "outputs/kaggle_protocol_ensemble_benchmark"
+    meta = json.loads((kernel / "kernel-metadata.json").read_text())
+    assert meta["is_private"] and meta["enable_gpu"] and not meta["enable_internet"]
+    source = (kernel / "benchmark.py").read_text()
+    ast.parse(source)
+    assert "competition_submit(" not in source and "submission.to_csv" not in source
+    (tmp_path / receipts[0]["oof"]).write_bytes(b"changed OOF")
+    with pytest.raises(ValueError, match="OOF predictions changed"):
+        prepare(tmp_path)
+
+
+def test_search_never_recurses_into_raw_competition(tmp_path, monkeypatch):
+    for name in ("competitions", "rsna-knee-abnormality-detection", "unusual-mount", "datasets/user/package"):
+        path = tmp_path / name
+        path.mkdir(parents=True)
+        (path / "ensemble.json").touch()
+    (tmp_path / "unusual-mount/train_series.csv").touch()
+    original = Path.rglob
+    def guarded(path, pattern):
+        assert path.name not in {"competitions", "rsna-knee-abnormality-detection", "unusual-mount"}
+        return original(path, pattern)
+    monkeypatch.setattr(Path, "rglob", guarded)
+    namespace = {"pathlib": SimpleNamespace(Path=lambda p: tmp_path)}
+    exec(INPUT_SEARCH, namespace)
+    assert namespace["attached_files"]("ensemble.json") == [tmp_path / "datasets/user/package/ensemble.json"]
+
+
+@pytest.mark.parametrize("bad_reference", [False, True])
+def test_benchmark_checks_every_member_before_timing_raw_studies(tmp_path, monkeypatch, bad_reference):
+    ids = [f"study{i:04}" for i in range(4349)]
+# Competition constraints — verified
+
+Pulled from the competition pages on 2026-08-23 via the Kaggle SDK
+(`ApiListCompetitionPagesRequest`), not from secondary sources. Full text is in
+`competition_pages.md`.
+
+Regenerate with:
+
+```python
+from kagglesdk import KaggleClient, KaggleEnv
+from kagglesdk.competitions.types.competition_api_service import ApiListCompetitionPagesRequest
+with KaggleClient(env=KaggleEnv.PROD) as client:
+    req = ApiListCompetitionPagesRequest()
+    req.competition_name = "rsna-knee-abnormality-detection"
+    pages = client.competitions.competition_api_client.list_competition_pages(req).pages
+```
+
+## Code requirements
+
+| Constraint | Value |
+|---|---|
+| Submission | Notebooks only |
+| Runtime | **≤ 9 hours**, CPU or GPU alike |
+| Internet | **Disabled** |
+| External data | Allowed if **freely and publicly available**, equally accessible to all participants |
+| **Pretrained models** | **Allowed explicitly** |
+| Output filename | `submission.csv` |
+
+Pretrained weights being permitted is what unblocks the Phase 4 backbone
+bake-off. DINOv2-S, ConvNeXt-T, Swin-T, and EfficientNetV2-S all qualify as
+freely and publicly available. Weights must still be pre-uploaded as a dataset,
+since the submission notebook has no internet.
+
+## Metric
+
+Macro-averaged ROC AUC over the twelve findings:
+
+    Final Score = (1/12) * sum(AUC_i for i in 0..11)
+
+Submission columns, exactly:
+
+```
+StudyInstanceUID,ACL,MCL,Medial Meniscus,Lateral Meniscus,Medial OA,Lateral OA,PF OA,Effusion,Synovitis,Baker's,Contusion,Fracture
+```
+
+## Efficiency Prize — a second track
+
+Not previously known, and it changes the calculus. A separate prize pool of
+$7,000 / $6,000 / $5,000 ranks submissions by:
+
+    Efficiency = AUC / (Benchmark - maxAUC) + RuntimeSeconds / 32400
+
+Minimised. `Benchmark` is the `sample_submission.csv` score, `maxAUC` the best
+private-leaderboard score. Runtime is divided by 32,400 — the 9-hour limit in
+seconds — so a submission using the full budget carries a penalty of 1.0 while a
+30-minute one carries 0.056.
+
+Eligibility: must be among the team's selected submissions and must beat the
+`sample_submission.csv` benchmark on the private leaderboard. A single
+submission can win both tracks.
+
+**Implication for design.** Runtime is no longer only a constraint to stay under
+— it is scored. A frozen DINOv2-S trunk with a light aggregation head is
+well-placed here: the backbone runs once per slice with no gradient, and the
+head is small. Heavy test-time augmentation and large ensembles buy AUC at a
+direct efficiency cost, so they should be measured against both metrics rather
+than assumed good.
+
+## Data security — the report-text question, settled
+
+From the rules:
+
+> You agree not to transmit, duplicate, publish, redistribute or otherwise
+> provide or make available the Competition Data to any party not participating
+> in the Competition.
+
+Report text is Competition Data. Sending it to a hosted LLM API would provide it
+to a non-participant, so the local open-weights approach taken in
+`notebooks/03_extract_labels.ipynb` was the correct one — the model ran on the
+Colab GPU and no report text left the session.
+
+The competition data is additionally subject to <http://rsna.org/mira-license>.
+
+## Sharing
+
+- No private sharing of code outside teams.
+- Public sharing is permitted, but only on Kaggle's forums or notebooks for this
+  competition.
+
+## Timeline
+
+| Date | Event |
+|---|---|
+| 2026-07-30 | Start |
+| **2026-10-15** | Entry deadline, team merger deadline |
+| **2026-10-22** | Final submission |
+
+## Data description — confirmations
+
+- Per-study probability for each of twelve findings.
+- "Only a small subset of training studies carry per-condition labels" — the 58.
+- Reports are provided explicitly so participants "may wish to derive the labels
+  for the remaining studies", which is the intended path and what the fusion
+  pipeline does.
+- `Fluid_Sensitive` and `Fat_Suppression` are "often correlated ... but not
+  necessarily equivalent for every case", so both should be passed to the model
+  rather than collapsed into one flag.
+- Studies span "a diverse international mix of imaging sites", consistent with
+  the missing-laterality pattern being institutional.
+
+codex
+VERDICT: APPROVE
+
+## Critique
+
+- none
+tokens used
+41,527
+VERDICT: APPROVE
+
+## Critique
+
+- none

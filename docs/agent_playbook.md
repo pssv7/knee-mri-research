@@ -1,9 +1,25 @@
 # Agent playbook — how to think about this project
 
+**September 24 override:** the current user-directed approach is
+[validation credibility and a standalone model](validation_reset_20260924.md).
+The historical hierarchy below does not make public scores a reusable test or
+the repeatedly inspected gold 58 untouched. Global parameter choices also
+incur selection bias. No more ensemble expansion; no training before the new
+evidence gates. Historical rules and causal claims below are retained as history,
+not current authority. PROJECT.md has the reconciled latest artifact state.
+
 Written for any model or person continuing this work. `PROJECT.md` records
-*what* is true; `docs/plan.md` records *what's next*; this file records *how
+*what* is true; `docs/target_0954_plan.md` records *what's next*; this file records *how
 decisions get made here*, because the method is what has produced the gains
 and the recorded failures are what happens when it is skipped.
+
+**Current handoff:** submission **56135074** completed at **0.911**, verified
+2026-09-10. The user authorized further development/training and explicitly
+removed GPU-hour scarcity as a constraint. Start with the matched fold-1
+baseline/protocol job; preserve the incumbent ensemble. Read the active update
+in `PROJECT.md` and `docs/target_0954_plan.md` before acting. The older guidance
+below is historical where it conflicts with that measured plan; in particular,
+do not replace the submitted selected weights with EMA/SWA automatically.
 
 ---
 

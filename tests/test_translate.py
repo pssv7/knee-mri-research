@@ -89,3 +89,20 @@ def test_the_committed_notebook_matches_its_generator():
     nb = prepare_translation_colab.make()
     on_disk = json.load(open(prepare_translation_colab.NOTEBOOK, encoding="utf-8"))
     assert on_disk["cells"] == nb.cells
+
+
+def test_kaggle_variant_installs_before_torch_and_checks_before_translating():
+    code = ["".join(c["source"]) for c in prepare_translation_colab.make("kaggle").cells if c["cell_type"] == "code"]
+    for cell in code:
+        ast.parse(cell)
+    install = next(i for i, c in enumerate(code) if '"install", "-q", "vllm"' in c)
+    assert all("import torch" not in c for c in code[:install + 1])
+    check = next(i for i, c in enumerate(code) if "translate.self_check(" in c)
+    reports = next(i for i, c in enumerate(code) if 'r["report"]' in c and "generate(" in c)
+    assert install < check < reports
+    assert any("drive.mount" in c for c in ["".join(x["source"]) for x in prepare_translation_colab.make().cells])
+    assert not any("drive.mount" in c or "google.colab" in c for c in code)
+    embedded = next(c for c in code if "TRANSLATE_SOURCE =" in c)
+    namespace = {}
+    exec(embedded.split("pathlib.Path(")[0].split("import importlib, pathlib, sys")[1], namespace)
+    assert namespace["TRANSLATE_SOURCE"] == open(translate.__file__, encoding="utf-8").read()

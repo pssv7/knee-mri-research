@@ -257,7 +257,7 @@ class StudyIndex:
 
 
 def load_study(index: StudyIndex, study: str, shards: Dict[str, np.ndarray],
-               series_rng=None) -> Dict:
+               series_rng=None, duplicate_free=False) -> Dict:
     """Assemble one study: mirrored volumes, conditioning, targets, weights.
 
     `series_rng` is forwarded to `series_for` and is training-only; see there.
@@ -270,6 +270,19 @@ def load_study(index: StudyIndex, study: str, shards: Dict[str, np.ndarray],
         volume = np.asarray(shard[int(row["position"])])
         volume = mirror_volume(volume, row.get("side_predicted"),
                                row.get("Anatomical_Plane"))
+        if duplicate_free:
+            from src.data.sampling import sample_cached_volume
+            raw_count = row.get("n_slices_raw")
+            # pandas may coerce integral manifest counts to float when rows
+            # contain missing values; accept only finite exact integers.
+            if pd.isna(raw_count) or isinstance(raw_count, (bool, np.bool_)) or not np.isfinite(raw_count) or int(raw_count) != raw_count:
+                raise ValueError('Missing or invalid raw-count provenance')
+            if bool(row.get("mirrored", False)):
+                raise ValueError('Duplicate-free policy requires unmirrored source caches')
+            reverse = (str(row.get("side_predicted")).strip().upper() == 'L'
+                       and row.get("Anatomical_Plane") == 'Sagittal')
+            volume = sample_cached_volume(volume, int(raw_count),
+                                          duplicate_free=True, depth_reversed=reverse)
         volumes.append(volume)
         meta.append(series_metadata(row))
 
