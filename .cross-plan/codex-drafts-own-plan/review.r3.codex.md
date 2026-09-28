@@ -1,5 +1,0 @@
-VERDICT: APPROVE
-
-## Critique
-
-- none
