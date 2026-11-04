@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "scope": "Experimental training-only categorical-call repairs",
+  "eligible_states": ["present", "negated"],
+  "required_certainty": "definite",
+  "same_call_policy": "Keep original severity and target",
+  "ambiguous_silent_below_threshold_policy": "Keep original target",
+  "probability_mode": "Keep original Qwen probability output",
+  "lexicon": "Keep original rule extractor",
+  "severity_mapping": "Existing 0.35 / 0.85 / 1.0, not-stated defaults to 0.85, only for newly positive calls",
+  "target_mapping": "Fit original training-only empirical mapping once on unchanged control; apply only to changed categorical calls",
+  "sample_weights": "Unchanged",
+  "selection_outer_labels": "Unchanged",
+  "automatic_adoption": false,
+  "image_accuracy_claim": false
+}

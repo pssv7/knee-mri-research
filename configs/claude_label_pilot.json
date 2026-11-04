@@ -1,0 +1,16 @@
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet-5-5",
+  "reasoning_effort": "low",
+  "thinking": "adaptive",
+  "max_output_tokens": 6000,
+  "input_usd_per_million": 2.0,
+  "input_reservation_usd_per_million": 4.0,
+  "cache_write_upper_usd_per_million": 4.0,
+  "output_usd_per_million": 10.0,
+  "price_checked_on": "2026-09-29",
+  "price_source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "price_note": "Standard global routing, no tools or explicit cache. Reserve all input at the one-hour cache-write rate; actual invoice is authoritative.",
+  "max_cost_usd": 10.0,
+  "automatic_training_label_replacement": false
+}

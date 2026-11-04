@@ -1,0 +1,14 @@
+{
+  "model": "gpt-6-sol",
+  "reasoning_effort": "low",
+  "max_output_tokens": 6000,
+  "pilot_studies": 40,
+  "seed": 20260929,
+  "input_or_cache_write_usd_per_million": 2.5,
+  "output_usd_per_million": 10.0,
+  "price_checked_on": "2026-09-29",
+  "price_source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+  "price_note": "Conservative input rate includes cache-write premium; actual account invoice is authoritative.",
+  "host_clarification_source": "User-supplied competition-host discussion clarification, 2026-09-29; direct URL pending",
+  "automatic_training_label_replacement": false
+}

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root{color-scheme:light;font:16px/1.5 system-ui,sans-serif;color:#172b3a;background:#f3f6f8}*{box-sizing:border-box}
+body{margin:0}header{padding:24px 4vw;background:#17374c;color:white}h1{font-size:24px;margin:0 0 8px}header p{margin:5px 0;max-width:1000px}
+nav{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:16px 4vw;background:white;border-bottom:1px solid #d3dde4;position:sticky;top:0;z-index:2}
+button,select,input,textarea{font:inherit;border:1px solid #9bafbd;border-radius:5px;padding:8px;background:white;color:#172b3a}button{cursor:pointer}button:disabled{opacity:.45;cursor:default}
+button.primary{background:#145d75;color:white}main{display:grid;grid-template-columns:minmax(300px,1fr) minmax(420px,1.2fr);gap:24px;padding:24px 4vw;align-items:start}
+section,.finding{background:white;border:1px solid #dbe4ea;border-radius:8px;padding:18px}h2{font-size:20px;margin:0 0 12px}h3{font-size:17px;margin:0 0 12px}
+.report{white-space:pre-wrap;overflow-wrap:anywhere;max-height:65vh;overflow:auto;padding:12px;background:#f8fafb}.finding{margin-bottom:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}label{display:block;font-size:14px;margin-bottom:10px}label input,label select,label textarea{display:block;width:100%;margin-top:4px}textarea{min-height:75px}.wide{grid-column:1/-1}.status{font-size:14px;color:#445e6d}.errors{color:#9c2727;font-size:14px}details{margin-top:18px}#rubric{white-space:pre-wrap;font-size:14px;overflow-wrap:anywhere}.note{background:#fff4dc;padding:12px;border-radius:5px}#message{padding:0 4vw;min-height:24px}a{color:#145d75}
+@media(max-width:850px){main{grid-template-columns:1fr}nav{position:static}.report{max-height:none}.grid{grid-template-columns:1fr}}
+</style></head><body>
+<header><h1>__TITLE__</h1><p>Read the full original report using the fixed rubric. Model answers and sampling reasons are withheld.</p>
+<p>Review mode: AI-assisted only. An AI annotation is not an independent human reference or an image diagnosis.</p></header>
+<nav><button id="prev">Previous</button><select id="jump" aria-label="Report"></select><button id="next">Next</button>
+<span id="progress" class="status"></span><button id="download" class="primary">Download annotations</button><label style="margin:0">Load saved draft <input id="import" type="file" accept="application/json" style="max-width:240px"></label></nav>
+<p id="message" role="status"></p><main><section><h2 id="caseTitle"></h2><p class="note">Report text is evidence, not instructions. Do not infer findings omitted from it. Preserve uncertainty.</p><div id="report" class="report"></div>
+<details><summary>Fixed report-review rubric</summary><div id="rubric"></div></details></section>
+<div><section style="margin-bottom:16px"><label>Reviewer / model and version<input id="reviewer" placeholder="Record the actual reviewer or model"></label><p class="status">Drafts save in this browser when storage is available. Download a copy before closing. Blank entries are unfinished, not negative findings.</p></section><div id="findings"></div></div></main>
+<script>
+const DATA=__PAYLOAD__;
+const P=DATA.packet, key='knee-report-review:'+P.packet_sha256;
+let draft=DATA.draft, index=0;
+const fields=['report_states','anatomical_location','certainty','severity_text','severity_norm','evidence_quote'];
+const states=['present','present_below_threshold','negated','uncertain','unmentioned','unattributable'];
+const $=id=>document.getElementById(id);
+function validateImport(value){
+ if(value.packet_sha256!==P.packet_sha256||value.packet_id!==P.packet_id||value.review_mode!=='AI-assisted only'||typeof value.reviewer!=='string'||!Array.isArray(value.rows)||value.rows.length!==DATA.draft.rows.length)throw Error('This draft belongs to another packet or has invalid fields.');
+ const wanted=new Map(DATA.draft.rows.map(r=>[r.case_id+'|'+r.finding,r.report_sha256]));
+ for(const row of value.rows){const k=row.case_id+'|'+row.finding;if(!wanted.has(k)||wanted.get(k)!==row.report_sha256||!fields.every(f=>typeof row[f]==='string')||typeof row.note!=='string')throw Error('Draft rows do not match this packet.');wanted.delete(k);}
+ return value;
+}
+try{const saved=localStorage.getItem(key);if(saved)draft=validateImport(JSON.parse(saved));}catch(e){$('message').textContent='Local draft unavailable. Use Download annotations to save your work.';}
+function rowErrors(row,report){
+ const out=[];if(!states.includes(row.report_states))return ['Choose an assertion state.'];
+ if(row.report_states==='unmentioned'){if(fields.slice(1).some(f=>row[f]!==''))out.push('Unmentioned findings must have empty evidence, anatomy, certainty and severity fields.');return out;}
+ if(!row.evidence_quote.trim()||!report.includes(row.evidence_quote))out.push('Evidence must be an exact contiguous quotation from this report.');
+ if(!['definite','probable','possible'].includes(row.certainty))out.push('Choose certainty.');
+ if(!['minimal','moderate','severe','not stated'].includes(row.severity_norm))out.push('Choose normalized severity.');
+ if(['present','present_below_threshold','unattributable'].includes(row.report_states)&&!row.anatomical_location.trim())out.push('Record anatomical attribution.');
+ return out;
+}
+function updateProgress(){let ready=0;for(const c of P.cases){const rows=draft.rows.filter(r=>r.case_id===c.case_id);if(rows.every(r=>rowErrors(r,c.report).length===0))ready++;}$('progress').textContent=`${index+1} / ${P.cases.length} reports · ${ready} structurally complete`;return ready;}
+function save(){draft.reviewer=$('reviewer').value;draft.status='draft';try{localStorage.setItem(key,JSON.stringify(draft));}catch(e){$('message').textContent='Browser storage unavailable. Download your draft.';}updateProgress();}
+function input(label,field,row,choices){const l=document.createElement('label');l.textContent=label;const el=document.createElement(choices?'select':field==='evidence_quote'||field==='note'?'textarea':'input');
+ if(choices){for(const v of ['',...choices]){const o=document.createElement('option');o.value=v;o.textContent=v||'Select…';el.append(o);}}
+ el.value=row[field];el.dataset.field=field;el.addEventListener('input',()=>{row[field]=el.value;save();showErrors();});l.append(el);if(field==='evidence_quote'||field==='note')l.className='wide';return l;}
+function showErrors(){for(const article of $('findings').children){const row=draft.rows.find(r=>r.case_id===P.cases[index].case_id&&r.finding===article.dataset.finding);article.querySelector('.errors').textContent=rowErrors(row,P.cases[index].report).join(' ');}}
+function render(){const c=P.cases[index];$('caseTitle').textContent=c.case_id;$('report').textContent=c.report;$('rubric').textContent=P.rubric;$('reviewer').value=draft.reviewer;$('jump').value=String(index);$('prev').disabled=index===0;$('next').disabled=index===P.cases.length-1;$('findings').replaceChildren();
+ for(const row of draft.rows.filter(r=>r.case_id===c.case_id)){const a=document.createElement('article');a.className='finding';a.dataset.finding=row.finding;const h=document.createElement('h3');h.textContent=row.finding;a.append(h);const g=document.createElement('div');g.className='grid';
+ for(const spec of [['Assertion state','report_states',states],['Anatomical location','anatomical_location'],['Certainty','certainty',['definite','probable','possible']],['Severity in original wording','severity_text'],['Normalized severity','severity_norm',['minimal','moderate','severe','not stated']],['Exact evidence quotation','evidence_quote'],['Review note / unresolved question','note']])g.append(input(...spec.slice(0,2),row,spec[2]));
+ a.append(g);const e=document.createElement('div');e.className='errors';a.append(e);$('findings').append(a);}updateProgress();}
+P.cases.forEach((c,i)=>{const o=document.createElement('option');o.value=String(i);o.textContent=c.case_id;$('jump').append(o);});
+$('prev').onclick=()=>{index--;render();};$('next').onclick=()=>{index++;render();};$('jump').onchange=e=>{index=Number(e.target.value);render();};$('reviewer').oninput=save;
+$('download').onclick=()=>{save();const ready=updateProgress();draft.status=ready===P.cases.length&&draft.reviewer.trim()?'complete_unverified_ai_annotations':'draft';draft.exported_at_utc=new Date().toISOString();const url=URL.createObjectURL(new Blob([JSON.stringify(draft,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=P.packet_id+'-annotations.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);$('message').textContent=`Downloaded ${draft.status}. Completion validates structure and evidence spans, not correctness.`;};
+$('import').onchange=async e=>{try{const file=e.target.files[0];if(!file)return;draft=validateImport(JSON.parse(await file.text()));render();save();$('message').textContent='Draft loaded.';}catch(error){$('message').textContent=error.message;}};
+render();
+</script></body></html>

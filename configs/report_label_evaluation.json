@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "seed": 20260930,
+  "random_controls": 120,
+  "priority_findings": ["PF OA", "Lateral Meniscus", "Contusion"],
+  "priority_positive_per_finding": 10,
+  "priority_nonpositive_per_finding": 10,
+  "coverage_cases": 20,
+  "minimum_old_positive_per_finding": 5,
+  "minimum_per_language_heuristic": 4,
+  "review_mode": "AI-assisted only",
+  "human_reference_available": false,
+  "api_execution_authorized_by_this_preparation": false,
+  "automatic_training_label_replacement": false
+}
