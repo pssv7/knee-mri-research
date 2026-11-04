@@ -65,3 +65,8 @@ This is a research reference, not a clinical device. The repository does not
 contain the RSNA or OAI datasets, and recreating an experiment requires obtaining
 those assets under their respective terms. Historical metrics describe specific
 competition experiments and are not claims of clinical performance.
+
+## License
+
+The source code is available under the [MIT License](LICENSE). Competition and
+external datasets are excluded and remain subject to their own terms.
