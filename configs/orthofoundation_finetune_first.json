@@ -1,0 +1,6 @@
+{
+  "mode": "train",
+  "segment_epochs": 2,
+  "session_budget_seconds": 39600,
+  "resume": null
+}
