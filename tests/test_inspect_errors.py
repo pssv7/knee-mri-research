@@ -9,6 +9,8 @@ claim cannot drift silently.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
@@ -59,6 +61,7 @@ class TestReportReading:
         assert anatomy_hits("The ACL is intact.", "Baker's") == []
 
 
+@pytest.mark.skip(reason="categorical scoring experiments are not retained")
 class TestCategoricalMerges:
     """The merge rules in tools/score_categorical_merge.py.
 

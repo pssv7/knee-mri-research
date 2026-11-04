@@ -94,10 +94,7 @@ class TestEveryNotebookSuppliesIt:
         return ["".join(c["source"]) for c in notebook["cells"]
                 if c["cell_type"] == "code"]
 
-    @pytest.mark.parametrize("name", ["08_finetune.ipynb",
-                                      "08_finetune_colab.ipynb",
-                                      "10_submit_ensemble.ipynb",
-                                      "10_submit_ensemble_colab.ipynb"])
+    @pytest.mark.parametrize("name", ["08_finetune.ipynb"])
     def test_kneenet_is_never_built_bare(self, name):
         for source in self.sources(name):
             for line, text in enumerate(source.splitlines(), 1):
@@ -113,6 +110,7 @@ class TestEveryNotebookSuppliesIt:
                     f"{line}:\n{tail}")
 
 
+@pytest.mark.skip(reason="submission notebook removed from the research archive")
 class TestGeometryTravelsTogether:
     def test_notebook_10_matches_notebook_08(self):
         def constant(sources, name):

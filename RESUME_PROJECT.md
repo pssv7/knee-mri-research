@@ -1,10 +1,10 @@
 # Knee MRI Abnormality Detection: Resume Project Profile
 
-A reference for tailoring resumes, cover letters and interview answers. Every
-number here comes from the repo's own records (`PROJECT.md`,
-`docs/architecture.md`, `docs/worklog.md`, `docs/protocol_incumbent.md`,
-`docs/submission_protocol.md`). Check the figures marked *as of 2026-09-16*
-again before the competition closes on 2026-10-22.
+A historical reference for tailoring resumes, cover letters, and interview
+answers. It captures the project as of 2026-09-16 and therefore does not contain
+the final competition results. Use `PROJECT.md` for the retained final state and
+`docs/architecture.md` for the original system design. Verify every metric before
+using it externally.
 
 ---
 

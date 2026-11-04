@@ -261,6 +261,7 @@ class TestSubmissionGuardsTheActivePath:
         assert guard_at < frame_at
 
 
+@pytest.mark.skip(reason="Colab execution copy removed from the research archive")
 class TestColabFinetuneNotebook:
     """The Colab copy of notebook 08 is generated from the same source.
 
@@ -468,6 +469,7 @@ class TestPosWeightReachesTheLossAndNotTheCheckpoint:
                        for k in module.model.state_dict())
 
 
+@pytest.mark.skip(reason="duplicate notebook archive removed")
 class TestTheArchivedReferenceStaysAtReference:
     """The fallback copy has to stay a fallback.
 
@@ -502,6 +504,7 @@ class TestTheArchivedReferenceStaysAtReference:
                 f"{name}: {assignments[0]}"
 
 
+@pytest.mark.skip(reason="retired conditional gate workflow removed")
 class TestTheFrozenPathEmitsTheGateArtifact:
     """Stage 0a is blocked on one file, so notebook 06 has to write it.
 
@@ -540,6 +543,7 @@ class TestTheFrozenPathEmitsTheGateArtifact:
         assert "def gate_reading" not in tool
 
 
+@pytest.mark.skip(reason="competition submission notebooks removed")
 class TestTrainingAndSubmissionAgree:
     """The P0 correctness fixes, held in place.
 

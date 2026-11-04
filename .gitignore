@@ -27,7 +27,15 @@ docs/competition_pages.md
 # credentials -- never commit
 kaggle.json
 access_token
+.env
+.env.*
+claude.env
 /checkpoints/
+/side_model/
+/side_model.zip
+/hparams*.yaml
+/metrics*.csv
+/side_validation.csv
 
 # notebook-checker artefact (tools/check_notebook.py runs the sweep cell)
 gold_sweep.zip

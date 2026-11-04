@@ -3,11 +3,11 @@
 How 570 GB of knee MRI and 4,349 free-text radiology reports become twelve
 probabilities per study.
 
-This document describes the system that scores **0.906** on the public
-leaderboard: a five-fold ConvNeXt-T ensemble over a 29 GB image cache, trained
-against a label matrix manufactured from radiology reports. It covers what
-ships. `PROJECT.md` holds current state, `docs/worklog.md` holds the measured
-history including everything that failed, and `docs/plan.md` holds what is next.
+This document preserves the original standalone system that scored **0.906** on
+the public leaderboard: a five-fold ConvNeXt-T ensemble over a 29 GB image cache,
+trained against a label matrix manufactured from radiology reports. Later
+experiments and ensembles are summarized in `PROJECT.md`; their generated
+artifacts and campaign logs are deliberately excluded from the source archive.
 
 ---
 
@@ -209,9 +209,10 @@ mirroring bug a code fix rather than a 29 GB rebuild.
 The reports are **multilingual** — around eleven languages, English about 39%,
 then Greek, Croatian and Serbian, Spanish, Turkish, German, Bulgarian and
 Russian, Dutch, French, Italian, Portuguese. They are read in the original;
-nothing is translated first. Extraction runs a locally hosted quantised
-Qwen2.5-Instruct, because competition rules do not permit report text leaving
-the machine.
+nothing is translated first. The current baseline runs a locally hosted quantised
+Qwen2.5-Instruct. The host clarification supplied September 29 permits hosted
+inference, subject to accessibility and minimal-cost requirements; local inference
+is an implementation choice, not a blanket competition requirement.
 
 ```
                       ┌─────────────────────┐

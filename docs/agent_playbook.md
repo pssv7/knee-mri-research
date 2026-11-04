@@ -1,167 +1,78 @@
-# Agent playbook — how to think about this project
+# Research playbook
 
-**September 24 override:** the current user-directed approach is
-[validation credibility and a standalone model](validation_reset_20260924.md).
-The historical hierarchy below does not make public scores a reusable test or
-the repeatedly inspected gold 58 untouched. Global parameter choices also
-incur selection bias. No more ensemble expansion; no training before the new
-evidence gates. Historical rules and causal claims below are retained as history,
-not current authority. PROJECT.md has the reconciled latest artifact state.
+This project is archived after the competition. These rules preserve the useful
+reasoning without carrying forward obsolete queues or leaderboard instructions.
 
-Written for any model or person continuing this work. `PROJECT.md` records
-*what* is true; `docs/target_0954_plan.md` records *what's next*; this file records *how
-decisions get made here*, because the method is what has produced the gains
-and the recorded failures are what happens when it is skipped.
+## Start with the information bottleneck
 
-**Current handoff:** submission **56135074** completed at **0.911**, verified
-2026-09-10. The user authorized further development/training and explicitly
-removed GPU-hour scarcity as a constraint. Start with the matched fold-1
-baseline/protocol job; preserve the incumbent ensemble. Read the active update
-in `PROJECT.md` and `docs/target_0954_plan.md` before acting. The older guidance
-below is historical where it conflicts with that measured plan; in particular,
-do not replace the submitted selected weights with EMA/SWA automatically.
+The task had 4,349 report-labelled studies and only 58 expert-labelled studies.
+Model capacity was rarely the first constraint. Before changing an architecture,
+check whether the target, selected series, anatomical region, spatial resolution,
+or validation design hides the evidence the model needs.
 
----
+Use an oracle test when possible. Perfect or manually supplied localization on a
+small sample can test whether localization is limiting. A clean-label subset can
+test whether supervision is limiting. If the oracle does not help, reject the
+direction before paying for a full training run.
 
-## 1. The frame: this is a labels project wearing a vision costume
+## Separate evidence from selection
 
-4,407 studies, 58 real labels, 4,349 free-text reports. The imaging model is
-a commodity — anyone can fine-tune a ConvNeXt. The manufactured label matrix
-is the product. The model tracks its labels almost mechanically (labels 0.854
-→ model LB 0.845; labels are now 0.891). When deciding where the next hour
-goes, default to the text side unless there is direct evidence the model is
-the bottleneck (model trailing its labels by ≫0.02 under honest evaluation).
+- Group splits by study or patient identity.
+- Keep a final reference set outside routine model and blend decisions.
+- Report per-label results and sample counts with the macro score.
+- Compare candidates on identical rows and preserve their predictions.
+- Treat small validation sets as noisy measurements, not exact rankings.
+- Record whether a result is independent, exploratory, or selection-overlapping.
 
-## 2. The epistemics: three signals, in order of trust
+The Gold58 set was inspected repeatedly during the competition. Historical
+Gold58 results are useful diagnostics, but they are not untouched estimates.
 
-1. **The leaderboard** — the only ground truth. It has already vetoed two
-   ideas that gold endorsed (the frozen+tuned ensemble; implicitly, the gold
-   figure inflated by selection). When gold and LB disagree, LB wins.
-2. **The gold 58** — the only honest local signal, and it is *small*. Its
-   noise floor is ~±0.02 macro. Rules that keep it honest:
-   - Never train on it. Never let it select an epoch, a weight, or a
-     per-finding choice. `splits.assert_no_gold_leakage` guards training;
-     nothing guards *you* — selection-by-gold is a leak you can commit in a
-     print statement.
-   - Never fit per-finding on it. 12 findings × 58 studies has already
-     produced one overfit (fitted fusion weights: 0.860 in-sample, 0.812
-     leave-one-out). Global rules with ≤1 parameter only; pick parameters
-     from plateaus, never argmaxes; when strategies tie under a jackknife,
-     take the simplest.
-   - Treat per-finding differences of <0.05 on gold as weak evidence.
-3. **The validation fold** (~870 mined labels) — noisy truth but not the
-   number the project is judged by, which is exactly why it is allowed to
-   select checkpoints and gold is not.
+## Run the cheapest decisive experiment
 
-**Revised 2026-08-28: mined validation is a *biased* selector, not a noisy
-one.** Its labels come from the same reports the training labels do, carrying
-the same ~18% systematic disagreement with image-derived truth. So once the
-network starts memorising that disagreement, mined-val agreement keeps rising
-while true performance does not — measured here as val 0.860 at epoch 9 falling
-to 0.843 by epoch 20 while gold sat flat at 0.864-0.869 for eleven epochs.
-"Best epoch on val" therefore selects *into* the memorisation phase. Two
-consequences:
+Order work by information gained per unit cost:
 
-- **Prefer selection-free weights.** EMA and SWA are accumulated on every run
-  (`knee_lightning.WeightAverage`) and read no metric at all. Ship those unless
-  a measurement says otherwise.
-- **Gold still selects nothing.** The temptation, once mined val is known to be
-  biased, is to select on gold instead. Don't. It is 58 studies with a macro SE
-  of 0.015-0.025 (Hanley-McNeil); the run-to-run sd of 0.004 measures optimiser
-  noise, not the error on the estimate. **A difference under 0.02 on gold is
-  not a difference.** Resolving 0.015 reliably needs roughly 300-500 clean
-  studies.
+1. Static data and provenance audit.
+2. Small deterministic diagnostic.
+3. CPU or single-batch smoke test.
+4. One controlled training comparison.
+5. Cross-validation or full-data training.
+6. Ensemble or deployment work.
 
-## 3. The loop discipline: cheap before expensive
+Change one causal factor at a time. Define the success threshold and failure
+interpretation before execution. Save enough metadata to reproduce the result.
 
-The cost ladder is: local script (seconds) → gold checkpoint on Colab
-(minutes) → corpus extraction (~1 h) → training fold (~1.5 h) → five folds +
-submission (~8 h). Never buy a rung without a measurement from the rung
-below. History: two prompt changes reasoned from radiology domain knowledge
-both measured *worse* at the gold checkpoint. Domain reasoning generates
-hypotheses; only measurement promotes them.
+## Verify the real artifact
 
-Related: change one thing at a time. The grid-4 embedding failure is recorded
-with its confound (features and projection changed together) — that
-ambiguity was the price of bundling changes.
+Checks must inspect the object that will actually be used. Verify checkpoint
+hashes, label order, preprocessing identity, cache geometry, study membership,
+and submission columns. Tests derived from the same incorrect assumption as the
+producer can pass while the artifact remains wrong.
 
-## 4. Verify against the real artefact
+Important imaging details retained by this project include geometric slice
+ordering, plane-aware laterality normalization, physical field of view, series
+selection, and consistent preprocessing between training and inference.
 
-Several bugs here survived checks that examined the wrong thing: a notebook
-validated by joining source the same wrong way it was written; a checker that
-asserted the *old* output schema and had been failing since the pipeline
-changed; an import "confirmed" by finding a filename in text. When a check
-passes, ask what it actually looked at. When output looks wrong, suspect the
-data plumbing first — the worst bugs here (slice order reversed by
-`InstanceNumber`, sagittal mirroring flipping the wrong axis) raise no errors
-and just cost 0.03 silently.
+## Keep experiments reproducible
 
-## 5. Mechanics that are easy to get wrong
+- Put reusable behavior in `src/`; keep command orchestration in `tools/`.
+- Generate or validate notebooks from source where a generator exists.
+- Store large data, caches, outputs, and weights only in ignored locations.
+- Bind checkpoints to sidecar metadata and content hashes.
+- Use explicit ensemble manifests instead of directory globs.
+- Add focused tests for nontrivial reusable behavior.
+- Write conclusions with numbers, scope, and limitations.
 
-- **Notebooks are generated.** Edit `src/` or `tools/make_notebook.py`, run
-  `python tools/make_notebook.py`, never edit a notebook directly. A test
-  fails if they drift.
-- **The traps list in `PROJECT.md` is paid-for knowledge.** Read it before
-  touching Kaggle/Colab plumbing; every entry cost real hours or a lost
-  shard.
-- **Kaggle**: 25 GPU-h/week, one session; T4 not P100; Save & Run All, never
-  Quick Save; check *all three* cache shards are attached (one-shard runs
-  look healthy and train on a third of the data — this happened).
-- **Rules**: reports are Competition Data and may not leave the machine — no
-  hosted APIs for extraction; internet off for submission runs.
-- **Datasets by pattern-glob**: notebook 10 averages every
-  `convnext_fold*.pt` it can see. Stale checkpoints attached alongside new
-  ones get silently averaged in.
+## Reframing checklist
 
-## 6. How to proceed when picking this up cold
+When progress stalls, answer these before adding another model:
 
-1. Read `PROJECT.md` end to end, then `docs/plan.md`.
-2. Establish which artefacts exist locally (`data/meta/`) and which step is
-   blocked on a human running Colab/Kaggle — most steps are; say so rather
-   than working around it.
-3. Before proposing anything, check whether it is already in the
-   tried-and-failed list. The failures are documented *with reasons* so they
-   don't get re-run wearing a new hat.
-4. Prefer the smallest measurement that could kill your idea. If it survives
-   the gold checkpoint, scale it one rung.
-5. Record what you did in `PROJECT.md` — numbers, not adjectives — and keep
-   commit messages explanatory; the git log is the project's lab notebook.
-6. Conventions: neutral voice everywhere, tests accompany every non-trivial
-   module, nothing fitted per-finding on gold, plateaus not argmaxes.
+1. What evidence would a domain expert use?
+2. Does the input preserve that evidence at sufficient resolution and context?
+3. Does each target mean the same thing in reports, external datasets, and the
+   competition reference standard?
+4. Can the model localize the relevant anatomy?
+5. Does validation measure image truth or agreement with the label generator?
+6. Which single oracle experiment could disprove the current formulation?
 
-## 7. Current standing hypotheses (falsifiable, not settled)
-
-- The 0.94 cluster's edge is primarily extraction quality, not architecture.
-  Falsified if: labels reach ~0.93 on gold and the model still can't clear
-  ~0.90 LB.
-- The model can run ~0.01 below its labels' quality. Falsified if the gap
-  stays ≫0.03 under honest selection — then capacity (slices, series,
-  backbone) becomes the priority, in that order.
-- Gold underestimates LB by ~0.02 (observed once). One data point; do not
-  lean on it.
-
-**Revised 2026-08-29 — the gold-forecast rule, after five trials:**
-
-    change                        gold      LB     verdict
-    8 -> 16 slices              +0.023  +0.024     tracked
-    3 -> 5 series               +0.021  +0.020     tracked
-    16 -> 24 slices             +0.004  +0.002     tracked
-    report loss 0.5             +0.006  -0.009     MISSED
-    20 ep + warmup + P0 fixes   +0.021  -0.001     MISSED
-
-**A gold delta under ~0.03 forecasts nothing.** Hanley-McNeil puts the macro
-SE on 58 studies at 0.015-0.025, so anything smaller is one standard error.
-The three that tracked were capacity changes with real movement behind them;
-both misses sat inside the noise band. The validation fold (~870 studies) has
-been the better forecaster on the one occasion the two disagreed sharply:
-val +0.002 against gold +0.021, and the LB came in at -0.001.
-
-Use gold to check a run is not broken. Do not use it to decide.
-- **Checkpoint selection, not capacity, is what the model is currently losing
-  to.** Falsified if a 20-epoch fold-1 run shows no val/gold divergence, or if
-  the EMA and SWA weights do not match the selected checkpoint on the
-  leaderboard. Added 2026-08-28 with the plan that replaced Phases A-E.
-- **The remaining architectural headroom is in resolution, not the backbone.**
-  Small structures — lateral meniscus at 0.62-0.68, the worst finding on the
-  board — are what higher resolution helps and what 224px caps. Falsified if a
-  288 or 384 cache leaves meniscus AUC flat.
+Prefer a simpler classifier with better targets, localization, and validation
+over a larger classifier trained on weak or misaligned information.

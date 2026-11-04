@@ -66,7 +66,23 @@ head is small. Heavy test-time augmentation and large ensembles buy AUC at a
 direct efficiency cost, so they should be measured against both metrics rather
 than assumed good.
 
-## Data security — the report-text question, settled
+## Hosted inference — corrected September 29, 2026
+
+The earlier conclusion below was too broad. The user supplied the competition
+host's discussion clarification on September 29, 2026: commercially hosted LLMs
+and external inference services **are permitted**, including transmitting report
+text for label extraction. Computational processing is not, by itself, prohibited
+private sharing. Section 2.6.b (External Data and Tools) still requires reasonable
+accessibility and minimal cost; the host determines whether a service, model, or
+configuration meets those requirements. Service terms and other competition
+rules still apply. This does not authorize sharing competition work with other
+teams for collaboration or competitive use.
+
+Source provenance: clarification text supplied by the user from the discussion
+column; a direct discussion URL was not supplied. Do not represent the older
+August rule snapshot as including this later clarification.
+
+The saved rules state:
 
 From the rules:
 
@@ -74,10 +90,10 @@ From the rules:
 > provide or make available the Competition Data to any party not participating
 > in the Competition.
 
-Report text is Competition Data. Sending it to a hosted LLM API would provide it
-to a non-participant, so the local open-weights approach taken in
-`notebooks/03_extract_labels.ipynb` was the correct one — the model ran on the
-Colab GPU and no report text left the session.
+The host's clarification explains that this restriction addresses sharing for
+collaboration or competitive use, and does not itself prohibit inference APIs.
+The existing local Qwen extractor remains a valid baseline, but hosted extraction
+must not be rejected solely because report text leaves the local runtime.
 
 The competition data is additionally subject to <http://rsna.org/mira-license>.
 
